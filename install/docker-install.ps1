@@ -315,14 +315,18 @@ Update-ComposeForDockerDesktop
 Start-Bambuddy
 
 $lanIp = Get-LanIp
+$bambuddyScheme = if ($env:BAMBUDDY_HTTPS -in @('false', '0', 'no', 'off')) { 'http' } else { 'https' }
 
 Write-Host ''
 Write-Host '==========================================================' -ForegroundColor Green
 Write-Host '   Installation Complete!' -ForegroundColor Green
 Write-Host '==========================================================' -ForegroundColor Green
 Write-Host ''
-Write-Host "  Access Bambuddy:  http://localhost:$Port" -ForegroundColor Cyan
-Write-Host "                    http://${lanIp}:$Port  (from other devices)" -ForegroundColor Cyan
+Write-Host "  Access Bambuddy:  ${bambuddyScheme}://localhost:$Port" -ForegroundColor Cyan
+Write-Host "                    ${bambuddyScheme}://${lanIp}:$Port  (from other devices)" -ForegroundColor Cyan
+if ($bambuddyScheme -eq 'https') {
+    Write-Host '  The default self-signed certificate requires browser trust.'
+}
 Write-Host ''
 Write-Host '  Manage container:'
 Write-Host "    Status:   cd `"$InstallPath`"; $DockerCompose ps"

@@ -62,8 +62,8 @@ services:
     volumes:
       - bambuddy_data:/app/data
       - bambuddy_logs:/app/logs
-      # Native HTTPS (optional): mount a PEM certificate/full chain and private
-      # key, then enable both UVICORN_SSL_* variables below. The container's
+      # Optional supplied HTTPS certificate: overrides the generated certificate.
+      # Mount a PEM certificate/full chain and private key. The container's
       # PUID:PGID must be able to read them. Restart after certificate renewal.
       #- ./certs:/app/certs:ro
       #
@@ -116,8 +116,13 @@ services:
       # Port BamBuddy runs on (default: 8000)
       # Usage: PORT=8080 docker compose up -d
       - PORT=${PORT:-8000}
-      # Native HTTPS on PORT (no reverse proxy required). Both files must exist
-      # and be readable by PUID:PGID. See docs/docker-https.md for setup.
+      # HTTPS is enabled by default. A self-signed certificate persists in the
+      # data volume. Set false only when you want an HTTP listener (e.g. a proxy).
+      - BAMBUDDY_HTTPS=${BAMBUDDY_HTTPS:-true}
+      # Optional names/IPs to include in the generated certificate:
+      #- BAMBUDDY_HTTPS_HOSTNAMES=bambuddy.home.arpa,192.168.1.20
+      # Supplied certificate override. Uncomment these and the certs mount above.
+      # Both files must be readable by PUID:PGID. See docs/docker-https.md.
       #- UVICORN_SSL_CERTFILE=/app/certs/fullchain.pem
       #- UVICORN_SSL_KEYFILE=/app/certs/privkey.pem
       # Directory this compose file lives in, so Settings → Updates can print

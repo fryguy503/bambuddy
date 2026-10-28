@@ -527,8 +527,15 @@ main() {
     echo ""
     local ip_addr
     ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}') || ip_addr="<your-ip>"
-    echo -e "  ${BOLD}Access BamBuddy:${NC}  ${CYAN}http://localhost:$PORT${NC}"
-    echo -e "                    ${CYAN}http://$ip_addr:$PORT${NC} (from other devices)"
+    local bambuddy_scheme="https"
+    case "${BAMBUDDY_HTTPS:-true}" in
+        [Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Oo][Ff][Ff]) bambuddy_scheme="http" ;;
+    esac
+    echo -e "  ${BOLD}Access BamBuddy:${NC}  ${CYAN}${bambuddy_scheme}://localhost:$PORT${NC}"
+    echo -e "                    ${CYAN}${bambuddy_scheme}://$ip_addr:$PORT${NC} (from other devices)"
+    if [ "$bambuddy_scheme" = "https" ]; then
+        echo "  The default self-signed certificate requires browser trust."
+    fi
     echo ""
     echo -e "  ${BOLD}Manage container:${NC}"
     echo -e "    Status:  cd $INSTALL_PATH && $DOCKER_CMD ps"
