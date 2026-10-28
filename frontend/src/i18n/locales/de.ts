@@ -293,9 +293,10 @@ export default {
       fingerprint: "TLS-Zertifikat-Fingerabdruck (SHA-256)",
       trustFingerprint: "Ich habe diesen Drucker überprüft und vertraue seinem Zertifikat.",
       connectionHelp: "LAN-Modus aktivieren und den Drucker an der obigen Adresse erkennen. Das Zertifikat in einem vertrauenswürdigen lokalen Netzwerk überprüfen.",
-      supportNote: "Überwachung sowie Pause, Fortsetzen und Stopp werden unterstützt. ACE-Fächer sind schreibgeschützt. Dateiübertragung und integrierte Kamera sind nicht verfügbar.",
+      supportNote: "Unterstützt Überwachung, LAN-Kameraanzeige sowie Pause, Fortsetzen und Stoppen. ACE-Steckplätze sind schreibgeschützt. Dateiübertragung ist nicht verfügbar.",
       discoveryFailed: "Erkennung fehlgeschlagen. Adresse und LAN-Modus überprüfen.",
       identityMismatch: "Diese Adresse gehört zu einem anderen Drucker. Die Seriennummer muss übereinstimmen.",
+      scanHelp: "Wähle das LAN-Subnetz des Druckers (z. B. 192.168.1.0/24). Aktiviere vor dem Scannen den LAN-Modus, wähle dann ein Ergebnis und prüfe unten das Zertifikat.",
     },
     addPreflight: {
       checking: 'Verbindung wird geprüft...',

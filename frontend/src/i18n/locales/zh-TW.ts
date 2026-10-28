@@ -293,9 +293,10 @@ export default {
       fingerprint: "TLS 憑證指紋 (SHA-256)",
       trustFingerprint: "我已確認這台印表機並信任其憑證。",
       connectionHelp: "啟用區域網路模式，並探索上述位址的印表機。請在可信任的區域網路中確認憑證。",
-      supportNote: "支援監控、暫停、繼續與停止。ACE 插槽僅供讀取。尚不支援檔案傳輸與內建相機。",
+      supportNote: "支援狀態監控、區域網路攝影機檢視，以及暫停、繼續和停止。ACE 插槽為唯讀。不支援檔案傳輸。",
       discoveryFailed: "探索失敗。請檢查位址與區域網路模式。",
       identityMismatch: "此位址屬於其他印表機。序號必須相符。",
+      scanHelp: "選擇印表機所在的區域網路子網路（例如 192.168.1.0/24）。掃描前啟用區域網路模式，然後選擇搜尋結果並在下方核對憑證。",
     },
     addPreflight: {
       checking: '正在檢查連線...',

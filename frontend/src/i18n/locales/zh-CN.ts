@@ -293,9 +293,10 @@ export default {
       fingerprint: "TLS 证书指纹 (SHA-256)",
       trustFingerprint: "我已确认这台打印机并信任其证书。",
       connectionHelp: "启用局域网模式，并发现上述地址的打印机。请在可信任的局域网中确认证书。",
-      supportNote: "支持监控、暂停、继续与停止。ACE 插槽仅供读取。暂不支持文件传输与内置摄像头。",
+      supportNote: "支持状态监控、局域网摄像头查看，以及暂停、继续和停止。ACE 槽位为只读。不支持文件传输。",
       discoveryFailed: "发现失败。请检查地址与局域网模式。",
       identityMismatch: "此地址属于其他打印机。序列号必须一致。",
+      scanHelp: "选择打印机所在的局域网子网（例如 192.168.1.0/24）。扫描前启用局域网模式，然后选择搜索结果并在下方核验证书。",
     },
     addPreflight: {
       checking: '正在检查连接...',

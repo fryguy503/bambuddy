@@ -1,19 +1,22 @@
 """
 Printer discovery API endpoints.
 
-Provides endpoints for discovering Bambu Lab printers on the local network.
-Supports both SSDP discovery (for native installs) and subnet scanning (for Docker).
+Provides endpoints for discovering printers on the local network.
+Bambu uses SSDP or subnet scans; Anycubic uses bounded read-only LAN scans.
 """
 
 import logging
+from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.permissions import Permission
 from backend.app.core.tasks import spawn_background_task
 from backend.app.models.user import User
+from backend.app.services.anycubic.discovery import anycubic_scanner
+from backend.app.services.anycubic.protocol import AnycubicError
 from backend.app.services.discovery import (
     discovery_service,
     is_running_in_docker,
@@ -45,6 +48,7 @@ class SubnetScanRequest(BaseModel):
 
     subnet: str  # CIDR notation, e.g., "192.168.1.0/24"
     timeout: float = 1.0  # Connection timeout per host
+    printer_type: Literal["bambu", "anycubic"] = "bambu"
 
 
 class SubnetScanStatus(BaseModel):
@@ -112,11 +116,15 @@ async def stop_discovery(
 
 @router.get("/printers", response_model=list[DiscoveredPrinterResponse])
 async def get_discovered_printers(
+    printer_type: Literal["bambu", "anycubic"] = "bambu",
     _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
 ):
     """Get list of discovered printers (from both SSDP and subnet scan)."""
     # Combine results from both discovery methods
     printers = {}
+
+    if printer_type == "anycubic":
+        return [DiscoveredPrinterResponse(**printer.to_dict()) for printer in anycubic_scanner.discovered_printers]
 
     # Add SSDP discovered printers
     for p in discovery_service.discovered_printers:
@@ -147,13 +155,23 @@ async def start_subnet_scan(
     request: SubnetScanRequest,
     _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
 ):
-    """Start a subnet scan for Bambu printers.
+    """Start a subnet scan for the selected printer provider.
 
     Use this when running in Docker where SSDP multicast doesn't work.
 
     Args:
         request: Subnet to scan in CIDR notation (e.g., "192.168.1.0/24")
     """
+    if request.printer_type == "anycubic":
+        try:
+            await anycubic_scanner.start(request.subnet, request.timeout)
+        except AnycubicError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except RuntimeError:
+            raise HTTPException(409, "An Anycubic LAN scan is already running") from None
+        scanned, total = anycubic_scanner.progress
+        return SubnetScanStatus(running=anycubic_scanner.is_running, scanned=scanned, total=total)
+
     # Start scan in background
     spawn_background_task(
         subnet_scanner.scan_subnet(request.subnet, request.timeout),
@@ -171,12 +189,14 @@ async def start_subnet_scan(
 
 @router.get("/scan/status", response_model=SubnetScanStatus)
 async def get_scan_status(
+    printer_type: Literal["bambu", "anycubic"] = "bambu",
     _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
 ):
     """Get the current subnet scan status."""
-    scanned, total = subnet_scanner.progress
+    scanner = anycubic_scanner if printer_type == "anycubic" else subnet_scanner
+    scanned, total = scanner.progress
     return SubnetScanStatus(
-        running=subnet_scanner.is_running,
+        running=scanner.is_running,
         scanned=scanned,
         total=total,
     )
@@ -184,13 +204,18 @@ async def get_scan_status(
 
 @router.post("/scan/stop", response_model=SubnetScanStatus)
 async def stop_subnet_scan(
+    printer_type: Literal["bambu", "anycubic"] = "bambu",
     _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
 ):
     """Stop the current subnet scan."""
-    subnet_scanner.stop()
-    scanned, total = subnet_scanner.progress
+    if printer_type == "anycubic":
+        await anycubic_scanner.stop()
+    else:
+        subnet_scanner.stop()
+    scanner = anycubic_scanner if printer_type == "anycubic" else subnet_scanner
+    scanned, total = scanner.progress
     return SubnetScanStatus(
-        running=subnet_scanner.is_running,
+        running=scanner.is_running,
         scanned=scanned,
         total=total,
     )

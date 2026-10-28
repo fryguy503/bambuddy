@@ -7,6 +7,9 @@ plus pause/resume/stop and shared LAN camera viewing/snapshots. A separate, opti
 the account's native slicer-configuration ZIP for browsing and JSON export.
 
 LAN onboarding requires explicit review of the printer's TLS fingerprint.
+The Add Printer dialog can scan a private IPv4 subnet for LAN-mode Anycubic
+printers, then populate the selected device for certificate review. Scanning
+does not pair or change printer state; Docker uses the same unicast path.
 Existing printers remain Bambu by default. Unsupported Bambu operations are
 blocked before transport or automation work; Anycubic status cannot trigger
 Bambu archives, calibration, preset writes, queued uploads or virtual-printer

@@ -153,7 +153,12 @@ def camera_stream_url(host: str, reported: str | None = None) -> str:
 
 def get_info(host: str) -> dict:
     host = private_host(host)
-    info = _fetch(host, "GET", "/info")
+    return validate_info(host, _fetch(host, "GET", "/info"))
+
+
+def validate_info(host: str, info: dict) -> dict:
+    """Validate the same LAN identity for direct inspection and subnet scans."""
+    host = private_host(host)
     if info.get("ctrlType") != "lan":
         raise AnycubicError("Enable LAN mode on the printer")
     model_from_info(info)

@@ -42,10 +42,14 @@ slicer presets; it never sends cloud printer commands.
 ## Adding a printer
 
 1. Enable LAN mode on the printer and give Bambuddy access to its local network.
-2. Add a printer and select **Anycubic**. Enter its literal private IP address.
-3. Discover the printer, review the displayed identity and SHA-256 certificate
-   fingerprint, then explicitly trust that certificate before saving.
-4. Use a descriptive name. Discovery selects the actual printer model and its
+2. Add a printer and select **Anycubic**.
+3. Use **Scan Subnet** to find LAN-mode printers on the selected subnet, or
+   enter the IP directly. On Synology/Docker, choose the printer's LAN subnet
+   (for example `192.168.1.0/24`), rather than the container's bridge subnet.
+   Select a result to fill in its address, actual model and identity.
+4. Select **Discover Anycubic printer**, review the displayed identity and
+   SHA-256 certificate fingerprint, and explicitly trust it before saving.
+5. Use a descriptive name. Discovery selects the actual printer model and its
    matching icon. Review that model before saving. `Anycubic` prefixes, `Combo`
    suffixes and the `KS1`/`KS1 Max` aliases normalize to canonical names.
 
@@ -53,6 +57,15 @@ Discovery returns the firmware's `cn` identity where available, or its reported
 `usn` on original firmware. It does not invent a Bambu serial or access code.
 The saved certificate digest is public and can be read through the printer API.
 Broker passwords, bootstrap tokens and client private keys are session-private.
+
+The LAN scanner uses read-only HTTP requests on both native and Docker installs.
+Choose an RFC1918 IPv4 subnet containing at most 1024 addresses (`/22` or longer
+prefix); a `/24` is typical. It only lists supported models already in LAN mode,
+does not pair or trust certificates, and keeps Bambu results separate. Closing
+the dialog stops its scan. Existing printers are omitted from the result list.
+The existing discovery API accepts `printer_type=anycubic` in the scan request
+body and on the result/status/stop query parameters; omission retains Bambu
+behavior. All discovery endpoints retain the `discovery:scan` permission.
 
 The provider uses HTTP port **18910** for the native LAN bootstrap and MQTT over
 TLS on **9883**. Discovered endpoints are bound to the entered printer IP and

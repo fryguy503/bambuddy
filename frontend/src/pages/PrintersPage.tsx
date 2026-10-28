@@ -7685,6 +7685,20 @@ export function AddPrinterModal({
   const [useCustomSubnet, setUseCustomSubnet] = useState(false);
   const [scanProgress, setScanProgress] = useState({ scanned: 0, total: 0 });
   const [showDiagnostic, setShowDiagnostic] = useState(false);
+  const discoveryGeneration = useRef(0);
+  const discoveryPoll = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeDiscovery = useRef<{ printerType: 'bambu' | 'anycubic'; ssdp: boolean } | null>(null);
+  const wantsSubnetScan = isAnycubic || isDocker || useCustomSubnet;
+
+  const stopDiscovery = useCallback(() => {
+    discoveryGeneration.current += 1;
+    if (discoveryPoll.current !== null) clearTimeout(discoveryPoll.current);
+    discoveryPoll.current = null;
+    const active = activeDiscovery.current;
+    activeDiscovery.current = null;
+    if (active?.ssdp) discoveryApi.stopDiscovery().catch(() => {});
+    else if (active) discoveryApi.stopSubnetScan(active.printerType).catch(() => {});
+  }, []);
 
   // Setup-time pre-flight: run the connection diagnostic on save and warn
   // (not block) when checks fail, so the user doesn't add a printer that
@@ -7743,6 +7757,10 @@ export function AddPrinterModal({
   };
 
   const startDiscovery = async () => {
+    stopDiscovery();
+    const generation = discoveryGeneration.current;
+    const printerType = form.printer_type || 'bambu';
+    const current = () => generation === discoveryGeneration.current;
     setDiscoveryError('');
     setDiscovered([]);
     setDiscovering(true);
@@ -7753,7 +7771,6 @@ export function AddPrinterModal({
     // "Custom" — SSDP can't reach a printer on a different L3 segment
     // (#1564). Docker mode always uses subnet scan (multicast unavailable).
     const scanCidr = useCustomSubnet ? customSubnet.trim() : subnet;
-    const wantsSubnetScan = isDocker || useCustomSubnet;
 
     if (wantsSubnetScan && useCustomSubnet) {
       try {
@@ -7765,61 +7782,73 @@ export function AddPrinterModal({
 
     try {
       if (wantsSubnetScan) {
-        await discoveryApi.startSubnetScan(scanCidr);
-
-        // Poll for scan status and results
-        const pollInterval = setInterval(async () => {
+        activeDiscovery.current = { printerType, ssdp: false };
+        await discoveryApi.startSubnetScan(scanCidr, 1.0, printerType);
+        if (!current()) return;
+        // Recursive timeout keeps slow requests from overlapping and lets a
+        // closed dialog discard late replies from the previous manufacturer.
+        const poll = async () => {
           try {
-            const status = await discoveryApi.getScanStatus();
+            const status = await discoveryApi.getScanStatus(printerType);
+            if (!current()) return;
             setScanProgress({ scanned: status.scanned, total: status.total });
 
-            const printers = await discoveryApi.getDiscoveredPrinters();
+            const printers = await discoveryApi.getDiscoveredPrinters(printerType);
+            if (!current()) return;
             setDiscovered(printers);
 
             if (!status.running) {
-              clearInterval(pollInterval);
+              activeDiscovery.current = null;
               setDiscovering(false);
               setHasScanned(true);
+              return;
             }
           } catch (e) {
-            console.error('Failed to get scan status:', e);
+            if (!current()) return;
+            stopDiscovery();
+            setDiscoveryError(e instanceof Error ? e.message : t('printers.discovery.failedToStart'));
+            setDiscovering(false);
+            setHasScanned(true);
+            return;
           }
-        }, 500);
+          if (current()) discoveryPoll.current = setTimeout(poll, 500);
+        };
+        discoveryPoll.current = setTimeout(poll, 500);
       } else {
         // Use SSDP discovery for native installs
+        activeDiscovery.current = { printerType, ssdp: true };
         await discoveryApi.startDiscovery(10);
+        if (!current()) return;
+        const deadline = Date.now() + 10000;
 
-        // Poll for discovered printers every second
-        const pollInterval = setInterval(async () => {
+        const poll = async () => {
           try {
             const printers = await discoveryApi.getDiscoveredPrinters();
+            if (!current()) return;
             setDiscovered(printers);
           } catch (e) {
-            console.error('Failed to get discovered printers:', e);
+            if (!current()) return;
+            stopDiscovery();
+            setDiscoveryError(e instanceof Error ? e.message : t('printers.discovery.failedToStart'));
+            setDiscovering(false);
+            setHasScanned(true);
+            return;
           }
-        }, 1000);
-
-        // Stop after 10 seconds
-        setTimeout(async () => {
-          clearInterval(pollInterval);
-          try {
-            await discoveryApi.stopDiscovery();
-          } catch {
-            // Ignore stop errors
+          if (Date.now() >= deadline) {
+            await discoveryApi.stopDiscovery().catch(() => {});
+            if (!current()) return;
+            activeDiscovery.current = null;
+            setDiscovering(false);
+            setHasScanned(true);
+          } else {
+            discoveryPoll.current = setTimeout(poll, 1000);
           }
-          setDiscovering(false);
-          setHasScanned(true);
-          // Final fetch
-          try {
-            const printers = await discoveryApi.getDiscoveredPrinters();
-            setDiscovered(printers);
-          } catch (e) {
-            console.error('Failed to get final discovered printers:', e);
-          }
-        }, 10000);
+        };
+        discoveryPoll.current = setTimeout(poll, 1000);
       }
     } catch (e) {
-      console.error('Failed to start discovery:', e);
+      if (!current()) return;
+      activeDiscovery.current = null;
       setDiscoveryError(e instanceof Error ? e.message : t('printers.discovery.failedToStart'));
       setDiscovering(false);
       setHasScanned(true);
@@ -7829,6 +7858,9 @@ export function AddPrinterModal({
   // Reuse module-level mapModelCode
 
   const selectPrinter = (printer: DiscoveredPrinter) => {
+    stopDiscovery();
+    setDiscovering(false);
+    setHasScanned(false);
     // Don't pre-fill serial if it's a placeholder (unknown-*) - user needs to enter actual serial
     const serialNumber = printer.serial.startsWith('unknown-') ? '' : printer.serial;
     setForm({
@@ -7836,19 +7868,16 @@ export function AddPrinterModal({
       name: printer.name || '',
       serial_number: serialNumber,
       ip_address: printer.ip_address,
-      model: mapModelCode(printer.model),
+      model: isAnycubic ? (printer.model || 'Kobra S1') : mapModelCode(printer.model),
+      ...(isAnycubic ? { tls_fingerprint: null } : {}),
     });
+    setCertificateTrusted(false);
     // Clear discovery results after selection
     setDiscovered([]);
   };
 
   // Cleanup discovery on unmount
-  useEffect(() => {
-    return () => {
-      discoveryApi.stopDiscovery().catch(() => {});
-      discoveryApi.stopSubnetScan().catch(() => {});
-    };
-  }, []);
+  useEffect(() => stopDiscovery, [stopDiscovery]);
 
   // Close on Escape key
   useEffect(() => {
@@ -7874,9 +7903,13 @@ export function AddPrinterModal({
             <select
               className="mt-1 w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white"
               value={form.printer_type}
-              disabled={checkingSave}
+              disabled={checkingSave || discovering}
               onChange={e => {
                 const printerType = e.target.value as 'bambu' | 'anycubic';
+                stopDiscovery();
+                setDiscovered([]);
+                setHasScanned(false);
+                setDiscoveryError('');
                 setForm({ ...form, printer_type: printerType, model: printerType === 'anycubic' ? 'Kobra S1' : '', serial_number: '', access_code: '', tls_fingerprint: null, auto_archive: printerType === 'bambu' });
                 setCertificateTrusted(false);
                 setSaveWarning(null);
@@ -7888,7 +7921,7 @@ export function AddPrinterModal({
           </label>
 
           {/* Discovery Section */}
-          {!isAnycubic && <div className="mb-4 pb-4 border-b border-bambu-dark-tertiary">
+          <div className="mb-4 pb-4 border-b border-bambu-dark-tertiary">
             {/* Subnet picker — always visible. The dropdown lists detected
                 interface subnets and a "Custom..." sentinel that reveals
                 a CIDR text input for printers on a different L3 segment
@@ -7938,7 +7971,7 @@ export function AddPrinterModal({
                 />
               )}
               <p className="mt-1 text-xs text-bambu-gray">
-                {isDocker
+                {isAnycubic ? t('printers.anycubic.scanHelp') : isDocker
                   ? t('printers.discovery.dockerNote')
                   : t('printers.discovery.customSubnetNote')}
               </p>
@@ -7955,14 +7988,14 @@ export function AddPrinterModal({
               {discovering ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  {(isDocker || useCustomSubnet) && scanProgress.total > 0
+                  {wantsSubnetScan && scanProgress.total > 0
                     ? t('printers.discovery.scanProgress', { scanned: scanProgress.scanned, total: scanProgress.total })
                     : t('printers.discovery.scanning')}
                 </>
               ) : (
                 <>
                   <Search className="w-4 h-4" />
-                  {(isDocker || useCustomSubnet) ? t('printers.discovery.scanSubnet') : t('printers.discovery.discoverNetwork')}
+                  {wantsSubnetScan ? t('printers.discovery.scanSubnet') : t('printers.discovery.discoverNetwork')}
                 </>
               )}
             </Button>
@@ -7974,9 +8007,10 @@ export function AddPrinterModal({
             {newPrinters.length > 0 && (
               <div className="mt-3 space-y-2 max-h-40 overflow-y-auto">
                 {newPrinters.map((printer) => (
-                  <div
+                  <button
+                    type="button"
                     key={printer.serial}
-                    className="flex items-center justify-between p-2 bg-bambu-dark rounded-lg hover:bg-bambu-dark-secondary cursor-pointer transition-colors"
+                    className="flex w-full items-center justify-between p-2 text-left bg-bambu-dark rounded-lg hover:bg-bambu-dark-secondary cursor-pointer transition-colors"
                     onClick={() => selectPrinter(printer)}
                   >
                     <div className="min-w-0 flex-1">
@@ -7984,27 +8018,27 @@ export function AddPrinterModal({
                         {printer.name || printer.serial}
                       </p>
                       <p className="text-xs text-bambu-gray truncate">
-                        {mapModelCode(printer.model) || t('printers.discovery.unknown')} • {printer.ip_address}
+                        {(isAnycubic ? printer.model : mapModelCode(printer.model)) || t('printers.discovery.unknown')} • {printer.ip_address}
                         {printer.serial.startsWith('unknown-') && (
                           <span className="text-yellow-500"> • {t('printers.discovery.serialRequired')}</span>
                         )}
                       </p>
                     </div>
                     <ChevronDown className="w-4 h-4 text-bambu-gray -rotate-90 flex-shrink-0 ml-2" />
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
 
             {discovering && (
               <p className="mt-2 text-sm text-bambu-gray text-center">
-                {(isDocker || useCustomSubnet) ? t('printers.discovery.scanningSubnet') : t('printers.discovery.scanningNetwork')}
+                {wantsSubnetScan ? t('printers.discovery.scanningSubnet') : t('printers.discovery.scanningNetwork')}
               </p>
             )}
 
             {hasScanned && !discovering && discovered.length === 0 && (
               <p className="mt-2 text-sm text-bambu-gray text-center">
-                {(isDocker || useCustomSubnet) ? t('printers.discovery.noPrintersFoundSubnet') : t('printers.discovery.noPrintersFoundNetwork')}
+                {wantsSubnetScan ? t('printers.discovery.noPrintersFoundSubnet') : t('printers.discovery.noPrintersFoundNetwork')}
               </p>
             )}
 
@@ -8013,7 +8047,7 @@ export function AddPrinterModal({
                 {t('printers.discovery.allConfigured')}
               </p>
             )}
-          </div>}
+          </div>
           <form onSubmit={handleAddSubmit} className="space-y-4">
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
@@ -8043,9 +8077,11 @@ export function AddPrinterModal({
             </div>
             {isAnycubic && (
               <AnycubicConnectionPanel
+                key={form.ip_address}
                 host={form.ip_address}
                 fingerprint={form.tls_fingerprint}
                 trusted={certificateTrusted}
+                serialNumber={form.serial_number || undefined}
                 onTrustChange={setCertificateTrusted}
                 onDiscovered={result => {
                   setForm(current => ({ ...current, serial_number: result.serial_number, model: result.model, tls_fingerprint: result.tls_fingerprint }));

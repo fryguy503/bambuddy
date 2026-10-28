@@ -8976,20 +8976,21 @@ export const discoveryApi = {
   stopDiscovery: () =>
     request<DiscoveryStatus>('/discovery/stop', { method: 'POST' }),
 
-  getDiscoveredPrinters: () =>
-    request<DiscoveredPrinter[]>('/discovery/printers'),
+  getDiscoveredPrinters: (printerType: 'bambu' | 'anycubic' = 'bambu') =>
+    request<DiscoveredPrinter[]>(`/discovery/printers${printerType === 'anycubic' ? '?printer_type=anycubic' : ''}`),
 
   // Subnet scanning (for Docker environments)
-  startSubnetScan: (subnet: string, timeout: number = 1.0) =>
+  startSubnetScan: (subnet: string, timeout: number = 1.0, printerType: 'bambu' | 'anycubic' = 'bambu') =>
     request<SubnetScanStatus>('/discovery/scan', {
       method: 'POST',
-      body: JSON.stringify({ subnet, timeout }),
+      body: JSON.stringify({ subnet, timeout, ...(printerType === 'anycubic' ? { printer_type: printerType } : {}) }),
     }),
 
-  getScanStatus: () => request<SubnetScanStatus>('/discovery/scan/status'),
+  getScanStatus: (printerType: 'bambu' | 'anycubic' = 'bambu') =>
+    request<SubnetScanStatus>(`/discovery/scan/status${printerType === 'anycubic' ? '?printer_type=anycubic' : ''}`),
 
-  stopSubnetScan: () =>
-    request<SubnetScanStatus>('/discovery/scan/stop', { method: 'POST' }),
+  stopSubnetScan: (printerType: 'bambu' | 'anycubic' = 'bambu') =>
+    request<SubnetScanStatus>(`/discovery/scan/stop${printerType === 'anycubic' ? '?printer_type=anycubic' : ''}`, { method: 'POST' }),
 };
 
 // Virtual Printer types

@@ -293,9 +293,10 @@ export default {
       fingerprint: "Empreinte du certificat TLS (SHA-256)",
       trustFingerprint: "J’ai vérifié cette imprimante et je fais confiance à son certificat.",
       connectionHelp: "Activez le mode LAN et détectez l’imprimante à l’adresse ci-dessus. Vérifiez son certificat sur un réseau local de confiance.",
-      supportNote: "Surveillance, pause, reprise et arrêt disponibles. Les emplacements ACE sont en lecture seule. Le transfert de fichiers et la caméra intégrée sont indisponibles.",
+      supportNote: "Prend en charge la surveillance, la caméra en LAN, la pause, la reprise et l'arrêt. Les emplacements ACE sont en lecture seule. Le transfert de fichiers est indisponible.",
       discoveryFailed: "Échec de la détection. Vérifiez l’adresse et le mode LAN.",
       identityMismatch: "Cette adresse appartient à une autre imprimante. Le numéro de série doit correspondre.",
+      scanHelp: "Choisissez le sous-réseau LAN de l'imprimante (par exemple 192.168.1.0/24). Activez le mode LAN avant la recherche, puis sélectionnez un résultat et vérifiez son certificat ci-dessous.",
     },
     addPreflight: {
       checking: 'Vérification de la connexion...',

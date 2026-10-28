@@ -293,9 +293,10 @@ export default {
       fingerprint: "Impronta del certificato TLS (SHA-256)",
       trustFingerprint: "Ho verificato questa stampante e considero attendibile il suo certificato.",
       connectionHelp: "Attiva la modalità LAN e rileva la stampante all’indirizzo indicato. Verifica il certificato su una rete locale attendibile.",
-      supportNote: "Supporta monitoraggio, pausa, ripresa e arresto. Gli slot ACE sono di sola lettura. Trasferimento file e fotocamera integrata non disponibili.",
+      supportNote: "Supporta monitoraggio, videocamera LAN, pausa, ripresa e arresto. Gli slot ACE sono di sola lettura. Il trasferimento di file non è disponibile.",
       discoveryFailed: "Rilevamento non riuscito. Controlla l’indirizzo e la modalità LAN.",
       identityMismatch: "Questo indirizzo appartiene a un’altra stampante. Il numero di serie deve corrispondere.",
+      scanHelp: "Scegli la sottorete LAN della stampante (ad esempio 192.168.1.0/24). Attiva la modalità LAN prima della ricerca, quindi seleziona un risultato e verifica il certificato qui sotto.",
     },
     addPreflight: {
       checking: 'Verifica della connessione...',
