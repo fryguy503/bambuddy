@@ -827,7 +827,8 @@ Full documentation available at **[wiki.bambuddy.cool](http://wiki.bambuddy.cool
 Experimental Anycubic Kobra S1 LAN support provides printer monitoring,
 read-only inventory for two ACE units (eight slots), and pause/resume/stop.
 See [setup and current limitations](docs/anycubic.md). A read-only physical
-check passed with one ACE; two-unit operation and print controls still need acceptance.
+check passed with two ACE units and eight distinct slots; print controls and
+restart/reconnect behavior still need acceptance.
 An optional [Anycubic Cloud Profiles](docs/anycubic-cloud.md) account connection
 adds read-only profile browsing and export; LAN operation does not require it.
 

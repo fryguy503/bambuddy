@@ -2,8 +2,8 @@
 
 This provider supports an original Kobra S1 in stock firmware LAN mode, with
 one or two four-slot ACE units. It is a first integration of monitoring and
-basic controls. A read-only physical check passed on one S1 with one ACE;
-two-unit operation and physical print controls still need acceptance.
+basic controls. Read-only physical checks passed on one S1 with two ACE units
+and eight distinct slots; physical print controls still need acceptance.
 
 | Feature | Initial implementation |
 | --- | --- |
@@ -129,13 +129,16 @@ permissions and current storage-host limitation.
 Public identity/certificate discovery and a 22-second authenticated read-only
 LAN session passed on a Kobra S1 running firmware 2.7.2.7. The provider received
 15 usable reports, including preparation/preheating state, temperatures,
-layers and remaining time. One ACE unit reported four slots: two occupied and
-two empty; the empty slots cleared correctly. No second unit was observed.
-The session sent no printer control commands and did not persist the account,
-printer or trust settings.
+layers and remaining time. This initial check had one ACE connected. After the
+second ACE was connected, a separate inventory read during printing confirmed
+both raw and normalized unit IDs 0 and 1, each with physical slot indices 0–3.
+The first unit had two occupied and two empty slots; the second had four empty
+slots. Stale material fields on empty slots were cleared correctly. Both
+sessions sent only read queries, disconnected afterward, and did not persist
+account, printer or trust settings.
 
-Both ACE units together, restart/reconnect behavior and physical
-pause/resume/stop still need acceptance. The optional Cloud Profiles
+Restart/reconnect behavior, material changes and physical pause/resume/stop
+still need acceptance. The optional Cloud Profiles
 integration has not been tested with a live account.
 
 The original reviewed S1 firmware allowed certificate-only discovery. A

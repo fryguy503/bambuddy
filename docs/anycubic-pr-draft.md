@@ -39,10 +39,11 @@ support, not full feature parity or completed hardware/account acceptance.
   production build and the Safari 16 browser baseline have passed locally.
 - Public identity/certificate discovery and authenticated read-only telemetry
   passed on a physical Kobra S1 with firmware 2.7.2.7. A short session received
-  usable state, temperature, layer and remaining-time data and one four-slot ACE
-  unit with correct occupied/empty slots. No second unit was observed and no
-  control command was sent. Two-unit, restart/reconnect and physical
-  pause/resume/stop acceptance remain pending. No live Cloud account
+  usable state, temperature, layer and remaining-time data. After the second ACE
+  was connected, a separate read confirmed both physical unit IDs and all eight
+  distinct slots in raw and normalized inventory, with correct occupied/empty
+  slots. No control command was sent. Material changes, restart/reconnect and
+  physical pause/resume/stop acceptance remain pending. No live Cloud account
   acceptance is claimed.
 - The exact Linux CI environment and full upstream CI pipeline were not run.
 
