@@ -50,6 +50,14 @@ _DISCONNECT_POLL_SECONDS = 1.0
 UpstreamFactory = Callable[[asyncio.Event], AsyncGenerator[bytes, None]]
 
 
+def _end_subscriber(queue: asyncio.Queue[bytes]) -> None:
+    # A full queue must still receive the terminal marker. Otherwise a slow
+    # viewer consumes its old frames and then waits forever after shutdown.
+    if queue.full():
+        queue.get_nowait()
+    queue.put_nowait(_UPSTREAM_GONE)
+
+
 class MjpegBroadcaster:
     """Single upstream MJPEG stream, fanned out to N subscribers."""
 
@@ -189,10 +197,7 @@ class MjpegBroadcaster:
             self._upstream_disconnect.set()
             if notify_subscribers:
                 for queue in self._subscribers:
-                    try:
-                        queue.put_nowait(_UPSTREAM_GONE)
-                    except asyncio.QueueFull:
-                        pass
+                    _end_subscriber(queue)
                 self._subscribers.clear()
             pump_task = self._pump_task
             self._pump_task = None
@@ -250,10 +255,7 @@ class MjpegBroadcaster:
             # Pump is exiting — wake up any subscribers still hanging on get().
             async with self._lock:
                 for queue in self._subscribers:
-                    try:
-                        queue.put_nowait(_UPSTREAM_GONE)
-                    except asyncio.QueueFull:
-                        pass
+                    _end_subscriber(queue)
 
 
 # Global registry. Keyed by printer_id (as str) so a chamber-mode printer

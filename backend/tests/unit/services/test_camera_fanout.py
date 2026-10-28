@@ -254,6 +254,19 @@ async def test_force_shutdown_signals_subscribers():
     assert bc.stopped is True
 
 
+async def test_force_shutdown_signals_a_viewer_with_a_full_frame_queue():
+    bc = MjpegBroadcaster("full", _make_factory([b"x"] * 1000, delay=0.001))
+    queue = await bc.subscribe()
+    for _ in range(100):
+        if queue.full():
+            break
+        await asyncio.sleep(0.001)
+    assert queue.full()
+    await bc.force_shutdown()
+    chunks = [await asyncio.wait_for(queue.get(), timeout=1) for _ in range(queue.qsize())]
+    assert chunks[-1] == camera_fanout._UPSTREAM_GONE
+
+
 # ---------------------------------------------------------------------------
 # iter_subscriber helper exits cleanly on upstream-gone and disconnect
 # ---------------------------------------------------------------------------
