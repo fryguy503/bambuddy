@@ -1,4 +1,4 @@
-"""Experimental stock-firmware Anycubic Kobra S1 LAN integration."""
+"""Experimental stock-firmware Anycubic Kobra LAN integration."""
 
 from .client import AnycubicMQTTClient
 from .protocol import AnycubicError

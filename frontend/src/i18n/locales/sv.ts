@@ -287,6 +287,7 @@ export default {
       failed: 'Det gick inte att spara ändringen: {{error}}',
     },
     anycubic: {
+      builtInFeeder: "Inbyggd matare",
       manufacturer: "Tillverkare",
       discover: "Hitta Anycubic-skrivare",
       fingerprint: "TLS-certifikatets fingeravtryck (SHA-256)",

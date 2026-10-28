@@ -281,6 +281,7 @@ export default {
       failed: '변경 사항을 저장하지 못했습니다: {{error}}',
     },
     anycubic: {
+      builtInFeeder: "내장 피더",
       manufacturer: "제조사",
       discover: "Anycubic 프린터 검색",
       fingerprint: "TLS 인증서 지문 (SHA-256)",

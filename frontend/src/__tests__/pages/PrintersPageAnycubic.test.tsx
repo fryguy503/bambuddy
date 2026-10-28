@@ -10,7 +10,7 @@ import { AnycubicConnectionPanel } from '../../components/AnycubicConnectionPane
 import { AnycubicAceStatus } from '../../components/AnycubicAceStatus';
 
 const discovery: AnycubicDiscovery = {
-  serial_number: 's1-device-id', model: 'Kobra S1', model_id: '20024', tls_fingerprint: 'ab'.repeat(32),
+  serial_number: 's1-device-id', model: 'Kobra S1', model_id: '20025', tls_fingerprint: 'ab'.repeat(32),
 };
 
 describe('Anycubic onboarding', () => {
@@ -19,6 +19,24 @@ describe('Anycubic onboarding', () => {
     vi.spyOn(discoveryApi, 'stopDiscovery').mockResolvedValue({ status: 'stopped' });
     vi.spyOn(discoveryApi, 'stopSubnetScan').mockResolvedValue({ status: 'stopped' });
     vi.spyOn(api, 'discoverAnycubic').mockResolvedValue(discovery);
+  });
+
+  it('uses the discovered model when adding another signed-LAN Kobra', async () => {
+    vi.mocked(api.discoverAnycubic).mockResolvedValue({ ...discovery, model: 'Kobra S1 Max', model_id: '20029' });
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(<AddPrinterModal onClose={() => {}} onAdd={onAdd} existingSerials={[]} />);
+    await user.selectOptions(screen.getByLabelText('Manufacturer'), 'anycubic');
+    expect(screen.getByRole('option', { name: 'Kobra X' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Kobra 2 Max' })).not.toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText('My Printer'), 'Workshop Max');
+    await user.type(screen.getByPlaceholderText('192.168.1.100 or printer.local'), '192.168.1.50');
+    await user.click(screen.getByRole('button', { name: 'Discover Anycubic printer' }));
+    await screen.findByText(discovery.tls_fingerprint);
+    expect(screen.getByRole('option', { name: 'Kobra S1 Max' })).toHaveProperty('selected', true);
+    await user.click(screen.getByLabelText('I verified this printer and trust its certificate.'));
+    await user.click(screen.getByRole('button', { name: 'Add Printer' }));
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ printer_type: 'anycubic', model: 'Kobra S1 Max' }));
   });
 
   it('requires explicit certificate trust and invalidates it when the address changes', async () => {
@@ -104,6 +122,17 @@ describe('Anycubic onboarding', () => {
 });
 
 describe('ACE monitoring', () => {
+  it('labels the X built-in feeder separately and suppresses dry-box readings', () => {
+    render(<AnycubicAceStatus units={[
+      { id: -1, humidity: 0, temp: 0, tray: [{ id: 0, tray_type: 'PLA' }] },
+      { id: 0, humidity: 25, temp: 35, tray: [{ id: 0, tray_type: 'PETG' }] },
+    ] as AMSUnit[]} />);
+    const feeder = screen.getByRole('region', { name: 'Built-in feeder' });
+    expect(within(feeder).getByText('PLA')).toBeInTheDocument();
+    expect(within(feeder).queryByText(/%|°C/)).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'ACE 1' })).toHaveTextContent('25% · 35°C');
+  });
+
   it('distinguishes confirmed empty slots from unconfigured or unknown slots', () => {
     render(<AnycubicAceStatus units={[{ id: 0, tray: [
       { id: 0, state: 9, tray_type: '', exists: null },

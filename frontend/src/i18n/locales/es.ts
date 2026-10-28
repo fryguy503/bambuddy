@@ -287,6 +287,7 @@ export default {
       failed: 'No se pudo guardar el cambio: {{error}}',
     },
     anycubic: {
+      builtInFeeder: "Alimentador integrado",
       manufacturer: "Fabricante",
       discover: "Detectar impresora Anycubic",
       fingerprint: "Huella del certificado TLS (SHA-256)",

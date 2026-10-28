@@ -4,17 +4,18 @@ import type { AMSUnit } from '../api/client';
 /** ACE reports share slot display fields; Bambu-specific slot actions do not. */
 export function AnycubicAceStatus({ units }: { units: AMSUnit[] }) {
   const { t } = useTranslation();
+  const unitName = (id: number) => id < 0 ? t('printers.anycubic.builtInFeeder') : `ACE ${id + 1}`;
   return (
     <div className="mt-3 flex flex-wrap gap-2">
       {units.map(unit => (
-        <section key={unit.id} aria-label={`ACE ${unit.id + 1}`} className="min-w-0 flex-1 rounded-lg bg-bambu-dark p-2">
+        <section key={unit.id} aria-label={unitName(unit.id)} className="min-w-0 flex-1 rounded-lg bg-bambu-dark p-2">
           <div className="mb-2 flex items-center justify-between gap-2 text-xs text-bambu-gray">
-            <span className="font-medium text-white">ACE {unit.id + 1}</span>
-            <span>
+            <span className="font-medium text-white">{unitName(unit.id)}</span>
+            {unit.id >= 0 && <span>
               {unit.humidity != null && `${unit.humidity}%`}
               {unit.humidity != null && unit.temp != null && ' · '}
               {unit.temp != null && `${unit.temp}°C`}
-            </span>
+            </span>}
           </div>
           <div className="grid grid-cols-4 gap-1">
             {[0, 1, 2, 3].map(id => {

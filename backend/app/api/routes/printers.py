@@ -103,6 +103,7 @@ from backend.app.services.printer_media import (
 )
 from backend.app.services.slicer_filament_resolver import _ORCA_PROFILE_ID, lookup_orca_filament_id
 from backend.app.services.slot_nozzle import reports_two_nozzles, resolve_slot_nozzle
+from backend.app.utils.anycubic_models import get_model as get_anycubic_model
 from backend.app.utils.filament_finish import different_finish, finish_generic_id
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
@@ -430,8 +431,11 @@ async def update_printer(
     if "printer_type" in update_data and update_data["printer_type"] != printer.printer_type:
         raise HTTPException(400, "A printer's protocol cannot be changed; add a separate printer instead")
     if printer.printer_type == "anycubic":
-        if "model" in update_data and update_data["model"] != "Kobra S1":
-            raise HTTPException(400, "Only the Anycubic Kobra S1 is supported")
+        if "model" in update_data:
+            model = get_anycubic_model(update_data["model"])
+            if model is None:
+                raise HTTPException(400, "Unsupported Anycubic LAN printer model")
+            update_data["model"] = model.name
         if "tls_fingerprint" in update_data and not update_data["tls_fingerprint"]:
             raise HTTPException(400, "An Anycubic LAN certificate fingerprint is required")
         update_data.pop("access_code", None)
@@ -464,6 +468,9 @@ async def update_printer(
             update_data["plate_detection_roi_h"] = None
 
     ip_changed = "ip_address" in update_data and update_data["ip_address"] != printer.ip_address
+    anycubic_model_changed = (
+        printer.printer_type == "anycubic" and update_data.get("model", printer.model) != printer.model
+    )
 
     for field, value in update_data.items():
         setattr(printer, field, value)
@@ -485,7 +492,9 @@ async def update_printer(
             logger.error("Failed to sync virtual printers after printer IP change: %s", e)
 
     # Reconnect if connection settings changed
-    if any(k in update_data for k in ["ip_address", "access_code", "is_active", "tls_fingerprint"]):
+    if anycubic_model_changed or any(
+        k in update_data for k in ["ip_address", "access_code", "is_active", "tls_fingerprint"]
+    ):
         printer_manager.disconnect_printer(printer_id)
         if printer.is_active:
             await printer_manager.connect_printer(printer)

@@ -287,6 +287,7 @@ export default {
       failed: 'Die Änderung konnte nicht gespeichert werden: {{error}}',
     },
     anycubic: {
+      builtInFeeder: "Integrierter Filamenteinzug",
       manufacturer: "Hersteller",
       discover: "Anycubic-Drucker erkennen",
       fingerprint: "TLS-Zertifikat-Fingerabdruck (SHA-256)",

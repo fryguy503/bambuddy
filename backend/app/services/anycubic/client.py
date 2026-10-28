@@ -1,4 +1,4 @@
-"""Experimental Kobra S1 monitoring and pause/resume/stop over stock LAN mode."""
+"""Experimental Anycubic Kobra monitoring and basic controls over stock LAN mode."""
 
 import copy
 import json
@@ -11,10 +11,10 @@ from collections import OrderedDict
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 
+from backend.app.utils.anycubic_models import get_model
 from backend.app.utils.paho_teardown import retire_paho_client
 
 from .protocol import (
-    MODEL_ID,
     PREFIX,
     AnycubicError,
     PinnedTLSContext,
@@ -23,6 +23,7 @@ from .protocol import (
     identity,
     inspect_fingerprint,
     json_object,
+    model_from_info,
     pair,
     private_host,
 )
@@ -61,10 +62,14 @@ class AnycubicMQTTClient:
     ):
         self.ip_address = private_host(ip_address)
         self.serial_number = serial_number
-        self.model = model or "Kobra S1"
+        selected_model = get_model(model or "Kobra S1")
+        if selected_model is None:
+            raise AnycubicError("Unsupported Anycubic LAN printer model")
+        self.model = selected_model.name
+        self._model_id = selected_model.model_id
         self._fingerprint = fingerprint(tls_fingerprint)
         self.on_state_change = on_state_change
-        self._telemetry = Telemetry()
+        self._telemetry = Telemetry(self.model)
         self.state = self._telemetry.state
         self._client = None
         self._worker = None
@@ -88,11 +93,12 @@ class AnycubicMQTTClient:
         """Inspect identity and certificate only; user must approve the fingerprint."""
         host = private_host(ip_address)
         info = get_info(host)
+        model = model_from_info(info)
         return {
             "serial_number": identity(info),
-            "model": "Kobra S1",
-            "model_id": MODEL_ID,
-            "device_name": "Anycubic Kobra S1",
+            "model": model.name,
+            "model_id": model.model_id,
+            "device_name": f"Anycubic {model.name}",
             "tls_fingerprint": inspect_fingerprint(host),
         }
 
@@ -125,7 +131,7 @@ class AnycubicMQTTClient:
             self._last_message_time = self._last_state_time = 0
             self._last_message_monotonic = 0
             self._seen_reports.clear()
-            self._telemetry = Telemetry()
+            self._telemetry = Telemetry(self.model)
             self.state = self._telemetry.state
             self._worker = threading.Thread(target=self._run, args=(generation, stop), name="anycubic-lan", daemon=True)
             self._worker.start()
@@ -147,6 +153,8 @@ class AnycubicMQTTClient:
         client = None
         try:
             credentials = pair(self.ip_address, self.serial_number, self._fingerprint)
+            if credentials.model_id != self._model_id:
+                raise AnycubicError("Printer model does not match the saved printer")
             if stop.is_set():
                 return
 
@@ -179,7 +187,7 @@ class AnycubicMQTTClient:
                 self._last_message_monotonic = 0
                 self._seen_reports.clear()
                 self._report_count = 0
-                self._telemetry = Telemetry()
+                self._telemetry = Telemetry(self.model)
                 self.state = self._telemetry.state
             client.connect(credentials.host, 9883, keepalive=15)
             del credentials
@@ -229,7 +237,7 @@ class AnycubicMQTTClient:
                 )
                 self._connection_lost = True
                 return
-            client.subscribe(f"{PREFIX}/printer/public/{MODEL_ID}/{self._device_id}/#", qos=0)
+            client.subscribe(f"{PREFIX}/printer/public/{self._model_id}/{self._device_id}/#", qos=0)
 
     def _subscribed_callback(self, generation, client, reasons):
         with self._lock:
@@ -257,7 +265,7 @@ class AnycubicMQTTClient:
                 return
             if getattr(message, "retain", False) is True:
                 return  # A retained snapshot is not fresh observation of a new session.
-            prefix = f"{PREFIX}/printer/public/{MODEL_ID}/{self._device_id}/"
+            prefix = f"{PREFIX}/printer/public/{self._model_id}/{self._device_id}/"
             if not isinstance(message.topic, str) or not message.topic.startswith(prefix):
                 return
             tail = message.topic[len(prefix) :].split("/")
@@ -302,7 +310,7 @@ class AnycubicMQTTClient:
             }
             try:
                 result = self._client.publish(
-                    f"{PREFIX}/web/printer/{MODEL_ID}/{self._device_id}/{kind}",
+                    f"{PREFIX}/web/printer/{self._model_id}/{self._device_id}/{kind}",
                     json.dumps(envelope),
                     qos=0,
                     retain=False,

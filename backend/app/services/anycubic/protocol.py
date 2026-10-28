@@ -1,4 +1,4 @@
-"""Independent implementation of the signed Kobra S1 LAN wire protocol.
+"""Independent implementation of the signed Anycubic Kobra LAN wire protocol.
 
 Protocol corroboration: chrisfore/anycubic_ha_local research/PROTOCOL-VALIDATED.md
 and the user's independently developed Anycubic Orca plugin/native-code audit.
@@ -23,9 +23,10 @@ from cryptography import x509
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
 
+from backend.app.utils.anycubic_models import MODELS, AnycubicModel, get_model
+
 PREFIX = "anycubic/anycubicCloud/v1"
 MAX_BYTES = 256 * 1024
-MODEL_ID = "20025"
 _SEGMENT = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 
 
@@ -101,15 +102,25 @@ def _fetch(host: str, method: str, path: str) -> dict:
         connection.close()
 
 
+def model_from_info(info: dict) -> AnycubicModel:
+    """Bind the known model ID to its advertised name; never guess an unknown ID."""
+    reported_id = info.get("modelId")
+    named = get_model(info.get("modelName"))
+    if reported_id is None:
+        model = named
+    else:
+        model = MODELS.get(str(reported_id)) if type(reported_id) in (str, int) else None
+    if model is None or (named is not None and named != model):
+        raise AnycubicError("Unsupported or inconsistent Anycubic LAN printer model")
+    return model
+
+
 def get_info(host: str) -> dict:
     host = private_host(host)
     info = _fetch(host, "GET", "/info")
     if info.get("ctrlType") != "lan":
         raise AnycubicError("Enable LAN mode on the printer")
-    if (info.get("modelId") is not None and str(info["modelId"]) != MODEL_ID) or (
-        info.get("modelId") is None and info.get("modelName") != "Anycubic Kobra S1"
-    ):
-        raise AnycubicError("Only the Kobra S1 is supported by this experimental provider")
+    model_from_info(info)
     identity(info)
     token = info.get("token")
     if not isinstance(token, str) or len(token) < 32 or len(token) > 128 or not token.isascii():
@@ -182,6 +193,7 @@ def pair(host: str, serial_number: str, approved_fingerprint: str) -> Credential
     if not hmac.compare_digest(inspect_fingerprint(host), pin):
         raise AnycubicError("Printer TLS certificate changed")
     info = get_info(host)
+    selected_model = model_from_info(info)
     token = info["token"]
     timestamp = str(int(time.time() * 1000))
     nonce = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(6))
@@ -216,7 +228,9 @@ def pair(host: str, serial_number: str, approved_fingerprint: str) -> Credential
         model_id = segment(decrypted.get("modeId", info.get("modelId")))
         device_id = segment(decrypted["deviceId"])
         username, password = decrypted["username"], decrypted["password"]
-        if model_id != MODEL_ID or any(not isinstance(s, str) or not s or len(s) > 4096 for s in (username, password)):
+        if model_id != selected_model.model_id or any(
+            not isinstance(s, str) or not s or len(s) > 4096 for s in (username, password)
+        ):
             raise ValueError
         certificate, private_key = decrypted.get("devicecrt", ""), decrypted.get("devicepk", "")
         if any(not isinstance(s, str) or len(s) > 65536 for s in (certificate, private_key)) or bool(

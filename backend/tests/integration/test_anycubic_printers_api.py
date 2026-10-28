@@ -24,7 +24,9 @@ def test_anycubic_identity_is_case_sensitive_and_has_no_bambu_access_code():
     assert value.auto_archive is False
 
 
-@pytest.mark.parametrize("changes", [{"tls_fingerprint": None}, {"model": "Kobra X"}, {"tls_fingerprint": "invalid"}])
+@pytest.mark.parametrize(
+    "changes", [{"tls_fingerprint": None}, {"model": "Kobra 2 Max"}, {"tls_fingerprint": "invalid"}]
+)
 def test_anycubic_requires_reviewed_certificate_and_supported_model(changes):
     from pydantic import ValidationError
 
@@ -38,6 +40,34 @@ def test_anycubic_requires_reviewed_certificate_and_supported_model(changes):
     }
     with pytest.raises(ValidationError):
         PrinterCreate(**(args | changes))
+
+
+@pytest.mark.parametrize("model", ["Kobra 3", "Kobra 3 V2", "Kobra 3 Max", "Kobra 4", "Kobra S1 Max", "Kobra X"])
+def test_signed_lan_models_preserve_provider_restrictions(model):
+    value = PrinterCreate(
+        name="Workshop",
+        serial_number="device-one",
+        ip_address="192.168.1.50",
+        model=f"Anycubic {model} Combo",
+        printer_type="anycubic",
+        tls_fingerprint=PIN,
+        access_code="unused",
+        auto_archive=True,
+    )
+    assert value.model == model
+    assert value.access_code == ""
+    assert value.auto_archive is False
+
+
+async def test_update_accepts_supported_model_and_rejects_older_protocol(async_client, anycubic_printer):
+    endpoint = f"/api/v1/printers/{anycubic_printer.id}"
+    with patch("backend.app.api.routes.printers.printer_manager.connect_printer", new_callable=AsyncMock) as connect:
+        response = await async_client.patch(endpoint, json={"model": "Anycubic Kobra S1 Max Combo"})
+    assert response.status_code == 200
+    assert response.json()["model"] == "Kobra S1 Max"
+    connect.assert_awaited_once()
+    response = await async_client.patch(endpoint, json={"model": "Kobra 2 Max"})
+    assert response.status_code == 400
 
 
 @pytest.fixture

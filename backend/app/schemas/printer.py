@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.schemas.printer_location import normalize_location_name
+from backend.app.utils.anycubic_models import get_model as get_anycubic_model
 
 
 def _mask_url_login(url: str | None) -> str | None:
@@ -76,8 +77,10 @@ class PrinterCreate(PrinterBase):
     @model_validator(mode="after")
     def _validate_provider_credentials(self):
         if self.printer_type == "anycubic":
-            if self.model != "Kobra S1":
-                raise ValueError("Only the Anycubic Kobra S1 is supported")
+            model = get_anycubic_model(self.model)
+            if model is None:
+                raise ValueError("Unsupported Anycubic LAN printer model")
+            self.model = model.name
             if not self.tls_fingerprint:
                 raise ValueError("Review the Anycubic LAN certificate before adding the printer")
             self.access_code = ""

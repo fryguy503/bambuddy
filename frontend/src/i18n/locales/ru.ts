@@ -281,6 +281,7 @@ export default {
       failed: "Не удалось сохранить изменение: {{error}}",
     },
     anycubic: {
+      builtInFeeder: "Встроенный податчик",
       manufacturer: "Производитель",
       discover: "Найти принтер Anycubic",
       fingerprint: "Отпечаток сертификата TLS (SHA-256)",

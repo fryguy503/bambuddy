@@ -287,6 +287,7 @@ export default {
       failed: 'Impossible d\'enregistrer la modification : {{error}}',
     },
     anycubic: {
+      builtInFeeder: "Chargeur intégré",
       manufacturer: "Fabricant",
       discover: "Détecter une imprimante Anycubic",
       fingerprint: "Empreinte du certificat TLS (SHA-256)",

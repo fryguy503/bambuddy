@@ -287,6 +287,7 @@ export default {
       failed: 'Değişiklik kaydedilemedi: {{error}}',
     },
     anycubic: {
+      builtInFeeder: "Dahili besleyici",
       manufacturer: "Üretici",
       discover: "Anycubic yazıcıyı keşfet",
       fingerprint: "TLS sertifika parmak izi (SHA-256)",

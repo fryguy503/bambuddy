@@ -289,6 +289,7 @@ export default {
       failed: 'Could not save the change: {{error}}',
     },
     anycubic: {
+      builtInFeeder: "Built-in feeder",
       manufacturer: "Manufacturer",
       discover: "Discover Anycubic printer",
       fingerprint: "TLS certificate fingerprint (SHA-256)",

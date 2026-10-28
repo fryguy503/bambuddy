@@ -33,6 +33,7 @@ from backend.app.services.anycubic.protocol import (
     private_host,
 )
 from backend.app.services.anycubic.telemetry import Telemetry
+from backend.app.utils.anycubic_models import MODELS
 
 HOST = "192.168.1.50"
 PIN = "a" * 64
@@ -87,6 +88,29 @@ def box(identity=0, **changes):
 
 
 class BootstrapTests(unittest.TestCase):
+    @patch("backend.app.services.anycubic.protocol._fetch")
+    @patch("backend.app.services.anycubic.protocol.inspect_fingerprint", return_value=PIN)
+    def test_supported_models_pair_using_their_own_model_id(self, inspect, fetch):
+        for model in MODELS.values():
+            with self.subTest(model=model.name):
+                fetch.side_effect = [
+                    info(modelName=f"Anycubic {model.name}", modelId=int(model.model_id)),
+                    encrypted(modeId=int(model.model_id)),
+                ]
+                credentials = pair(HOST, USN, PIN)
+                self.assertEqual(credentials.model_id, model.model_id)
+                self.assertEqual(credentials.device_id, "device-one")
+
+    @patch("backend.app.services.anycubic.client.inspect_fingerprint", return_value=PIN)
+    @patch("backend.app.services.anycubic.client.get_info")
+    def test_discovery_reports_actual_model_instead_of_s1(self, fetch, inspect):
+        for model in MODELS.values():
+            with self.subTest(model=model.name):
+                fetch.return_value = info(modelName=f"Anycubic {model.name} Combo", modelId=model.model_id)
+                discovered = AnycubicMQTTClient.discover(HOST)
+                self.assertEqual(discovered["model"], model.name)
+                self.assertEqual(discovered["model_id"], model.model_id)
+
     def test_private_numeric_addresses_only(self):
         self.assertEqual(private_host(HOST), HOST)
         for value in ("printer.local", "127.0.0.1", "169.254.169.254", "8.8.8.8", "224.0.0.1"):
@@ -109,6 +133,8 @@ class BootstrapTests(unittest.TestCase):
         for value in (
             info(ctrlType="cloud"),
             info(modelId=20029),
+            info(modelName="Anycubic Kobra 2 Max", modelId=20023),
+            info(modelId=29999),
             info(modelName="Unknown"),
             info(ctrlInfoUrl="http://192.168.1.51:18910/ctrl"),
             info(ctrlInfoUrl=f"http://{HOST}:18910/reset"),
@@ -173,6 +199,44 @@ class BootstrapTests(unittest.TestCase):
 
 
 class TelemetryTests(unittest.TestCase):
+    def test_complete_inventory_with_query_action_adds_units_without_erasing_siblings(self):
+        telemetry = Telemetry("Kobra 3 V2")
+        for box_id in (0, 1):
+            telemetry.apply(
+                "multiColorBox",
+                report("multiColorBox", {"multi_color_box": [box(box_id)]}, action="query"),
+            )
+        self.assertEqual([unit["id"] for unit in telemetry.state.raw_data["ams"]], [0, 1])
+
+    def test_x_builtin_feeder_and_external_units_keep_physical_addresses(self):
+        from backend.app.services.printer_manager import printer_state_to_dict
+
+        telemetry = Telemetry("Kobra X")
+        telemetry.apply(
+            "multiColorBox",
+            report("multiColorBox", {"multi_color_box": [box(-1), box(0)]}, action="getInfo"),
+        )
+        units = telemetry.state.raw_data["ams"]
+        self.assertEqual([unit["id"] for unit in units], [-1, 0])
+        self.assertNotIn("humidity_raw", units[0])
+        self.assertNotIn("temp", units[0])
+        self.assertEqual(units[1]["temp"], 35)
+        public = printer_state_to_dict(telemetry.state, model="Kobra X")["ams"]
+        self.assertEqual([unit["id"] for unit in public], [-1, 0])
+        self.assertTrue(all(len(unit["tray"]) == 4 for unit in public))
+
+    def test_s1_max_projects_four_ace_units_and_s1_rejects_builtin_feeder(self):
+        telemetry = Telemetry("Kobra S1 Max")
+        telemetry.apply(
+            "multiColorBox",
+            report("multiColorBox", {"multi_color_box": [box(i) for i in range(4)]}, action="getInfo"),
+        )
+        self.assertEqual([unit["id"] for unit in telemetry.state.raw_data["ams"]], [0, 1, 2, 3])
+        with self.assertRaises(AnycubicError):
+            Telemetry().apply(
+                "multiColorBox", report("multiColorBox", {"multi_color_box": [box(-1)]}, action="getInfo")
+            )
+
     def setUp(self):
         self.telemetry = Telemetry()
 
@@ -307,6 +371,52 @@ class TelemetryTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    @patch("backend.app.services.anycubic.client.pair")
+    @patch("backend.app.services.anycubic.client.mqtt.Client")
+    def test_saved_model_mismatch_is_rejected_before_mqtt_credentials_are_used(self, mqtt_client, pairing):
+        pairing.return_value = Credentials(HOST, "20029", "device-one", "user", "password")
+        client = AnycubicMQTTClient(HOST, USN, model="Kobra 3", tls_fingerprint=PIN)
+        client._run_session(0, client._stop)
+        mqtt_client.assert_not_called()
+        self.assertFalse(client.state.connected)
+
+    def test_model_specific_subscriptions_publications_and_report_isolation(self):
+        for model in MODELS.values():
+            with self.subTest(model=model.name):
+                client = AnycubicMQTTClient(HOST, USN, model=model.name, tls_fingerprint=PIN)
+                mqtt = MagicMock()
+                mqtt.publish.return_value.rc = 0
+                client._client = mqtt
+                client._device_id = "device-one"
+                client._connected(0, mqtt, 0)
+                mqtt.subscribe.assert_called_once_with(f"{PREFIX}/printer/public/{model.model_id}/device-one/#", qos=0)
+                client._subscribed = True
+                self.assertTrue(client._publish("info", "query", None))
+                self.assertEqual(
+                    mqtt.publish.call_args.args[0], f"{PREFIX}/web/printer/{model.model_id}/device-one/info"
+                )
+                payload = json.dumps(report("info", {"state": "free"})).encode()
+                other_id = "20029" if model.model_id != "20029" else "20025"
+                client._received(
+                    0,
+                    mqtt,
+                    SimpleNamespace(
+                        topic=f"{PREFIX}/printer/public/{other_id}/device-one/info/report",
+                        payload=payload,
+                    ),
+                )
+                self.assertFalse(client.state.connected)
+                client._received(
+                    0,
+                    mqtt,
+                    SimpleNamespace(
+                        topic=f"{PREFIX}/printer/public/{model.model_id}/device-one/info/report",
+                        payload=payload,
+                    ),
+                )
+                self.assertTrue(client.state.connected)
+                self.assertEqual(client.state.raw_data["device_model"], model.name)
+
     def setUp(self):
         self.callback = MagicMock()
         self.forbidden_callback = MagicMock()

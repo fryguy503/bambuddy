@@ -287,6 +287,7 @@ export default {
       failed: '无法保存更改：{{error}}',
     },
     anycubic: {
+      builtInFeeder: "内置供料器",
       manufacturer: "制造商",
       discover: "发现 Anycubic 打印机",
       fingerprint: "TLS 证书指纹 (SHA-256)",

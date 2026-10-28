@@ -1,4 +1,4 @@
-This experimental provider implements stock Kobra S1 LAN monitoring and
+This experimental provider implements signed stock Anycubic Kobra LAN monitoring and
 pause/resume/stop. It does not establish physical printer acceptance. Camera,
 file transfer, print submission, drying, filament writes and Bambu-specific
 features remain unsupported.
@@ -20,6 +20,15 @@ Public corroboration, consulted for protocol facts rather than copied code:
 
 - https://github.com/chrisfore/anycubic_ha_local/blob/main/research/PROTOCOL-VALIDATED.md
 - https://github.com/chrisfore/anycubic_ha_local/blob/main/LICENSE
+- https://github.com/chrisfore/anycubic_ha_local/blob/main/custom_components/anycubic/const.py
+
+The allowlist covers Kobra 3 (20024), S1 (20025), 3 Max (20026), 3 V2 (20027),
+4 (20028), S1 Max (20029) and X (20030). Pairing binds the decrypted model ID
+to discovery and the saved model, and every MQTT topic uses the paired model.
+Offline tests exercise each model's bootstrap, topic routing and report
+isolation. Additional-model support does not constitute hardware acceptance.
+S1 Max can project four ACE units; X preserves its negative-ID built-in feeder
+alongside external units and suppresses nonexistent dry-box measurements.
 
 No Anycubic executable, private key, extracted frontend resource, AGPL
 OrcaCubic implementation or unlicensed MQTT bridge code is redistributed.

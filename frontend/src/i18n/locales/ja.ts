@@ -286,6 +286,7 @@ export default {
       failed: '変更を保存できませんでした: {{error}}',
     },
     anycubic: {
+      builtInFeeder: "内蔵フィーダー",
       manufacturer: "メーカー",
       discover: "Anycubicプリンターを検出",
       fingerprint: "TLS証明書のフィンガープリント（SHA-256）",

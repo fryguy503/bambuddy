@@ -201,6 +201,7 @@ import { FeedDirectionModal } from '../components/FeedDirectionModal';
 import { plateCheckFailureText } from '../utils/plateCheck';
 import { amsHasLoadedTray, getAmsLabel, getEmptySlotKind, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, installedNozzleDiameters, isAmsHtUnit, isBambuLabSpool, trayForSlot, resolveSlotNozzleDiameter, resolveSlotExtruder, formatSlotLabel, slotPresetDescribesTray, FTS_INLET_SIDE } from '../utils/amsHelpers';
 import { MAX_CHAMBER_TEMP_C, getPrinterImage, getWifiStrength, filterCompatibleQueueItems, isPrinterCurrentlyDispatchable, IDLE_PRINTER_STATES } from '../utils/printer';
+import { ANYCUBIC_MODELS } from '../utils/anycubicModels';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
 import { Collapsible } from '../components/Collapsible';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
@@ -8082,7 +8083,7 @@ export function AddPrinterModal({
                 value={form.model || ''}
                 onChange={(e) => setForm({ ...form, model: e.target.value })}
               >
-                {isAnycubic ? <option value="Kobra S1">Kobra S1</option> : <>
+                {isAnycubic ? ANYCUBIC_MODELS.map(model => <option key={model.name} value={model.name}>{model.name}</option>) : <>
                 <option value="">{t('printers.modal.selectModel')}</option>
                 <optgroup label="A1 Series">
                   <option value="A1">A1</option>
@@ -8646,7 +8647,7 @@ function EditPrinterModal({
                 trusted={certificateTrusted}
                 onTrustChange={setCertificateTrusted}
                 onDiscovered={result => {
-                  setForm(current => ({ ...current, tls_fingerprint: result.tls_fingerprint }));
+                  setForm(current => ({ ...current, model: result.model, tls_fingerprint: result.tls_fingerprint }));
                   setCertificateTrusted(false);
                 }}
               />
@@ -8678,7 +8679,7 @@ function EditPrinterModal({
                 value={form.model}
                 onChange={(e) => setForm({ ...form, model: e.target.value })}
               >
-                {isAnycubic ? <option value="Kobra S1">Kobra S1</option> : <>
+                {isAnycubic ? ANYCUBIC_MODELS.map(model => <option key={model.name} value={model.name}>{model.name}</option>) : <>
                 <option value="">{t('printers.modal.selectModel')}</option>
                 <optgroup label="A1 Series">
                   <option value="A1">A1</option>

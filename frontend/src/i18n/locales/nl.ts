@@ -287,6 +287,7 @@ export default {
       failed: 'De wijziging kon niet worden opgeslagen: {{error}}',
     },
     anycubic: {
+      builtInFeeder: "Ingebouwde invoer",
       manufacturer: "Fabrikant",
       discover: "Anycubic-printer detecteren",
       fingerprint: "Vingerafdruk TLS-certificaat (SHA-256)",

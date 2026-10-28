@@ -1,15 +1,33 @@
-# Anycubic Kobra S1 LAN support (experimental)
+# Anycubic Kobra LAN support (experimental)
 
-This provider supports an original Kobra S1 in stock firmware LAN mode, with
-one or two four-slot ACE units. It is a first integration of monitoring and
-basic controls. Read-only physical checks passed on one S1 with two ACE units
-and eight distinct slots; physical print controls still need acceptance.
+This provider implements stock-firmware LAN monitoring and basic controls for
+the signed-protocol Kobra models below. Read-only physical checks passed on one
+S1 with two ACE units and eight distinct slots. The other models have offline
+protocol/API tests; physical monitoring and all print controls still need
+acceptance on each model and firmware.
+
+| Model | LAN model ID | Validation in this project |
+| --- | --- | --- |
+| Kobra S1 | 20025 | Read-only hardware check, two ACE units |
+| Kobra S1 Max | 20029 | Offline protocol and routing tests |
+| Kobra 3 | 20024 | Offline protocol and routing tests |
+| Kobra 3 V2 | 20027 | Offline protocol and routing tests |
+| Kobra 3 Max | 20026 | Offline protocol and routing tests |
+| Kobra 4 | 20028 | Offline protocol and routing tests |
+| Kobra X | 20030 | Offline protocol and routing tests |
+
+IDs and the shared signed handshake are corroborated by the
+[LAN protocol research](https://github.com/chrisfore/anycubic_ha_local/blob/main/research/PROTOCOL-VALIDATED.md)
+and [model table](https://github.com/chrisfore/anycubic_ha_local/blob/main/custom_components/anycubic/const.py).
+Models using older unsigned protocols, including the Kobra 2 series, are not
+admitted by this provider. Unrecognized newer IDs are rejected rather than
+being treated as an S1. Combo bundles use the underlying printer model.
 
 | Feature | Initial implementation |
 | --- | --- |
 | LAN pairing and connection | Signed bootstrap and explicitly reviewed TLS certificate |
 | Printer status | State, temperatures, progress, layers and remaining time |
-| ACE inventory | Up to two units and eight distinct physical slots; read-only |
+| ACE inventory | Model-specific physical unit IDs and four slots per unit; read-only |
 | Print controls | Pause, resume and stop; MQTT delivery is not printer acknowledgement |
 | External camera | Existing configured external camera support |
 | Built-in camera, file transfer, archive, queue dispatch | Unavailable in this provider |
@@ -26,7 +44,9 @@ slicer presets; it never sends cloud printer commands.
 2. Add a printer and select **Anycubic**. Enter its literal private IP address.
 3. Discover the printer, review the displayed identity and SHA-256 certificate
    fingerprint, then explicitly trust that certificate before saving.
-4. Use a descriptive name. The model remains **Kobra S1**.
+4. Use a descriptive name. Discovery selects the actual printer model and its
+   matching icon. Review that model before saving. `Anycubic` prefixes, `Combo`
+   suffixes and the `KS1`/`KS1 Max` aliases normalize to canonical names.
 
 Discovery returns the firmware's `cn` identity where available, or its reported
 `usn` on original firmware. It does not invent a Bambu serial or access code.
@@ -41,7 +61,10 @@ The initial identity/fingerprint inspection assumes the selected local network
 is trusted; use a known device fingerprint when independently available.
 
 ACE unit IDs and slot indices remain physical addresses. A unit is displayed
-as four slots, and two units remain separate. An empty, unknown or disconnected
+as four slots, and multiple units remain separate. S1 Max inventories can contain
+four ACE units. The X's built-in feeder keeps its physical ID `-1`, separate
+from external ACE units; it is not labeled as a dry box or given humidity and
+drying-temperature readings. An empty, unknown or disconnected
 slot must not inherit old filament information. Material length is not displayed
 as a percentage. This display adapter does not enable Bambu AMS mutations.
 
@@ -49,9 +72,16 @@ as a percentage. This display adapter does not enable Bambu AMS mutations.
 
 Existing records migrate to `printer_type="bambu"`. Bambu connection arguments
 and operations retain their existing behavior. New Anycubic records use
-`printer_type="anycubic"`, `model="Kobra S1"`, and a reviewed, 64-character hex
+`printer_type="anycubic"`, a supported canonical `model`, and a reviewed, 64-character hex
 `tls_fingerprint`. Their Bambu `access_code` is empty and automatic FTPS archive
 is disabled. Changing a saved printer to a different protocol is rejected.
+The pairing response must match the discovered model ID, and the connection
+must match the saved model. MQTT subscriptions, report filtering and command
+topics use that model ID; another model's topic is never accepted as telemetry.
+
+Each supported model has its own bundled transparent printer icon. The S1 icon
+comes from the user-supplied photograph. See [icon sources and generation prompts](anycubic-icons.md)
+for the other model references. Icons load locally, without vendor image requests.
 
 `POST /api/v1/printers/anycubic/discover?ip_address=192.168.1.50` requires the
 existing printer-create permission and returns only public discovery fields.
@@ -103,7 +133,8 @@ requires maintainer agreement and issue assignment before a PR, a `dev` base,
 companion wiki documentation and screenshots for UI changes. Multi-brand
 acceptance is not established; [issue 2935](https://github.com/maziggy/bambuddy/issues/2935)
 discusses a separate custom-printer proposal. This implementation and its
-documentation remain local until publication is requested.
+documentation still need those upstream contribution requirements addressed
+before opening a PR.
 
 Suggested issue scope: an experimental Kobra S1 LAN provider with explicit
 capabilities, read-only two-ACE inventory, reviewed TLS pairing and three basic

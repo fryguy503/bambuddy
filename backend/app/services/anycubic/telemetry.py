@@ -8,6 +8,7 @@ import copy
 import math
 
 from backend.app.services.bambu_mqtt import PrinterState
+from backend.app.utils.anycubic_models import get_model
 
 from .protocol import AnycubicError
 
@@ -52,9 +53,13 @@ def _text(value, limit=512):
 
 
 class Telemetry:
-    def __init__(self):
+    def __init__(self, model="Kobra S1"):
+        selected_model = get_model(model)
+        if selected_model is None:
+            raise AnycubicError("Unsupported Anycubic LAN printer model")
+        self._ace_ids = selected_model.ace_ids
         self.state = PrinterState()
-        self.state.raw_data = {"manufacturer": "anycubic", "device_model": "Kobra S1", "ams": []}
+        self.state.raw_data = {"manufacturer": "anycubic", "device_model": selected_model.name, "ams": []}
         self.boxes = {}
         self.task_id = "-1"  # Firmware's documented current-job command sentinel.
         self.phase = None
@@ -106,26 +111,36 @@ class Telemetry:
 
     def _materials(self, data, full):
         raw_boxes = data.get("multi_color_box")
-        if not isinstance(raw_boxes, list) or len(raw_boxes) > 2:
+        if not isinstance(raw_boxes, list) or len(raw_boxes) > len(self._ace_ids):
             return False
         updated = {} if full else copy.deepcopy(self.boxes)
         seen = set()
         for raw in raw_boxes:
-            if not isinstance(raw, dict) or type(raw.get("id")) is not int or raw["id"] not in (0, 1):
+            if not isinstance(raw, dict) or type(raw.get("id")) is not int or raw["id"] not in self._ace_ids:
                 raise AnycubicError("Unsupported ACE unit address")
             identity = raw["id"]
             if identity in seen:
                 raise AnycubicError("Duplicate ACE unit address")
             seen.add(identity)
-            if not full and identity not in updated:
+            new_unit = identity not in updated
+            if not full and new_unit:
                 # Wait for getInfo before projecting a newly seen unit. A partial
                 # unit would be mistaken for a single-slot Bambu dryer downstream.
-                return False
+                # Other firmware labels complete inventories query/refresh instead.
+                slots = raw.get("slots")
+                if (
+                    not isinstance(slots, list)
+                    or len(slots) != 4
+                    or any(not isinstance(slot, dict) or type(slot.get("index")) is not int for slot in slots)
+                    or {slot["index"] for slot in slots} != {0, 1, 2, 3}
+                ):
+                    return False
+            unit_full = full or new_unit
             box = updated.setdefault(identity, {"id": identity, "tray": []})
             if "slots" in raw:
                 if not isinstance(raw["slots"], list) or len(raw["slots"]) > 4:
                     raise AnycubicError("Invalid ACE slots")
-                trays = {} if full else {t["id"]: t for t in box["tray"]}
+                trays = {} if unit_full else {t["id"]: t for t in box["tray"]}
                 indexes = set()
                 for slot in raw["slots"]:
                     if (
@@ -167,19 +182,20 @@ class Telemetry:
                     remaining = number(slot.get("consumables_percent"), 0, 100)
                     if remaining is not None and tray.get("tray_type"):
                         tray["remain"] = remaining
-                if full and indexes != {0, 1, 2, 3}:
+                if unit_full and indexes != {0, 1, 2, 3}:
                     raise AnycubicError("Incomplete ACE snapshot")
                 box["tray"] = [trays[i] for i in sorted(trays)]
-            elif full:
+            elif unit_full:
                 raise AnycubicError("Incomplete ACE snapshot")
-            raw_drying_status = raw.get("drying_status")
+            # The X's negative-ID feeder has no dry box or humidity sensor.
+            raw_drying_status = raw.get("drying_status") if identity >= 0 else None
             dry = raw_drying_status if isinstance(raw_drying_status, dict) else {}
-            humidity = raw.get("humidity")
+            humidity = raw.get("humidity") if identity >= 0 else None
             if humidity is None:
                 humidity = dry.get("humidity")
             for key, value, maximum in (
                 ("humidity_raw", humidity, 100),
-                ("temp", raw.get("temp"), 100),
+                ("temp", raw.get("temp") if identity >= 0 else None, 100),
                 ("drying_temp", dry.get("target_temp"), 100),
                 ("drying_time", dry.get("remain_time"), 100000),
             ):
