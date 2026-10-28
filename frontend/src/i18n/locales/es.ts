@@ -286,6 +286,16 @@ export default {
       moved: 'Impresoras movidas: {{count}}',
       failed: 'No se pudo guardar el cambio: {{error}}',
     },
+    anycubic: {
+      manufacturer: "Fabricante",
+      discover: "Detectar impresora Anycubic",
+      fingerprint: "Huella del certificado TLS (SHA-256)",
+      trustFingerprint: "He verificado esta impresora y confío en su certificado.",
+      connectionHelp: "Activa el modo LAN y detecta la impresora en la dirección indicada. Verifica su certificado en una red local de confianza.",
+      supportNote: "Permite supervisar, pausar, reanudar y detener. Las ranuras ACE son de solo lectura. La transferencia de archivos y la cámara integrada no están disponibles.",
+      discoveryFailed: "Error de detección. Comprueba la dirección y el modo LAN.",
+      identityMismatch: "Esta dirección pertenece a otra impresora. El número de serie debe coincidir.",
+    },
     addPreflight: {
       checking: 'Comprobando la conexión...',
       warning: 'Algunas comprobaciones de conexión fallaron. Esta impresora podría aparecer como desconectada. Revisa las comprobaciones de abajo, soluciona lo que puedas o guárdala de todos modos.',

@@ -135,6 +135,9 @@ async def check_firmware_updates(
     updates_available = 0
 
     for printer in printers:
+        if getattr(printer, "printer_type", "bambu") == "anycubic":
+            updates.append(_not_checked(printer))
+            continue
         # Get current firmware version from MQTT state
         current_version = None
         mqtt_client = printer_manager.get_client(printer.id)
@@ -182,6 +185,8 @@ async def check_printer_firmware(
 
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
+    if getattr(printer, "printer_type", "bambu") == "anycubic":
+        return _not_checked(printer)
 
     if not await _checks_enabled(db):
         return _not_checked(printer)

@@ -286,6 +286,16 @@ export default {
       moved: '已移動印表機：{{count}} 台',
       failed: '無法儲存變更：{{error}}',
     },
+    anycubic: {
+      manufacturer: "製造商",
+      discover: "探索 Anycubic 印表機",
+      fingerprint: "TLS 憑證指紋 (SHA-256)",
+      trustFingerprint: "我已確認這台印表機並信任其憑證。",
+      connectionHelp: "啟用區域網路模式，並探索上述位址的印表機。請在可信任的區域網路中確認憑證。",
+      supportNote: "支援監控、暫停、繼續與停止。ACE 插槽僅供讀取。尚不支援檔案傳輸與內建相機。",
+      discoveryFailed: "探索失敗。請檢查位址與區域網路模式。",
+      identityMismatch: "此位址屬於其他印表機。序號必須相符。",
+    },
     addPreflight: {
       checking: '正在檢查連線...',
       warning: '部分連線檢查未通過。此印表機可能顯示為離線。請查看下方的檢查項目，盡量修復，或仍然儲存。',

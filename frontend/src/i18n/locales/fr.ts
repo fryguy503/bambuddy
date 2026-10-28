@@ -286,6 +286,16 @@ export default {
       moved: 'Imprimantes déplacées : {{count}}',
       failed: 'Impossible d\'enregistrer la modification : {{error}}',
     },
+    anycubic: {
+      manufacturer: "Fabricant",
+      discover: "Détecter une imprimante Anycubic",
+      fingerprint: "Empreinte du certificat TLS (SHA-256)",
+      trustFingerprint: "J’ai vérifié cette imprimante et je fais confiance à son certificat.",
+      connectionHelp: "Activez le mode LAN et détectez l’imprimante à l’adresse ci-dessus. Vérifiez son certificat sur un réseau local de confiance.",
+      supportNote: "Surveillance, pause, reprise et arrêt disponibles. Les emplacements ACE sont en lecture seule. Le transfert de fichiers et la caméra intégrée sont indisponibles.",
+      discoveryFailed: "Échec de la détection. Vérifiez l’adresse et le mode LAN.",
+      identityMismatch: "Cette adresse appartient à une autre imprimante. Le numéro de série doit correspondre.",
+    },
     addPreflight: {
       checking: 'Vérification de la connexion...',
       warning: 'Certaines vérifications de connexion ont échoué. Cette imprimante pourrait apparaître hors ligne. Examinez les vérifications ci-dessous, corrigez ce que vous pouvez, ou enregistrez quand même.',

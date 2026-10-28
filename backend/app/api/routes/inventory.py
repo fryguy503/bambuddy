@@ -162,7 +162,7 @@ async def apply_spool_to_slot_via_mqtt(
     from backend.app.services.printer_manager import printer_manager
 
     client = printer_manager.get_client(printer_id)
-    if client is None:
+    if client is None or getattr(client, "printer_type", "bambu") == "anycubic":
         return False
 
     state = printer_manager.get_status(printer_id)

@@ -17,6 +17,9 @@ class Printer(Base):
     ip_address: Mapped[str] = mapped_column(String(253))
     access_code: Mapped[str] = mapped_column(String(20))
     model: Mapped[str | None] = mapped_column(String(50))
+    printer_type: Mapped[str] = mapped_column(String(20), default="bambu", server_default="bambu")
+    # Public SHA-256 certificate digest explicitly reviewed when pairing over LAN.
+    tls_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     location: Mapped[str | None] = mapped_column(String(100))  # Group/location name
     nozzle_count: Mapped[int] = mapped_column(default=1)  # 1 or 2, auto-detected from MQTT
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

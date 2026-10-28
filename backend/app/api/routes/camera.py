@@ -68,6 +68,12 @@ from backend.app.utils.ffmpeg_output import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["camera"])
 
+
+def _require_builtin_camera_support(printer: Printer) -> None:
+    if getattr(printer, "printer_type", "bambu") == "anycubic":
+        raise HTTPException(400, "Anycubic built-in cameras are not supported; configure an external camera")
+
+
 # Grace period for a SIGTERMed ffmpeg to shut down before we SIGKILL it. Only
 # reachable when ffmpeg genuinely ignores SIGTERM: _terminate_ffmpeg drains the
 # pipes first, and a drained ffmpeg exits in ~0.15s.
@@ -1355,6 +1361,8 @@ async def camera_stream(
             },
         )
 
+    _require_builtin_camera_support(printer)
+
     # Validate FPS - A1/P1 models max out at ~5 FPS
     if is_chamber_image_model(printer.model):
         fps = min(max(fps, 1), 5)
@@ -1651,6 +1659,8 @@ async def _snapshot_response(printer_id: int, printer: Printer) -> Response:
             },
         )
 
+    _require_builtin_camera_support(printer)
+
     # Create temporary file for the snapshot (0600 so only the app user can read it)
     fd, tmp_name = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
@@ -1703,6 +1713,7 @@ async def test_camera(
     async with database.async_session() as db:
         printer = await get_printer_or_404(printer_id, db)
 
+    _require_builtin_camera_support(printer)
     result = await test_camera_connection(
         ip_address=printer.ip_address,
         access_code=printer.access_code,
@@ -1730,6 +1741,8 @@ async def diagnose_camera_route(
     # A short session, released before the capture (RC-C10, as #2572).
     async with database.async_session() as db:
         printer = await get_printer_or_404(printer_id, db)
+
+    _require_builtin_camera_support(printer)
 
     # Look up live-stream evidence so the diagnostic can short-circuit
     # instead of fighting a viewer for the printer's single camera slot.
@@ -1931,6 +1944,14 @@ async def check_plate_empty(
             printer.external_camera_enabled and printer.external_camera_url and printer.external_camera_type
         )
 
+    if not (
+        use_external
+        and printer.external_camera_enabled
+        and printer.external_camera_url
+        and printer.external_camera_type
+    ):
+        _require_builtin_camera_support(printer)
+
     if not is_plate_detection_available():
         raise HTTPException(
             status_code=503,
@@ -2047,6 +2068,14 @@ async def calibrate_plate_detection(
         use_external = bool(
             printer.external_camera_enabled and printer.external_camera_url and printer.external_camera_type
         )
+
+    if not (
+        use_external
+        and printer.external_camera_enabled
+        and printer.external_camera_url
+        and printer.external_camera_type
+    ):
+        _require_builtin_camera_support(printer)
 
     if not is_plate_detection_available():
         raise HTTPException(

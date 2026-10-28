@@ -2403,6 +2403,8 @@ async def _run_migrations(conn):
 
     # Migration: Add location column to printers for grouping
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN location VARCHAR(100)")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN printer_type VARCHAR(20) DEFAULT 'bambu' NOT NULL")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN tls_fingerprint VARCHAR(64)")
 
     # Migration: Add interval_type column to maintenance_types
     await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN interval_type VARCHAR(20) DEFAULT 'hours'")

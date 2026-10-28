@@ -646,7 +646,7 @@ describe('PrintersPage', () => {
         expect(screen.queryByText('Mark plate as cleared')).not.toBeInTheDocument();
       });
 
-      const clearButton = screen.getByRole('button', { name: 'Mark plate as cleared' });
+      const clearButton = await screen.findByRole('button', { name: 'Mark plate as cleared' });
 
       fireEvent.click(clearButton);
 

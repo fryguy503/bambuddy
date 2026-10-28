@@ -286,6 +286,16 @@ export default {
       moved: 'Printers verplaatst: {{count}}',
       failed: 'De wijziging kon niet worden opgeslagen: {{error}}',
     },
+    anycubic: {
+      manufacturer: "Fabrikant",
+      discover: "Anycubic-printer detecteren",
+      fingerprint: "Vingerafdruk TLS-certificaat (SHA-256)",
+      trustFingerprint: "Ik heb deze printer gecontroleerd en vertrouw het certificaat.",
+      connectionHelp: "Schakel LAN-modus in en detecteer de printer op het bovenstaande adres. Controleer het certificaat op een vertrouwd lokaal netwerk.",
+      supportNote: "Ondersteunt bewaking, pauzeren, hervatten en stoppen. ACE-sleuven zijn alleen-lezen. Bestandsoverdracht en ingebouwde camera zijn niet beschikbaar.",
+      discoveryFailed: "Detectie mislukt. Controleer het adres en de LAN-modus.",
+      identityMismatch: "Dit adres hoort bij een andere printer. Het serienummer moet overeenkomen.",
+    },
     title: 'Printers',
     addPrinter: 'Printer toevoegen',
     addPreflight: {

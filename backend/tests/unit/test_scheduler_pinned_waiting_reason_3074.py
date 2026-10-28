@@ -523,3 +523,26 @@ class TestPinnedHoldReason:
             MagicMock(return_value=False),
         ):
             assert PrintScheduler._pinned_hold_reason(9, "X1C-01", True) == "Busy: X1C-01"
+
+
+@pytest.mark.asyncio
+async def test_persisted_anycubic_job_never_wakes_its_smart_plug(ctx):
+    """Old rows and alternate writers cannot bypass dispatch admission."""
+    async with ctx.session_maker() as db:
+        printer = await db.get(Printer, 1)
+        printer.printer_type = "anycubic"
+        await db.commit()
+    item_id = await _add_item(ctx)
+    scheduler = PrintScheduler()
+    with patch.object(scheduler, "_power_on_and_wait", new_callable=AsyncMock) as power_on:
+        launched = await _run(
+            ctx,
+            scheduler,
+            connected=False,
+            plugs=[SimpleNamespace(auto_on=True, enabled=True)],
+        )
+    power_on.assert_not_awaited()
+    launched.assert_not_called()
+    item = await _item(ctx, item_id)
+    assert item.status == "failed"
+    assert "not supported for Anycubic" in item.error_message

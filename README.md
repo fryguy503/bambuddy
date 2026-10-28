@@ -823,6 +823,10 @@ Full documentation available at **[wiki.bambuddy.cool](http://wiki.bambuddy.cool
 | A1 | A1, A1 Mini |
 | A2 | A2L |
 
+Experimental Anycubic Kobra S1 LAN support provides printer monitoring,
+read-only inventory for two ACE units (eight slots), and pause/resume/stop.
+See [setup and current limitations](docs/anycubic.md). Hardware acceptance is pending.
+
 ---
 
 ## 🛠️ Tech Stack

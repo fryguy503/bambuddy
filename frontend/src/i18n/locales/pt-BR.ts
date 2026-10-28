@@ -286,6 +286,16 @@ export default {
       moved: 'Impressoras movidas: {{count}}',
       failed: 'Não foi possível salvar a alteração: {{error}}',
     },
+    anycubic: {
+      manufacturer: "Fabricante",
+      discover: "Detectar impressora Anycubic",
+      fingerprint: "Impressão digital do certificado TLS (SHA-256)",
+      trustFingerprint: "Verifiquei esta impressora e confio em seu certificado.",
+      connectionHelp: "Ative o modo LAN e detecte a impressora no endereço acima. Verifique o certificado em uma rede local confiável.",
+      supportNote: "Oferece monitoramento, pausa, retomada e parada. Os slots ACE são somente leitura. A transferência de arquivos e a câmera integrada estão indisponíveis.",
+      discoveryFailed: "Falha na detecção. Verifique o endereço e o modo LAN.",
+      identityMismatch: "Este endereço pertence a outra impressora. O número de série deve corresponder.",
+    },
     addPreflight: {
       checking: 'Verificando a conexão...',
       warning: 'Algumas verificações de conexão falharam. Esta impressora pode aparecer como offline. Revise as verificações abaixo, corrija o que puder ou salve mesmo assim.',

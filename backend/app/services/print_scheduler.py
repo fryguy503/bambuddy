@@ -1764,11 +1764,17 @@ class PrintScheduler:
             # model-based branch already has its names from `_printers_for_model`.
             pinned_printer_ids = {i.printer_id for i in items if i.printer_id}
             pinned_printers: dict[int, tuple[str, str]] = {}
+            unsupported_printer_ids: set[int] = set()
             if pinned_printer_ids:
                 pinned_rows = await db.execute(
-                    select(Printer.id, Printer.name, Printer.model).where(Printer.id.in_(pinned_printer_ids))
+                    select(Printer.id, Printer.name, Printer.model, Printer.printer_type).where(
+                        Printer.id.in_(pinned_printer_ids)
+                    )
                 )
-                pinned_printers = {pid: (name or "", model or "") for pid, name, model in pinned_rows.all()}
+                for pid, name, model, printer_type in pinned_rows.all():
+                    pinned_printers[pid] = (name or "", model or "")
+                    if printer_type == "anycubic":
+                        unsupported_printer_ids.add(pid)
 
             def printer_label(printer_id: int) -> str:
                 """What to call this printer in a queue row."""
@@ -2071,6 +2077,11 @@ class PrintScheduler:
                         skip_reasons["printer_out_of_scope"] = skip_reasons.get("printer_out_of_scope", 0) + 1
                         continue
 
+                    if item.printer_id in unsupported_printer_ids:
+                        # Also covers persisted rows and alternate enqueue
+                        # paths. Never wake a plug for an unsupported dispatch.
+                        await self._fail_dispatch(db, item, "Print dispatch is not supported for Anycubic printers")
+                        continue
                     # Held by a sensor interlock (#1148). Checked before the
                     # busy_printers test that would otherwise swallow it
                     # silently — "waiting for a printer" and "waiting for you
@@ -3147,7 +3158,9 @@ class PrintScheduler:
         if (clause := printer_scope.where_strict(Printer.id)) is not None:
             query = query.where(clause)
         result = await db.execute(query)
-        return list(result.scalars().all())
+        return [
+            printer for printer in result.scalars().all() if getattr(printer, "printer_type", "bambu") != "anycubic"
+        ]
 
     async def _wakeable_printer_ids(self, db: AsyncSession) -> set[int]:
         """Printer IDs that at least one enabled ``auto_on`` plug can power on.
@@ -6073,6 +6086,8 @@ class PrintScheduler:
         # Get all active printers
         all_printers = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
         for printer in all_printers.scalars():
+            if getattr(printer, "printer_type", "bambu") == "anycubic":
+                continue
             pid = printer.id
 
             # Resolve model+firmware up front — needed to decide whether this printer
@@ -6673,6 +6688,13 @@ class PrintScheduler:
             printers_by_id = {p.id: p for p in printer_rows.scalars()}
 
         for row in rows:
+            printer = printers_by_id.get(row.printer_id)
+            if getattr(printer, "printer_type", "bambu") == "anycubic":
+                row.status = "failed"
+                row.error_message = "Scheduled drying is not supported for Anycubic printers"
+                row.completed_at = now
+                self._scheduled_drying_printer_ids.discard(row.printer_id)
+                continue
             if row.status == "running":
                 self._update_running_scheduled_drying(row, now)
                 continue
@@ -8749,6 +8771,14 @@ class PrintScheduler:
                 return
             logger.error("Queue item %s: Printer %s not found", item.id, item.printer_id)
             await self._power_off_if_needed(db, item)
+            return
+
+        if getattr(printer, "printer_type", "bambu") == "anycubic":
+            # This path uploads Bambu 3MFs over FTPS and can inject Bambu
+            # G-code. Reject before preheating, transfer, or printer commands.
+            if not await self._fail_dispatch(db, item, "Print dispatch is not supported for Anycubic printers"):
+                return
+            logger.warning("Queue item %s: %s", item.id, item.error_message)
             return
 
         # Check printer is connected

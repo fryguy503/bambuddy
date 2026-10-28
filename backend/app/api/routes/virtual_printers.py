@@ -215,6 +215,8 @@ async def create_virtual_printer(
         target_printer = result.scalar_one_or_none()
         if not target_printer or not printer_scope.allows(target_printer.id):
             return _target_missing(body.target_printer_id)
+        if target_printer.printer_type == "anycubic":
+            return JSONResponse(status_code=409, content={"detail": "Bambu virtual printers require a Bambu target"})
 
     # Validate bind_ip uniqueness (against all enabled VPs)
     if body.bind_ip:
@@ -314,7 +316,7 @@ async def get_ca_certificate(
 ):
     """Return the shared virtual-printer CA certificate (PEM) for slicer trust import.
 
-    One CA is shared by every virtual printer — the user imports it into their
+    One CA is shared by every virtual printer â€” the user imports it into their
     slicer's trust store once. Only the public certificate is returned; the CA
     private key never leaves the backend.
     """
@@ -392,7 +394,7 @@ async def update_virtual_printer(
     if not vp or not printer_scope.allows(vp.target_printer_id):
         return _vp_missing()
 
-    # Redact the access code before logging — model_dump otherwise includes
+    # Redact the access code before logging â€” model_dump otherwise includes
     # the plaintext value at DEBUG, violating the project no-secrets-in-logs
     # rule. Replace with a marker that still signals "the user changed it"
     # vs "the user didn't touch this field".
@@ -438,6 +440,8 @@ async def update_virtual_printer(
         target_printer = result.scalar_one_or_none()
         if not target_printer or not printer_scope.allows(target_printer.id):
             return _target_missing(body.target_printer_id)
+        if target_printer.printer_type == "anycubic":
+            return JSONResponse(status_code=409, content={"detail": "Bambu virtual printers require a Bambu target"})
         vp.target_printer_id = body.target_printer_id
         # Auto-inherit model from target printer in proxy mode (unless user explicitly set model)
         if body.model is None and vp.mode == "proxy" and target_printer.model:
@@ -486,7 +490,7 @@ async def update_virtual_printer(
     effective_mode = vp.mode
 
     if explicitly_enabling:
-        # User is explicitly toggling on — enforce all requirements
+        # User is explicitly toggling on â€” enforce all requirements
         if not vp.bind_ip:
             logger.warning("Update VP %d rejected: no bind_ip", vp_id)
             return JSONResponse(status_code=400, content={"detail": "Bind IP is required when enabling"})
@@ -527,7 +531,7 @@ async def update_virtual_printer(
                 )
                 return JSONResponse(status_code=400, content={"detail": "Access code is required when enabling"})
     elif new_enabled and body.enabled is None:
-        # VP is already enabled and user is changing other fields —
+        # VP is already enabled and user is changing other fields â€”
         # auto-disable if new state doesn't meet requirements
         if not vp.bind_ip:
             new_enabled = False
@@ -572,7 +576,7 @@ async def drop_virtual_printer(db: AsyncSession, vp_id: int) -> Path:
 
     upload_dir = virtual_printer_manager._base_dir / "uploads" / str(vp_id)
     # Mark any PendingUpload rows that referenced this VP's upload_dir as
-    # discarded — without this the rows live on as phantom entries in
+    # discarded â€” without this the rows live on as phantom entries in
     # /pending-uploads/ pointing at file paths that no longer exist, and
     # the user only learns they're orphaned by trying to archive one and
     # getting a flip-to-discarded on file-missing.

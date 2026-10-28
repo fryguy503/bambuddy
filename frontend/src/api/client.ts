@@ -434,6 +434,8 @@ export interface PrinterLocationUpdate {
 }
 
 export interface Printer {
+  printer_type?: 'bambu' | 'anycubic';
+  tls_fingerprint?: string | null;
   id: number;
   name: string;
   serial_number: string;
@@ -765,6 +767,8 @@ export interface PrinterStatus {
 }
 
 export interface PrinterCreate {
+  printer_type?: 'bambu' | 'anycubic';
+  tls_fingerprint?: string | null;
   name: string;
   serial_number: string;
   ip_address: string;
@@ -785,6 +789,13 @@ export interface PrinterCreate {
   plate_detection_enabled?: boolean;
   plate_detection_roi?: PlateDetectionROI;
   wear_cost_per_hour?: number | null;
+}
+
+export interface AnycubicDiscovery {
+  serial_number: string;
+  model: string;
+  model_id: string;
+  tls_fingerprint: string;
 }
 
 // Plate Detection
@@ -5243,6 +5254,10 @@ export const api = {
   // Printers
   getPrinters: () => request<Printer[]>('/printers/'),
   getPrinter: (id: number) => request<Printer>(`/printers/${id}`),
+  discoverAnycubic: (ipAddress: string, printerId?: number) =>
+    request<AnycubicDiscovery>(`/printers/${printerId == null ? '' : `${printerId}/`}anycubic/discover?${new URLSearchParams({ ip_address: ipAddress })}`, {
+      method: 'POST',
+    }),
   createPrinter: (data: PrinterCreate) =>
     request<Printer>('/printers/', {
       method: 'POST',

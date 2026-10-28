@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.printer import Printer
+from backend.app.services.anycubic import AnycubicMQTTClient
 from backend.app.services.bambu_mqtt import (
     STAGE_NAMES,
     BambuMQTTClient,
@@ -395,7 +396,7 @@ class PrinterManager:
     """Manager for multiple printer connections."""
 
     def __init__(self):
-        self._clients: dict[int, BambuMQTTClient] = {}
+        self._clients: dict[int, BambuMQTTClient | AnycubicMQTTClient] = {}
         self._models: dict[int, str | None] = {}  # Cache printer models for feature detection
         self._printer_info: dict[int, PrinterInfo] = {}  # Cache printer name/serial for callbacks
         # Last AMS / external-spool reading of a printer whose client has been
@@ -852,7 +853,9 @@ class PrinterManager:
             if self._on_tray_change:
                 self._schedule_async(self._on_tray_change(printer_id, tray_global, layer_num))
 
-        client = BambuMQTTClient(
+        client_type = AnycubicMQTTClient if getattr(printer, "printer_type", "bambu") == "anycubic" else BambuMQTTClient
+        provider_args = {"tls_fingerprint": printer.tls_fingerprint} if client_type is AnycubicMQTTClient else {}
+        client = client_type(
             ip_address=printer.ip_address,
             serial_number=printer.serial_number,
             access_code=printer.access_code,
@@ -871,6 +874,7 @@ class PrinterManager:
             on_finish_photo_moment=on_finish_photo_moment,
             on_assignment_verified=on_assignment_verified,
             on_tray_change=on_tray_change,
+            **provider_args,
         )
 
         client.connect()
@@ -956,7 +960,7 @@ class PrinterManager:
             return client.check_staleness()
         return False
 
-    def get_client(self, printer_id: int) -> BambuMQTTClient | None:
+    def get_client(self, printer_id: int) -> BambuMQTTClient | AnycubicMQTTClient | None:
         """Get the MQTT client for a printer."""
         return self._clients.get(printer_id)
 
@@ -1108,6 +1112,9 @@ class PrinterManager:
         ip_address: str,
         serial_number: str,
         access_code: str,
+        printer_type: str = "bambu",
+        tls_fingerprint: str | None = None,
+        model: str | None = None,
     ) -> dict:
         """Test connection to a printer without persisting.
 
@@ -1119,15 +1126,22 @@ class PrinterManager:
         original synchronous teardown produced the #1445 "Docker container
         hangs" symptom on P1S when called from POST /printers/.
         """
-        client = BambuMQTTClient(
-            ip_address=ip_address,
-            serial_number=serial_number,
-            access_code=access_code,
-        )
+        if printer_type == "anycubic":
+            client = AnycubicMQTTClient(
+                ip_address=ip_address,
+                serial_number=serial_number,
+                model=model,
+                tls_fingerprint=tls_fingerprint,
+            )
+        else:
+            client = BambuMQTTClient(ip_address=ip_address, serial_number=serial_number, access_code=access_code)
 
         try:
             client.connect()
-            deadline = asyncio.get_running_loop().time() + self.PROBE_TIMEOUT_SECONDS
+            timeout = (
+                max(self.PROBE_TIMEOUT_SECONDS, 30.0) if printer_type == "anycubic" else self.PROBE_TIMEOUT_SECONDS
+            )
+            deadline = asyncio.get_running_loop().time() + timeout
             while not client.state.connected and asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(self.PROBE_POLL_INTERVAL_SECONDS)
 

@@ -286,6 +286,16 @@ export default {
       moved: 'Taşınan yazıcı: {{count}}',
       failed: 'Değişiklik kaydedilemedi: {{error}}',
     },
+    anycubic: {
+      manufacturer: "Üretici",
+      discover: "Anycubic yazıcıyı keşfet",
+      fingerprint: "TLS sertifika parmak izi (SHA-256)",
+      trustFingerprint: "Bu yazıcıyı doğruladım ve sertifikasına güveniyorum.",
+      connectionHelp: "LAN modunu açın ve yukarıdaki adresteki yazıcıyı keşfedin. Sertifikayı güvenilir bir yerel ağda doğrulayın.",
+      supportNote: "İzleme, duraklatma, sürdürme ve durdurma desteklenir. ACE yuvaları salt okunurdur. Dosya aktarımı ve dahili kamera kullanılamaz.",
+      discoveryFailed: "Keşif başarısız. Adresi ve LAN modunu kontrol edin.",
+      identityMismatch: "Bu adres başka bir yazıcıya ait. Seri numarası eşleşmelidir.",
+    },
     title: 'Yazıcılar',
     addPrinter: 'Yazıcı Ekle',
     addPreflight: {

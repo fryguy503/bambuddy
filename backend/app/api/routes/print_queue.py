@@ -90,6 +90,11 @@ router = APIRouter(prefix="/queue", tags=["queue"])
 _AWAITING_REVIEW = "This job waits for review: someone who can manage all queue jobs has to start it"
 
 
+def _require_queue_dispatch_support(printer: Printer) -> None:
+    if getattr(printer, "printer_type", "bambu") == "anycubic":
+        raise HTTPException(400, "Print dispatch is not supported for Anycubic printers")
+
+
 def _variant_summaries(item: PrintQueueItem) -> list[QueueVariantSummary]:
     """Cross-model candidates for display (#671), or [] if they weren't loaded.
 
@@ -1212,8 +1217,10 @@ async def add_to_queue(
     if data.printer_id is not None:
         printer_scope.ensure(data.printer_id)
         result = await db.execute(select(Printer).where(Printer.id == data.printer_id))
-        if not result.scalar_one_or_none():
+        printer = result.scalar_one_or_none()
+        if not printer:
             raise HTTPException(400, "Printer not found")
+        _require_queue_dispatch_support(printer)
 
     # Validate target_model has active printers. Skipped for cross-model items:
     # target_model there is just the first candidate, and _resolve_queue_variants
@@ -1611,8 +1618,10 @@ async def bulk_update_queue_items(
     if "printer_id" in update_data and update_data["printer_id"] is not None:
         printer_scope.ensure(update_data["printer_id"])
         result = await db.execute(select(Printer).where(Printer.id == update_data["printer_id"]))
-        if not result.scalar_one_or_none():
+        printer = result.scalar_one_or_none()
+        if not printer:
             raise HTTPException(400, "Printer not found")
+        _require_queue_dispatch_support(printer)
 
     # Fetch all items, minus any bound to a printer the caller can't see (#1727)
     result = await db.execute(
@@ -2472,8 +2481,10 @@ async def update_queue_item(
     if "printer_id" in update_data and update_data["printer_id"] is not None:
         printer_scope.ensure(update_data["printer_id"])
         result = await db.execute(select(Printer).where(Printer.id == update_data["printer_id"]))
-        if not result.scalar_one_or_none():
+        printer = result.scalar_one_or_none()
+        if not printer:
             raise HTTPException(400, "Printer not found")
+        _require_queue_dispatch_support(printer)
 
     # Validate target_model has active printers
     if "target_model" in update_data and update_data["target_model"]:
@@ -3049,6 +3060,9 @@ async def start_queue_item(
 
     if item.status != "pending":
         raise HTTPException(400, f"Can only start pending items, current status: '{item.status}'")
+
+    if item.printer is not None:
+        _require_queue_dispatch_support(item.printer)
 
     item.estimated_cost = await _trusted_item_estimated_cost(
         db,

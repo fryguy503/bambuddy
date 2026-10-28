@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -27,22 +28,25 @@ def _mask_url_login(url: str | None) -> str | None:
 
 
 class PrinterBase(BaseModel):
+    printer_type: Literal["bambu", "anycubic"] = "bambu"
+    tls_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     name: str = Field(..., min_length=1, max_length=100)
     serial_number: str = Field(..., min_length=1, max_length=50)
 
     @field_validator("serial_number")
     @classmethod
-    def _normalize_serial_number(cls, v: str) -> str:
+    def _normalize_serial_number(cls, v: str, info) -> str:
         """Uppercase and trim the serial number.
 
         Bambu serial numbers are uppercase alphanumeric, and the MQTT report
         topic ``device/<serial>/report`` is case-sensitive. A serial entered
         in the wrong case (or with stray whitespace) connects and subscribes
-        without error but never receives a message — the printer publishes to
+        without error but never receives a message â€” the printer publishes to
         the correctly-cased topic, so every status field stays unknown (#1465).
         Normalising on input makes the subscribed topic always match.
         """
-        normalized = v.strip().upper()
+        # Anycubic's paired device ID is case-sensitive and is not a Bambu SN.
+        normalized = v.strip() if info.data.get("printer_type") == "anycubic" else v.strip().upper()
         if not normalized:
             raise ValueError("serial_number must not be blank")
         return normalized
@@ -64,10 +68,23 @@ class PrinterBase(BaseModel):
 
 
 class PrinterCreate(PrinterBase):
-    # access_code lives on the input shapes only — never on the default
+    # access_code lives on the input shapes only â€” never on the default
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
     # connect to the printer's MQTT and bypass Bambuddy's RBAC.
-    access_code: str = Field(..., min_length=1, max_length=20)
+    access_code: str = Field(default="", max_length=20)
+
+    @model_validator(mode="after")
+    def _validate_provider_credentials(self):
+        if self.printer_type == "anycubic":
+            if self.model != "Kobra S1":
+                raise ValueError("Only the Anycubic Kobra S1 is supported")
+            if not self.tls_fingerprint:
+                raise ValueError("Review the Anycubic LAN certificate before adding the printer")
+            self.access_code = ""
+            self.auto_archive = False
+        elif not self.access_code:
+            raise ValueError("A Bambu LAN access code is required")
+        return self
 
     # Input only, not on PrinterBase: SQLite never enforced the column width,
     # so a stored location may be longer, and the response must still read it.
@@ -85,6 +102,8 @@ class PlateDetectionROI(BaseModel):
 
 class PrinterUpdate(IgnoresNullForRequiredColumns):
     __orm_table__ = "printers"
+    printer_type: Literal["bambu", "anycubic"] | None = None
+    tls_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     name: str | None = None
     ip_address: str | None = Field(
         default=None,
@@ -116,7 +135,7 @@ class PrinterResponse(PrinterBase):
     nozzle_count: int = 1  # 1 or 2, auto-detected from MQTT
     # Whether the model is sold with both Standard and High Flow nozzles, so a
     # K-profile's flow type is a real choice rather than a meaningless field.
-    # Derived from the model, not from nozzle_count — see
+    # Derived from the model, not from nozzle_count â€” see
     # printer_models.supports_nozzle_flow_type.
     supports_nozzle_flow_type: bool = True
     print_hours_offset: float = 0.0
@@ -146,7 +165,7 @@ class PrinterResponseWithSecret(PrinterResponse):
     """PrinterResponse + access_code and the full camera URLs. Returned ONLY to callers with
     PRINTERS_UPDATE (Admin / Operator JWTs, or single-trust auth-disabled mode).
 
-    Viewers and API keys never receive this shape — they get the bare
+    Viewers and API keys never receive this shape â€” they get the bare
     PrinterResponse without access_code, since holding the access_code lets
     the caller talk to the printer's MQTT directly and bypass Bambuddy's RBAC.
     """
@@ -176,11 +195,11 @@ class HMSErrorResponse(BaseModel):
     full_code: str = ""
     # The bundled catalogue's sentence for this fault, so a client does not have
     # to carry its own copy of the same table to tell a user why a print halted
-    # (#2926). English only and not localized — the catalogue ships one language.
+    # (#2926). English only and not localized â€” the catalogue ships one language.
     # Generated from Bambu Studio's HMS files, keyed by `full_code` and the
     # printer model (#2728). None when Bambu publishes no text for the code,
     # which it does for some codes it lists. A client should treat null as "no
-    # text available", never as "no fault" — `full_code` is what identifies the
+    # text available", never as "no fault" â€” `full_code` is what identifies the
     # fault, and it is always present.
     description: str | None = None
 
@@ -224,8 +243,8 @@ class AMSTray(BaseModel):
     drying_time: int | None = None  # RFID-recommended drying time (hours)
     state: int | None = None  # AMS tray state: 9=empty, 10=spool present not loaded, 11=loaded
     # Firmware's authoritative "spool physically present" bit (from tray_exist_bits).
-    # True for a non-RFID spool the firmware can't identify — the UI shows "?" rather
-    # than "Empty" (#2527). None when the bitmask was unavailable (→ state-based fallback).
+    # True for a non-RFID spool the firmware can't identify â€” the UI shows "?" rather
+    # than "Empty" (#2527). None when the bitmask was unavailable (â†’ state-based fallback).
     exists: bool | None = None
 
 
@@ -245,7 +264,7 @@ class AMSUnit(BaseModel):
     dry_status: int = 0  # 0=Off, 1=Checking, 2=Drying, 3=Cooling, 4=Stopping, 5=Error
     dry_sub_status: int = 0  # 0=Off, 1=Heating, 2=Dehumidify
     dry_sf_reason: list[int] = []  # Cannot-dry reasons from firmware (see CannotDryReason)
-    dry_target_temp: int | None = None  # Active-cycle target °C (Bambu doesn't echo this)
+    dry_target_temp: int | None = None  # Active-cycle target Â°C (Bambu doesn't echo this)
     dry_filament: str | None = None  # Active-cycle filament name we sent
     module_type: str = ""  # "ams", "ams_f1", "n3f", "n3s"
 
@@ -263,7 +282,7 @@ class NozzleRackSlot(BaseModel):
     nozzle_diameter: str = ""
     wear: int | None = None
     stat: int | None = None  # Nozzle status (e.g. mounted/docked)
-    max_temp: int = 0  # Max temperature rating °C (0 = not set)
+    max_temp: int = 0  # Max temperature rating Â°C (0 = not set)
     serial_number: str = ""  # Nozzle serial number
     filament_color: str = ""  # RGBA hex ("00000000" = no filament)
     filament_id: str = ""  # Bambu filament ID
@@ -290,7 +309,7 @@ class HmsActionBody(BaseModel):
 
 
 class FilaSwitchResponse(BaseModel):
-    """Filament Track Switch (FTS) state — accessory that mediates AMS-to-extruder routing.
+    """Filament Track Switch (FTS) state â€” accessory that mediates AMS-to-extruder routing.
 
     When installed, the AMS info field reports bits 8-11 = 0xE (uninitialized)
     because slots are dynamically routed via the FTS rather than tied to a
@@ -400,12 +419,12 @@ class PrinterStatus(BaseModel):
     ams_mapping: list[int] = []
     # Per-AMS extruder map: {ams_id: extruder_id} where 0=right, 1=left
     ams_extruder_map: dict[str, int] = {}
-    # Filament Track Switch (FTS) accessory — when installed, AMS reports
+    # Filament Track Switch (FTS) accessory â€” when installed, AMS reports
     # bits 8-11 = 0xE (uninitialized) and routing is dynamic via the FTS. See #1162.
     fila_switch: FilaSwitchResponse | None = None
     # Per-AMS FTS inlet binding: {ams_id: "A" | "B"}, from AMS info bits 24-27.
     # Which of the switch's two inlets each AMS is plumbed into, as set on the
-    # printer's "Manual AMS Setup" screen. Empty unless an FTS is installed —
+    # printer's "Manual AMS Setup" screen. Empty unless an FTS is installed â€”
     # an FTS-bound AMS reaches BOTH nozzles, so it has no entry in
     # ams_extruder_map and must not be labelled left or right.
     ams_switch_inlet: dict[str, str] = {}
@@ -426,7 +445,7 @@ class PrinterStatus(BaseModel):
     # logic it uses for tray_now:
     #   expected_tray = the slot the firmware now expects filament in (from tray_tar).
     #                   None when idle, not paused, or the slot can't be resolved
-    #                   (multi-AMS ambiguity) — the UI then says "check the printer".
+    #                   (multi-AMS ambiguity) â€” the UI then says "check the printer".
     #   previous_tray = the slot loaded before the pause, i.e. the one that ran out
     #                   (from tray_pre). None when unknown.
     expected_tray: int | None = None
@@ -462,7 +481,7 @@ class PrinterStatus(BaseModel):
     # Developer LAN mode: True = enabled, False = disabled (MQTT encryption), None = unknown
     developer_mode: bool | None = None
     # AMS Filament Backup ("auto-switch" to a second spool when one runs out).
-    # True = ON, False = OFF, None = unknown / unsupported (A1 family — protocol field
+    # True = ON, False = OFF, None = unknown / unsupported (A1 family â€” protocol field
     # not yet identified). UI treats None as "status unavailable", not as a hard disable.
     ams_filament_backup: bool | None = None
     # Queue: printer is awaiting the user to acknowledge the build plate is cleared
@@ -470,7 +489,7 @@ class PrinterStatus(BaseModel):
     awaiting_plate_clear: bool = False
     # AMS drying support
     supports_drying: bool = False
-    # AMS "Print While Drying" — drying mid-print. Verified per Bambu wiki release notes;
+    # AMS "Print While Drying" â€” drying mid-print. Verified per Bambu wiki release notes;
     # see _DRY_WHILE_PRINTING_MIN_FIRMWARE in printer_manager.py for the matrix.
     supports_drying_while_printing: bool = False
     # The AMS can dry, but only from the printer's own screen (P1 series, #2533).

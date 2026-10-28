@@ -286,6 +286,16 @@ export default {
       moved: 'Drucker verschoben: {{count}}',
       failed: 'Die Änderung konnte nicht gespeichert werden: {{error}}',
     },
+    anycubic: {
+      manufacturer: "Hersteller",
+      discover: "Anycubic-Drucker erkennen",
+      fingerprint: "TLS-Zertifikat-Fingerabdruck (SHA-256)",
+      trustFingerprint: "Ich habe diesen Drucker überprüft und vertraue seinem Zertifikat.",
+      connectionHelp: "LAN-Modus aktivieren und den Drucker an der obigen Adresse erkennen. Das Zertifikat in einem vertrauenswürdigen lokalen Netzwerk überprüfen.",
+      supportNote: "Überwachung sowie Pause, Fortsetzen und Stopp werden unterstützt. ACE-Fächer sind schreibgeschützt. Dateiübertragung und integrierte Kamera sind nicht verfügbar.",
+      discoveryFailed: "Erkennung fehlgeschlagen. Adresse und LAN-Modus überprüfen.",
+      identityMismatch: "Diese Adresse gehört zu einem anderen Drucker. Die Seriennummer muss übereinstimmen.",
+    },
     addPreflight: {
       checking: 'Verbindung wird geprüft...',
       warning: 'Einige Verbindungsprüfungen sind fehlgeschlagen. Dieser Drucker wird möglicherweise als offline angezeigt. Prüfe die Punkte unten, behebe was möglich ist, oder speichere trotzdem.',

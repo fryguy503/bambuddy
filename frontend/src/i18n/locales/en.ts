@@ -288,6 +288,16 @@ export default {
       moved: 'Printers moved: {{count}}',
       failed: 'Could not save the change: {{error}}',
     },
+    anycubic: {
+      manufacturer: "Manufacturer",
+      discover: "Discover Anycubic printer",
+      fingerprint: "TLS certificate fingerprint (SHA-256)",
+      trustFingerprint: "I verified this printer and trust its certificate.",
+      connectionHelp: "Enable LAN mode and discover the printer at the address above. Verify its certificate on a trusted local network.",
+      supportNote: "Supports monitoring and pause, resume and stop. ACE slots are read-only. File transfer and built-in camera are unavailable.",
+      discoveryFailed: "Discovery failed. Check the address and LAN mode.",
+      identityMismatch: "This address belongs to a different printer. The serial number must match.",
+    },
     title: 'Printers',
     addPrinter: 'Add Printer',
     addPreflight: {

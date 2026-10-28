@@ -367,6 +367,7 @@ export function PrintModal({
   const { data: printers, isLoading: loadingPrinters } = useQuery({
     queryKey: ['printers'],
     queryFn: api.getPrinters,
+    select: data => data.filter(printer => printer.printer_type !== 'anycubic'),
   });
 
   const { data: myCostCenters, isLoading: loadingCostCenters } = useQuery({

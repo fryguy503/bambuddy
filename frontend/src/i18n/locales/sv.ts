@@ -286,6 +286,16 @@ export default {
       moved: 'Flyttade skrivare: {{count}}',
       failed: 'Det gick inte att spara ändringen: {{error}}',
     },
+    anycubic: {
+      manufacturer: "Tillverkare",
+      discover: "Hitta Anycubic-skrivare",
+      fingerprint: "TLS-certifikatets fingeravtryck (SHA-256)",
+      trustFingerprint: "Jag har kontrollerat skrivaren och litar på dess certifikat.",
+      connectionHelp: "Aktivera LAN-läget och hitta skrivaren på adressen ovan. Kontrollera certifikatet i ett betrott lokalt nätverk.",
+      supportNote: "Stöder övervakning, paus, återupptagning och stopp. ACE-platser är skrivskyddade. Filöverföring och inbyggd kamera är inte tillgängliga.",
+      discoveryFailed: "Det gick inte att hitta skrivaren. Kontrollera adressen och LAN-läget.",
+      identityMismatch: "Den här adressen tillhör en annan skrivare. Serienumret måste stämma överens.",
+    },
     title: 'Skrivare',
     addPrinter: 'Lägg till skrivare',
     addPreflight: {

@@ -44,6 +44,7 @@ import os
 import socket
 from typing import TYPE_CHECKING
 
+from backend.app.services.anycubic import AnycubicMQTTClient
 from backend.app.services.bambu_mqtt import apply_tray_exist_bits, unit_reported_absent
 from backend.app.services.virtual_printer._debug import append_event, dump_wire
 
@@ -401,7 +402,7 @@ class MQTTBridge:
 
         # Client identity changed — unregister from the old, register on the new.
         self._unbind_client()
-        if current is None:
+        if current is None or isinstance(current, AnycubicMQTTClient):
             return
 
         try:

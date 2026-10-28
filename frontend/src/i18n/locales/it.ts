@@ -286,6 +286,16 @@ export default {
       moved: 'Stampanti spostate: {{count}}',
       failed: 'Impossibile salvare la modifica: {{error}}',
     },
+    anycubic: {
+      manufacturer: "Produttore",
+      discover: "Rileva stampante Anycubic",
+      fingerprint: "Impronta del certificato TLS (SHA-256)",
+      trustFingerprint: "Ho verificato questa stampante e considero attendibile il suo certificato.",
+      connectionHelp: "Attiva la modalità LAN e rileva la stampante all’indirizzo indicato. Verifica il certificato su una rete locale attendibile.",
+      supportNote: "Supporta monitoraggio, pausa, ripresa e arresto. Gli slot ACE sono di sola lettura. Trasferimento file e fotocamera integrata non disponibili.",
+      discoveryFailed: "Rilevamento non riuscito. Controlla l’indirizzo e la modalità LAN.",
+      identityMismatch: "Questo indirizzo appartiene a un’altra stampante. Il numero di serie deve corrispondere.",
+    },
     addPreflight: {
       checking: 'Verifica della connessione...',
       warning: 'Alcuni controlli di connessione non sono riusciti. Questa stampante potrebbe risultare offline. Controlla le verifiche qui sotto, risolvi ciò che puoi oppure salva comunque.',
