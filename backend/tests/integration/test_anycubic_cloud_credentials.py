@@ -25,6 +25,7 @@ def cloud_service():
     with patch(SERVICE) as constructor:
         service = constructor.return_value
         service.validate_token = AsyncMock(return_value={"user_id": "42", "display_name": "Fixture Workshop"})
+        service.account_token = SECRET
         service.close = AsyncMock()
         yield service
 

@@ -1,7 +1,7 @@
 """Optional, read-only Anycubic Cloud profile access over verified HTTPS.
 
-This service accepts an existing Cloud user token (the web ``XX-Token``),
-not an OAuth ID token or an email/password. It never discovers credentials,
+This service accepts a Cloud user token (the web ``XX-Token``) or exchanges
+a user-supplied Slicer Next access token. It never discovers credentials,
 opens cloud MQTT, or sends printer commands. The native public-header signer
 was recovered independently in the user's Anycubic Slicer Next audit; its
 application constants are protocol identifiers, not account credentials.
@@ -13,6 +13,8 @@ Token help: https://github.com/Nino6689/hass-anycubic#option-b--web-token
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json as json_module
 import time
@@ -30,6 +32,7 @@ CLOUD_ORIGINS = MappingProxyType(
     {"global": "https://cloud-universe.anycubic.com", "china": "https://cloud-platform.anycubicloud.com"}
 )
 USER_INFO_PATH = "/user/profile/userInfo"
+TOKEN_EXCHANGE_PATH = "/v3/public/loginWithAccessToken"
 SLICER_CONFIG_PATH = "/v3/user/getSlicerConfig"
 TOKEN_HELP_URL = "https://github.com/Nino6689/hass-anycubic#option-b--web-token"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -45,6 +48,7 @@ _DOWNLOAD_DEADLINE_SECONDS = 30.0
 _ALLOWED_ENDPOINTS = frozenset(
     {
         ("GET", USER_INFO_PATH),
+        ("POST", TOKEN_EXCHANGE_PATH),
         ("POST", SLICER_CONFIG_PATH),
         ("POST", "/v5/machine_material/getMaterialListByBrand"),
     }
@@ -83,6 +87,23 @@ def _token_text(token: object) -> str:
     ):
         raise AnycubicCloudError("Enter a valid Anycubic Cloud user token.", code="invalid_token_format")
     return token
+
+
+def _is_slicer_access_token(token: str) -> bool:
+    """Choose the fixed exchange endpoint; the vendor verifies authentication.
+
+    Unverified JWT claims are used only as a format hint, never an identity.
+    Opaque web tokens and China-region user tokens retain their existing path.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        payload = base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))
+        claims = json_module.loads(payload, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+    except (ValueError, TypeError, UnicodeError, binascii.Error, RecursionError):
+        return False
+    return isinstance(claims, dict) and claims.get("tokenType") == "access-token"
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -168,6 +189,13 @@ class AnycubicCloudService:
             raise AnycubicCloudAuthError()
         return f"anycubic:{self._region}:{self._account_id}"
 
+    @property
+    def account_token(self) -> str:
+        """Sensitive workbench user token, for encrypted credential storage only."""
+        if self._token is None or self._account_id is None:
+            raise AnycubicCloudAuthError()
+        return self._token
+
     async def close(self) -> None:
         if self._owns_client and self._client is not None:
             await self._client.aclose()
@@ -185,6 +213,17 @@ class AnycubicCloudService:
     async def connect_token(self, token: str) -> dict[str, str]:
         """Validate before replacing a previously accepted account token."""
         candidate = _token_text(token)
+        if self._region == "global" and _is_slicer_access_token(candidate):
+            exchange = await self._request(
+                "POST",
+                TOKEN_EXCHANGE_PATH,
+                token=candidate,
+                json={"device_type": "pcf", "access_token": candidate},
+            )
+            data = exchange.get("data")
+            if not isinstance(data, dict) or not isinstance(data.get("token"), str) or not data["token"]:
+                raise AnycubicCloudAuthError()
+            candidate = _token_text(data["token"])
         body = await self._request("GET", USER_INFO_PATH, token=candidate)
         identity = self._identity(body, candidate)
         self._token = candidate
@@ -195,10 +234,9 @@ class AnycubicCloudService:
     async def validate_token(self) -> dict[str, str]:
         self._account_id = None
         self._config_download_url = None
-        body = await self.request("GET", USER_INFO_PATH)
-        identity = self._identity(body, self._token)
-        self._account_id = identity["user_id"]
-        return identity
+        if self._token is None:
+            raise AnycubicCloudAuthError()
+        return await self.connect_token(self._token)
 
     @staticmethod
     def _identity(body: dict[str, Any], token: str | None) -> dict[str, str]:
@@ -329,6 +367,14 @@ class AnycubicCloudService:
         credential = token if token is not None else self._token
         if credential is None:
             raise AnycubicCloudAuthError()
+        exchange = path == TOKEN_EXCHANGE_PATH
+        if exchange and (
+            self._region != "global"
+            or method != "POST"
+            or params
+            or json != {"device_type": "pcf", "access_token": credential}
+        ):
+            raise AnycubicCloudError("Invalid Anycubic token exchange.", code="invalid_request")
         if params is not None:
             if not isinstance(params, Mapping) or len(params) > 32:
                 raise AnycubicCloudError("Invalid Anycubic Cloud query.", code="invalid_request")
@@ -358,13 +404,16 @@ class AnycubicCloudService:
         if path == SLICER_CONFIG_PATH:
             self._config_download_url = None
         client = self._http_client()
+        headers = _headers(credential, self._region)
+        if exchange:
+            headers.pop("XX-Token")
         try:
             async with (
                 asyncio.timeout(_REQUEST_DEADLINE_SECONDS),
                 client.stream(
                     method,
                     CLOUD_ORIGINS[self._region] + API_PREFIX + path,
-                    headers=_headers(credential, self._region),
+                    headers=headers,
                     params=params,
                     content=content,
                     follow_redirects=False,
@@ -400,7 +449,7 @@ class AnycubicCloudService:
         if "data" not in body:
             raise AnycubicCloudError("Anycubic Cloud returned an invalid response.", code="invalid_response")
         if type(body.get("code")) is not int or body["code"] != 1:
-            if path == USER_INFO_PATH and body["data"] is None:
+            if path in (USER_INFO_PATH, TOKEN_EXCHANGE_PATH) and body["data"] is None:
                 raise AnycubicCloudAuthError()
             raise AnycubicCloudError("Anycubic Cloud refused the request.", code="request_refused")
         if path == SLICER_CONFIG_PATH and isinstance(body["data"], dict):

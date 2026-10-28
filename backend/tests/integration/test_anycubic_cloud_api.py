@@ -33,6 +33,7 @@ def cloud_service():
     with patch(SERVICE) as constructor:
         service = constructor.return_value
         service.validate_token = AsyncMock(return_value=PUBLIC)
+        service.account_token = SECRET
         service.account_namespace = "anycubic:global:account-1"
         service.close = AsyncMock()
         yield service
@@ -63,6 +64,16 @@ async def test_connection_validates_then_encrypts_token(async_client, db_session
     assert json.loads(mfa_decrypt(raw))["token"] == SECRET
     cloud_service.validate_token.assert_awaited_once()
     cloud_service.close.assert_awaited_once()
+
+
+async def test_slicer_login_stores_the_exchanged_user_token(async_client, db_session, cloud_service):
+    cloud_service.account_token = "fixture-workbench-user-token"
+    response = await connect(async_client, "fixture-slicer-access-token")
+    assert response.status_code == 200
+    raw = (await db_session.execute(select(Settings.value).where(Settings.key == "anycubic_cloud_token"))).scalar_one()
+    assert json.loads(mfa_decrypt(raw))["token"] == "fixture-workbench-user-token"
+    assert "fixture-slicer-access-token" not in raw
+    assert "fixture-workbench-user-token" not in response.text
 
 
 @pytest.mark.parametrize("token", [" ", "token\nsecond-line", "非ASCII", "token with spaces"])

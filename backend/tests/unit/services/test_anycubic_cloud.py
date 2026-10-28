@@ -1,6 +1,8 @@
 """The optional cloud service admits account/profile reads, never printer control."""
 
 import asyncio
+import base64
+import json
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -13,6 +15,7 @@ from backend.app.services.anycubic_cloud import (
     MAX_CONFIG_DOWNLOAD_BYTES,
     MAX_RESPONSE_BYTES,
     SLICER_CONFIG_PATH,
+    TOKEN_EXCHANGE_PATH,
     USER_INFO_PATH,
     AnycubicCloudAuthError,
     AnycubicCloudError,
@@ -39,6 +42,66 @@ def _account():
             "last_login_ip": "192.0.2.1",
         },
     }
+
+
+def _slicer_token():
+    payload = base64.urlsafe_b64encode(json.dumps({"tokenType": "access-token"}).encode()).decode().rstrip("=")
+    return f"eyJhbGciOiJSUzI1NiJ9.{payload}.fixture-signature"
+
+
+@pytest.mark.asyncio
+async def test_slicer_access_token_is_exchanged_without_xx_token_then_identity_is_validated():
+    source = _slicer_token()
+    issued = "fixture-exchanged-user-token"
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        assert request.url.host == "cloud-universe.anycubic.com"
+        if request.url.path == API_PREFIX + TOKEN_EXCHANGE_PATH:
+            assert request.method == "POST"
+            assert "XX-Token" not in request.headers
+            assert json.loads(request.content) == {"device_type": "pcf", "access_token": source}
+            return httpx.Response(200, json={"code": 1, "data": {"token": issued}})
+        assert request.headers["XX-Token"] == issued
+        return httpx.Response(200, json=_account())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = AnycubicCloudService(source, client=client)
+        identity = await service.validate_token()
+        assert identity["user_id"] == "42"
+        assert service.account_token == issued
+        assert source not in repr(service)
+        assert issued not in repr(identity)
+    assert calls == [API_PREFIX + TOKEN_EXCHANGE_PATH, API_PREFIX + USER_INFO_PATH]
+
+
+@pytest.mark.asyncio
+async def test_china_token_is_not_exchanged_or_sent_to_another_region():
+    source = _slicer_token()
+
+    def handler(request):
+        assert request.url.host == "cloud-platform.anycubicloud.com"
+        assert request.url.path == API_PREFIX + USER_INFO_PATH
+        assert request.headers["XX-Token"] == source
+        return httpx.Response(200, json=_account())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await AnycubicCloudService(source, "china", client=client).validate_token()
+
+
+@pytest.mark.asyncio
+async def test_rejected_exchange_never_accepts_unverified_jwt_identity():
+    def handler(request):
+        assert request.url.path == API_PREFIX + TOKEN_EXCHANGE_PATH
+        return httpx.Response(200, json={"code": 0, "data": None})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = AnycubicCloudService(_slicer_token(), client=client)
+        with pytest.raises(AnycubicCloudAuthError):
+            await service.validate_token()
+        with pytest.raises(AnycubicCloudAuthError):
+            _ = service.account_token
 
 
 @pytest.mark.asyncio

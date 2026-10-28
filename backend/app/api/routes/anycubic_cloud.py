@@ -88,9 +88,10 @@ async def connect_token(
     service = AnycubicCloudService(token=token, region=body.region)
     try:
         identity = await service.validate_token()
+        token = service.account_token
     except AnycubicCloudAuthError:
         raise HTTPException(
-            401, "Anycubic rejected the account token. Obtain a new user token and reconnect."
+            401, "Anycubic rejected the token. Sign in again in Slicer Next or the Cloud website and reconnect."
         ) from None
     except AnycubicCloudError:
         raise HTTPException(502, "Anycubic Cloud could not validate the connection. Try again later.") from None

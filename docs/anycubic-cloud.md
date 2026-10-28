@@ -11,12 +11,21 @@ printer's network mode or enable cloud printer commands.
 1. Open **Profiles → Anycubic Cloud**.
 2. Choose **Global** or **China**, matching the account. Their API values are
    `global` and `china`.
-3. Follow **How to get an access token** to the
-   [web-token instructions](https://github.com/Nino6689/hass-anycubic#option-b--web-token).
-   Use an existing Anycubic Cloud **user token** (`XX-Token`). Paste only its
-   value, without the header name or a `Bearer` prefix.
+3. Paste an existing **Slicer Next access token** or an Anycubic Cloud website
+   **user token** (`XX-Token`). The Orca plugin's Slicer Next access token uses
+   the same exchange. Follow **How to get an access token** for the
+   [web-token instructions](https://github.com/Nino6689/hass-anycubic#option-b--web-token)
+   if needed. Paste only the value, without a header name or `Bearer` prefix.
 4. Select **Set Token**. Bambuddy verifies the account identity before saving
    the connection and loading its presets.
+
+For Global accounts, a Slicer Next JWT with `tokenType=access-token` is first
+exchanged at `POST /v3/public/loginWithAccessToken`. That request has the access
+token in its JSON body and no `XX-Token` header. The returned workbench user
+token is validated with `userInfo` and saved encrypted; the original Slicer
+token is not retained. Website user tokens and China-region tokens use the
+existing direct validation path. Unverified JWT claims only select the exchange;
+the vendor's exchange and account response establish authentication.
 
 This integration supports token sign-in only. It does not offer email/password
 login, embedded desktop OAuth or automatic credential extraction. An OAuth ID
