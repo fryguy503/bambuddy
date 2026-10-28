@@ -60,5 +60,6 @@ docs/
 
 # Docker
 Dockerfile
+.Dockerfile.synology.*
 docker-compose*.yml
 .dockerignore

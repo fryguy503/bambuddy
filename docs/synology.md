@@ -21,8 +21,9 @@ sudo docker compose version
 Some installations expose `docker-compose` instead of `docker compose`; use the
 installed Compose command consistently. The repository Dockerfile uses BuildKit
 cache mounts. If the NAS reports a missing builder/buildx component, resolve it
-before starting the build rather than disabling BuildKit or changing the image
-to the upstream release, which does not contain this branch's changes.
+before using the normal build command. Docker 24 installations whose runtime
+cannot apply seccomp profiles can use the compatibility build below. Keep this
+branch's source image: the upstream release does not contain these changes.
 
 ## Initial checkout
 
@@ -64,6 +65,42 @@ sudo docker compose -f docker-compose.synology.yml up -d --no-deps --pull never 
 sudo docker compose -f docker-compose.synology.yml ps
 sudo docker compose -f docker-compose.synology.yml logs --tail 80 bambuddy
 ```
+
+### Docker 24 seccomp compatibility build
+
+If the first `RUN` instruction fails with
+`seccomp: config provided but seccomp not supported`, the checkout succeeded but
+BuildKit could not start its build process. On Docker 24, use the existing
+[classic builder](https://docs.docker.com/reference/cli/docker/image/build/)
+through the compatibility helper instead:
+
+```sh
+(
+set -eu
+cd /volume1/docker/bambuddy-anycubic
+git pull --ff-only
+sudo sh deploy/build-synology.sh
+sudo docker compose -f docker-compose.synology.yml up -d --no-build --no-deps --pull never bambuddy
+sudo docker compose -f docker-compose.synology.yml ps
+sudo docker compose -f docker-compose.synology.yml logs --tail 80 bambuddy
+)
+```
+
+The helper derives a temporary Dockerfile from the main one, removes only its
+two BuildKit dependency-cache mounts, and sets `DOCKER_BUILDKIT=0` for that build.
+It removes the temporary file on exit. Dependencies, application code, generated
+HTTPS certificate and runtime settings remain the same. It does not change the
+Docker daemon configuration or enable privileged containers. Disabling BuildKit
+alone with the unmodified Dockerfile would fail on its `RUN --mount` options.
+The classic builder is deprecated; this fallback targets the NAS's Docker 24
+installation, rather than newer engines that may remove it.
+
+Use `sudo sh deploy/build-synology.sh` for subsequent builds on this NAS, followed
+by the same Compose `up --no-build` command. If a build fails, the subshell stops
+before starting or replacing the service; retain the checkout, `.env`, `data/`
+and `logs/` and resume from this section after fixing the reported error.
+
+### Verify the service
 
 Open `https://<NAS-LAN-IP>:18443`. The initial self-signed certificate requires
 browser trust. Persistent settings, database, tokens and generated certificate
