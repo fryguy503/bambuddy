@@ -18,6 +18,7 @@ from .protocol import (
     PREFIX,
     AnycubicError,
     PinnedTLSContext,
+    camera_stream_url,
     fingerprint,
     get_info,
     identity,
@@ -87,6 +88,12 @@ class AnycubicMQTTClient:
         self._drying_targets = {}
         self._logging_enabled = False
         self._seen_reports = OrderedDict()
+        self._camera_lock = threading.Lock()
+        self._camera_event = threading.Event()
+        self._camera_requested = False
+        self._camera_url = None
+        self._camera_result = None
+        self._camera_started_at = 0.0
 
     @staticmethod
     def discover(ip_address):
@@ -105,6 +112,10 @@ class AnycubicMQTTClient:
     @property
     def report_messages_since_connect(self):
         return self._report_count
+
+    @property
+    def tls_fingerprint(self):
+        return self._fingerprint
 
     @property
     def is_stale(self):
@@ -131,6 +142,7 @@ class AnycubicMQTTClient:
             self._last_message_time = self._last_state_time = 0
             self._last_message_monotonic = 0
             self._seen_reports.clear()
+            self._reset_camera()
             self._telemetry = Telemetry(self.model)
             self.state = self._telemetry.state
             self._worker = threading.Thread(target=self._run, args=(generation, stop), name="anycubic-lan", daemon=True)
@@ -222,6 +234,7 @@ class AnycubicMQTTClient:
                     self.state.connected = False
                     self.state.state = "unknown"
                     self.state.raw_data["ams"] = []
+                    self._reset_camera()
             if client is not None:
                 retire_paho_client(client, "anycubic")
             if current:
@@ -280,7 +293,10 @@ class AnycubicMQTTClient:
                     key = (tail[0], report_id)
                     if key in self._seen_reports:
                         return
-                if envelope.get("type") != tail[0] or not self._telemetry.apply(tail[0], envelope):
+                if envelope.get("type") != tail[0]:
+                    return
+                self._camera_report(tail[0], envelope)
+                if not self._telemetry.apply(tail[0], envelope):
                     return
             except (AnycubicError, TypeError, ValueError, RecursionError):
                 return
@@ -321,6 +337,65 @@ class AnycubicMQTTClient:
 
     def request_status_update(self):
         return all(self._publish(kind, action, None) for kind, action in _QUERIES)
+
+    def _reset_camera(self):
+        self._camera_requested = False
+        self._camera_url = self._camera_result = None
+        self._camera_started_at = 0.0
+        self._camera_event.set()
+
+    def _camera_report(self, kind, envelope):
+        if not self._camera_requested or kind not in {"video", "info"}:
+            return
+        data = envelope.get("data")
+        state = envelope.get("state") or (data.get("state") if isinstance(data, dict) else None)
+        if kind == "video" and (state == "pushStopped" or envelope.get("action") == "stopCapture"):
+            return
+        urls = data.get("urls") if isinstance(data, dict) else None
+        if isinstance(urls, dict) and urls.get("rtspUrl"):
+            self._camera_url = camera_stream_url(self.ip_address, urls["rtspUrl"])
+        if kind == "video":
+            if envelope.get("code", 200) not in (0, 200) or state in {"initFailed", "initFail", "error"}:
+                self._camera_result = "failed"
+            elif state == "initSuccess" or self._camera_url:
+                self._camera_result = "ready"
+        self._camera_event.set()
+
+    def start_camera(self, timeout=8.0):
+        """Camera-only activation, called off the event loop for an active viewer."""
+        with self._camera_lock:
+            with self._lock:
+                if not self.state.connected or self.is_stale or self._stop.is_set():
+                    raise AnycubicError("The Anycubic printer is not connected")
+                if self._camera_url and time.monotonic() - self._camera_started_at < 20:
+                    return self._camera_url
+                generation = self._generation
+                self._camera_requested = True
+                self._camera_url = self._camera_result = None
+                self._camera_event.clear()
+            # New-generation camera firmware requires stop -> pause -> start.
+            if self._model_id in {"20028", "20030"}:
+                if not self._publish("video", "stopCapture", None) or self._stop.wait(1):
+                    raise AnycubicError("Anycubic camera initialization failed")
+            if not self._publish("video", "startCapture", None):
+                raise AnycubicError("Anycubic camera initialization failed")
+            self._publish("info", "query", None)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                self._camera_event.wait(max(0, deadline - time.monotonic()))
+                with self._lock:
+                    if generation != self._generation or self._stop.is_set() or not self.state.connected:
+                        raise AnycubicError("The Anycubic camera session ended")
+                    if self._camera_result == "failed":
+                        raise AnycubicError("The printer could not start its camera")
+                    if self._camera_url or (
+                        self._camera_result == "ready" and self._model_id not in {"20028", "20030"}
+                    ):
+                        self._camera_url = self._camera_url or camera_stream_url(self.ip_address)
+                        self._camera_started_at = time.monotonic()
+                        return self._camera_url
+                    self._camera_event.clear()
+            raise AnycubicError("The printer did not report a camera stream")
 
     def _print_control(self, action, allowed):
         with self._lock:
@@ -368,6 +443,7 @@ class AnycubicMQTTClient:
             self._client = None
             self._subscribed = False
             self._device_id = None
+            self._reset_camera()
             self.state.connected = False
             self.state.state = "unknown"
             self.state.raw_data["ams"] = []

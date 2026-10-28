@@ -1,4 +1,4 @@
-"""Camera streaming API endpoints for Bambu Lab printers."""
+"""Camera streams for Bambu Lab, Anycubic LAN and configured external cameras."""
 
 import asyncio
 import contextlib
@@ -12,6 +12,7 @@ import time
 import uuid
 import zlib
 from collections.abc import AsyncGenerator
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -35,6 +36,8 @@ from backend.app.core.permissions import Permission
 from backend.app.models.api_key import APIKey
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
+from backend.app.services.anycubic import AnycubicMQTTClient
+from backend.app.services.anycubic.camera import generate_mjpeg_stream as generate_anycubic_stream
 from backend.app.services.camera import (
     capture_camera_frame,
     close_tls_proxy,
@@ -58,6 +61,7 @@ from backend.app.services.camera_fanout import (
 )
 from backend.app.services.camera_light import camera_light
 from backend.app.services.camera_profiles import get_camera_profile
+from backend.app.services.printer_manager import printer_manager
 from backend.app.utils.ffmpeg_output import (
     FFMPEG_RTSP_LOGLEVEL,
     refuse_rtsp_redirect,
@@ -71,7 +75,53 @@ router = APIRouter(prefix="/printers", tags=["camera"])
 
 def _require_builtin_camera_support(printer: Printer) -> None:
     if getattr(printer, "printer_type", "bambu") == "anycubic":
-        raise HTTPException(400, "Anycubic built-in cameras are not supported; configure an external camera")
+        raise HTTPException(400, "Bambu camera diagnostics and calibration are unavailable for Anycubic printers")
+
+
+def _anycubic_camera_source(printer: Printer):
+    client = printer_manager.get_client(printer.id)
+    if not isinstance(client, AnycubicMQTTClient) or not client.state.connected or client.is_stale:
+        raise HTTPException(503, "Connect the Anycubic printer before opening its LAN camera")
+    if (
+        client.ip_address != printer.ip_address
+        or client.serial_number != printer.serial_number
+        or client.model != printer.model
+        or client.tls_fingerprint != printer.tls_fingerprint
+    ):
+        raise HTTPException(503, "The Anycubic printer connection is updating; try the camera again")
+    # A stable source key, never a bearer URL. Include identity/address/pin so
+    # edits retire the previous broadcaster before opening another upstream.
+    source = f"anycubic:{printer.ip_address}:{printer.serial_number}:{printer.tls_fingerprint}:{printer.model}"
+    return source, partial(generate_anycubic_stream, client)
+
+
+async def _anycubic_camera_snapshot(printer: Printer) -> bytes:
+    source, generate = _anycubic_camera_source(printer)
+    key = _external_fanout_key(printer.id, source, "anycubic")
+    await _retire_other_external_broadcasters(printer.id, keep=key)
+
+    def factory(event):
+        return _external_upstream(generate, printer.id, source, "anycubic", 5, event)
+
+    broadcaster = await get_or_create_broadcaster(key, factory)
+    try:
+        queue = await broadcaster.subscribe()
+    except RuntimeError:
+        broadcaster = await get_or_create_broadcaster(key, factory)
+        queue = await broadcaster.subscribe()
+
+    async def connected():
+        return False
+
+    try:
+        async with contextlib.aclosing(iter_subscriber(broadcaster, queue, is_disconnected=connected)) as frames:
+            chunk = await asyncio.wait_for(anext(frames), timeout=30)
+        start, end = chunk.find(b"\xff\xd8"), chunk.rfind(b"\xff\xd9")
+        if start < 0 or end <= start:
+            raise ValueError
+        return chunk[start : end + 2]
+    except (TimeoutError, StopAsyncIteration, ValueError):
+        raise HTTPException(503, "The Anycubic LAN camera did not provide a frame") from None
 
 
 # Grace period for a SIGTERMed ffmpeg to shut down before we SIGKILL it. Only
@@ -1260,7 +1310,10 @@ async def camera_stream(
         printer = await get_printer_or_404(printer_id, db)
 
     # Check for external camera first
-    if printer.external_camera_enabled and printer.external_camera_url:
+    native_anycubic = getattr(printer, "printer_type", "bambu") == "anycubic" and not (
+        printer.external_camera_enabled and printer.external_camera_url
+    )
+    if native_anycubic or (printer.external_camera_enabled and printer.external_camera_url):
         # NB: no `import time` / `import uuid` here, and don't reintroduce them.
         # A local import anywhere in this function makes the name function-local
         # for the WHOLE function, so the RTSP/chamber path below — which never
@@ -1268,15 +1321,16 @@ async def camera_stream(
         # without an external camera. Both are imported at module level.
         from backend.app.services.external_camera import generate_mjpeg_stream
 
+        if native_anycubic:
+            camera_url, generate_mjpeg_stream = _anycubic_camera_source(printer)
+            camera_type = "anycubic"
+        else:
+            camera_url = printer.external_camera_url or ""
+            camera_type = printer.external_camera_type or ""
+
         # Limit external camera FPS to reduce browser load
         fps = min(max(fps, 1), 15)
-        logger.info(
-            "Using external camera (%s) for printer %s at %s fps", printer.external_camera_type, printer_id, fps
-        )
-
-        camera_url = printer.external_camera_url
-        # None and "" take the same branch in generate_mjpeg_stream.
-        camera_type = printer.external_camera_type or ""
+        logger.info("Using camera (%s) for printer %s at %s fps", camera_type, printer_id, fps)
 
         # Fan-out (RC-C6), as for the printer's own camera (#1089): one upstream
         # per camera, shared by every viewer. A USB camera allows one V4L2
@@ -1296,7 +1350,7 @@ async def camera_stream(
             except Exception:
                 return True
 
-        single_reader = not printer.external_camera_snapshot_url
+        single_reader = native_anycubic or not printer.external_camera_snapshot_url
 
         def _log_external_detach(remaining: int) -> None:
             logger.info("Camera viewer detached from %s (subscribers=%d)", fanout_key, remaining)
@@ -1659,6 +1713,9 @@ async def _snapshot_response(printer_id: int, printer: Printer) -> Response:
             },
         )
 
+    if getattr(printer, "printer_type", "bambu") == "anycubic":
+        return Response(content=await _anycubic_camera_snapshot(printer), media_type="image/jpeg", headers=headers)
+
     _require_builtin_camera_support(printer)
 
     # Create temporary file for the snapshot (0600 so only the app user can read it)
@@ -1811,6 +1868,7 @@ async def camera_status(
     if stream_start_time is not None:
         stream_uptime = current_time - stream_start_time
 
+    initial_grace = 20 if isinstance(printer_manager.get_client(printer_id), AnycubicMQTTClient) else 5
     return {
         "active": has_active_stream,
         "has_frames": printer_id in _last_frames,
@@ -1820,7 +1878,7 @@ async def camera_status(
         "stalled": (
             has_active_stream
             and stream_uptime is not None
-            and stream_uptime > 5  # Give 5 seconds for stream to start
+            and stream_uptime > initial_grace
             and (seconds_since_frame is None or seconds_since_frame > 10)
         ),
     }

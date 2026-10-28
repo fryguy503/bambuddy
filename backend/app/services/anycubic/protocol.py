@@ -115,6 +115,42 @@ def model_from_info(info: dict) -> AnycubicModel:
     return model
 
 
+def camera_stream_url(host: str, reported: str | None = None) -> str:
+    """Only HTTP-FLV on the configured printer's fixed camera port.
+
+    A reported address supplies the path, never a new network destination.
+    Session tokens stay private to the camera transport.
+    """
+    host = private_host(host)
+    authority = f"[{host}]" if ":" in host else host
+    if reported is None:
+        return f"http://{authority}:18088/flv"
+    if (
+        not isinstance(reported, str)
+        or not reported.isascii()
+        or len(reported) > 2048
+        or any(ord(c) < 33 for c in reported)
+    ):
+        raise AnycubicError("Invalid Anycubic camera endpoint")
+    try:
+        parsed = urlsplit(reported)
+        valid = (
+            parsed.scheme == "http"
+            and parsed.hostname
+            and parsed.port == 18088
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.fragment
+            and (parsed.path == "/flv" or re.fullmatch(r"/live/[A-Za-z0-9_.~%-]{1,512}", parsed.path))
+        )
+    except ValueError:
+        raise AnycubicError("Unsupported Anycubic camera endpoint") from None
+    if not valid:
+        raise AnycubicError("Unsupported Anycubic camera endpoint")
+    suffix = parsed.path + ("?" + parsed.query if parsed.query else "")
+    return f"http://{authority}:18088{suffix}"
+
+
 def get_info(host: str) -> dict:
     host = private_host(host)
     info = _fetch(host, "GET", "/info")

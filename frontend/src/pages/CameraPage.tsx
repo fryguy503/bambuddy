@@ -744,15 +744,15 @@ function CameraView({ onPoppedIn }: { onPoppedIn: () => void }) {
               {t('camera.snapshot')}
             </button>
           </div>
-          <button
+          {printer?.printer_type !== 'anycubic' && <button
             onClick={() => chamberLightMutation.mutate(!status?.chamber_light)}
             disabled={!status?.connected || chamberLightMutation.isPending || !hasPermission('printers:control')}
             className={`p-1.5 rounded disabled:opacity-50 ${status?.chamber_light ? 'bg-yellow-500/20 hover:bg-yellow-500/30' : 'hover:bg-bambu-dark-tertiary'}`}
             title={!hasPermission('printers:control') ? t('printers.permission.noControl') : t('camera.chamberLight')}
           >
             <ChamberLight on={status?.chamber_light ?? false} className="w-4 h-4" />
-          </button>
-          <button
+          </button>}
+          {printer?.printer_type !== 'anycubic' && <button
             onClick={() => setShowSkipObjectsModal(true)}
             disabled={!isPrintingWithObjects || !hasPermission('printers:control')}
             className={`p-1.5 rounded disabled:opacity-50 ${isPrintingWithObjects && hasPermission('printers:control') ? 'hover:bg-bambu-dark-tertiary' : ''}`}
@@ -765,7 +765,7 @@ function CameraView({ onPoppedIn }: { onPoppedIn: () => void }) {
             }
           >
             <SkipObjectsIcon className="w-4 h-4 text-bambu-gray" />
-          </button>
+          </button>}
           <button
             onClick={refresh}
             disabled={isDisabled}
@@ -774,13 +774,13 @@ function CameraView({ onPoppedIn }: { onPoppedIn: () => void }) {
           >
             <RefreshCw className={`w-4 h-4 text-bambu-gray ${isDisabled ? 'animate-spin' : ''}`} />
           </button>
-          <button
+          {(printer?.printer_type !== 'anycubic' || printer?.external_camera_enabled) && <button
             onClick={() => setShowDiagnoseModal(true)}
             className="p-1.5 hover:bg-bambu-dark-tertiary rounded"
             title={t('camera.diagnose.button')}
           >
             <Stethoscope className="w-4 h-4 text-bambu-gray" />
-          </button>
+          </button>}
           <button
             onClick={popIn}
             disabled={popInPending}
@@ -859,12 +859,12 @@ function CameraView({ onPoppedIn }: { onPoppedIn: () => void }) {
                   >
                     {t('camera.retry')}
                   </button>
-                  <button
+                  {(printer?.printer_type !== 'anycubic' || printer?.external_camera_enabled) && <button
                     onClick={() => setShowDiagnoseModal(true)}
                     className="px-4 py-2 bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded transition-colors"
                   >
                     {t('camera.diagnose.button')}
-                  </button>
+                  </button>}
                 </div>
               </div>
             </div>

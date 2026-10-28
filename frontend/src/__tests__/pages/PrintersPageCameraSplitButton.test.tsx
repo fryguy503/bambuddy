@@ -58,9 +58,12 @@ const mockPrinter = {
 /** Bodies of every PUT /settings the page made, so the write-back is checkable. */
 const settingsWrites: Record<string, unknown>[] = [];
 
-function renderPage(storedMode: 'window' | 'embedded' = 'window') {
+function renderPage(storedMode: 'window' | 'embedded' = 'window', anycubic = false) {
   server.use(
-    http.get('/api/v1/printers/', () => HttpResponse.json([mockPrinter])),
+    http.get('/api/v1/printers/', () => HttpResponse.json([{
+      ...mockPrinter,
+      ...(anycubic ? { printer_type: 'anycubic', model: 'Kobra S1', external_camera_enabled: false } : {}),
+    }])),
     http.get('/api/v1/printers/:id/status', () =>
       HttpResponse.json({
         connected: true,
@@ -144,6 +147,12 @@ describe('PrintersPage — camera split button', () => {
       'camera-1',
       expect.stringContaining('width=640')
     );
+  });
+
+  it('opens the native Anycubic camera without configuring an external camera', async () => {
+    renderPage('window', true);
+    fireEvent.click(await cameraIcon());
+    expect(openSpy).toHaveBeenCalledWith('/camera/1', 'camera-1', expect.any(String));
   });
 
   it('offers both modes from the caret', async () => {

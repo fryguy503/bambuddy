@@ -151,6 +151,17 @@ describe('CameraPage', () => {
   });
 
   describe('camera controls', () => {
+    it('hides Bambu-only controls for the native Anycubic camera', async () => {
+      server.use(http.get('/api/v1/printers/:id', () => HttpResponse.json({
+        ...mockPrinter, name: 'Kobra S1', printer_type: 'anycubic', external_camera_enabled: false,
+      })));
+      renderCameraPage(1);
+      await screen.findByText('Kobra S1');
+      expect(screen.queryByTitle('Diagnose')).not.toBeInTheDocument();
+      expect(screen.queryByTitle(i18n.t('camera.chamberLight'))).not.toBeInTheDocument();
+      expect(screen.getByTitle(i18n.t('camera.restartStream'))).toBeInTheDocument();
+    });
+
     it('renders without crashing', async () => {
       renderCameraPage(1);
 

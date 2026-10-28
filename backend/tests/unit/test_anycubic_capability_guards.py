@@ -102,7 +102,7 @@ async def test_anycubic_live_kprofile_routes_reject_before_accessing_client(oper
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["stream", "snapshot", "test", "diagnose"])
+@pytest.mark.parametrize("operation", ["test", "diagnose"])
 async def test_anycubic_builtin_camera_routes_reject_before_network(operation):
     printer = _printer()
     db = _db(printer)
@@ -122,7 +122,7 @@ async def test_anycubic_builtin_camera_routes_reject_before_network(operation):
         patch.object(camera, "capture_camera_frame", new_callable=AsyncMock) as capture,
         patch.object(camera, "test_camera_connection", new_callable=AsyncMock) as probe,
         patch("backend.app.services.camera_diagnose.diagnose_camera", new_callable=AsyncMock) as diagnose,
-        pytest.raises(HTTPException, match="external camera") as error,
+        pytest.raises(HTTPException, match="diagnostics and calibration") as error,
     ):
         await calls[operation]()
     assert error.value.status_code == 400
@@ -144,7 +144,7 @@ async def test_anycubic_plate_capture_cannot_fall_back_to_builtin(operation, use
 
     with (
         patch.object(camera.database, "async_session", session),
-        pytest.raises(HTTPException, match="external camera"),
+        pytest.raises(HTTPException, match="diagnostics and calibration"),
     ):
         await route(71, use_external=use_external)
 

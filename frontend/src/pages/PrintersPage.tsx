@@ -6665,7 +6665,7 @@ function PrinterCard({
                     Replaces the old Settings > General > Camera switch, which
                     made choosing between an overlay and a window a trip to
                     another page for something you decide per camera. */}
-                {(!isAnycubic || printer.external_camera_enabled) && <div className="flex items-center flex-shrink-0">
+                <div className="flex items-center flex-shrink-0">
                   <Button
                     variant="secondary"
                     size="sm"
@@ -6695,7 +6695,7 @@ function PrinterCard({
                   >
                     <ChevronDown className="w-3 h-3" />
                   </Button>
-                </div>}
+                </div>
                 {cameraMenuAnchor && (
                   <ContextMenu
                     x={cameraMenuAnchor.x}

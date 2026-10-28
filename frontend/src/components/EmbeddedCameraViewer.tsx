@@ -610,15 +610,15 @@ export function EmbeddedCameraViewer({ printerId, printerName, viewerIndex = 0, 
           <span className="truncate">{printer?.name || printerName}</span>
         </div>
         <div className="flex items-center gap-1 no-drag">
-          <button
+          {printer?.printer_type !== 'anycubic' && <button
             onClick={() => chamberLightMutation.mutate(!status?.chamber_light)}
             disabled={!status?.connected || chamberLightMutation.isPending || !hasPermission('printers:control')}
             className={`p-1 rounded disabled:opacity-50 ${status?.chamber_light ? 'bg-yellow-500/20 hover:bg-yellow-500/30' : 'hover:bg-bambu-dark-tertiary'}`}
             title={!hasPermission('printers:control') ? t('printers.permission.noControl') : t('camera.chamberLight')}
           >
             <ChamberLight on={status?.chamber_light ?? false} className="w-3.5 h-3.5" />
-          </button>
-          <button
+          </button>}
+          {printer?.printer_type !== 'anycubic' && <button
             onClick={() => setShowSkipObjectsModal(true)}
             disabled={!isPrintingWithObjects || !hasPermission('printers:control')}
             className={`p-1 rounded disabled:opacity-50 ${isPrintingWithObjects && hasPermission('printers:control') ? 'hover:bg-bambu-dark-tertiary' : ''}`}
@@ -631,7 +631,7 @@ export function EmbeddedCameraViewer({ printerId, printerName, viewerIndex = 0, 
             }
           >
             <SkipObjectsIcon className="w-3.5 h-3.5 text-bambu-gray" />
-          </button>
+          </button>}
           <button
             onClick={refresh}
             disabled={streamLoading || isReconnecting}
@@ -640,13 +640,13 @@ export function EmbeddedCameraViewer({ printerId, printerName, viewerIndex = 0, 
           >
             <RefreshCw className={`w-3.5 h-3.5 text-bambu-gray ${streamLoading ? 'animate-spin' : ''}`} />
           </button>
-          <button
+          {(printer?.printer_type !== 'anycubic' || printer?.external_camera_enabled) && <button
             onClick={() => setShowDiagnoseModal(true)}
             className="p-1 hover:bg-bambu-dark-tertiary rounded"
             title={t('camera.diagnose.button')}
           >
             <Stethoscope className="w-3.5 h-3.5 text-bambu-gray" />
-          </button>
+          </button>}
           <button
             onClick={toggleFullscreen}
             className="p-1 hover:bg-bambu-dark-tertiary rounded"
@@ -731,12 +731,12 @@ export function EmbeddedCameraViewer({ printerId, printerName, viewerIndex = 0, 
                   >
                     {t('camera.retry')}
                   </button>
-                  <button
+                  {(printer?.printer_type !== 'anycubic' || printer?.external_camera_enabled) && <button
                     onClick={() => setShowDiagnoseModal(true)}
                     className="px-2 py-1 text-xs bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded transition-colors"
                   >
                     {t('camera.diagnose.button')}
-                  </button>
+                  </button>}
                 </div>
               </div>
             </div>

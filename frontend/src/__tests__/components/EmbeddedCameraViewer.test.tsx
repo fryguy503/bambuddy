@@ -45,6 +45,16 @@ describe('EmbeddedCameraViewer stream lifetime', () => {
     expect(img.getAttribute('src')).toBeNull();
   });
 
+  it('offers native Anycubic viewing without Bambu diagnostics', async () => {
+    server.use(http.get('/api/v1/printers/:id', () => HttpResponse.json({
+      id: 7, name: 'Kobra S1', printer_type: 'anycubic', external_camera_enabled: false,
+    })));
+    render(viewer());
+    await waitFor(() => expect(screen.queryByTitle('Diagnose')).not.toBeInTheDocument());
+    expect(screen.getByAltText('Camera stream').getAttribute('src')).toContain('/camera/stream');
+    expect(screen.getByTitle('Refresh stream')).toBeInTheDocument();
+  });
+
   it('closes the current stream on close after the stream was restarted', async () => {
     const { unmount } = render(viewer());
     await settle();

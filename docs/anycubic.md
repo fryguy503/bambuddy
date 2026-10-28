@@ -29,8 +29,9 @@ being treated as an S1. Combo bundles use the underlying printer model.
 | Printer status | State, temperatures, progress, layers and remaining time |
 | ACE inventory | Model-specific physical unit IDs and four slots per unit; read-only |
 | Print controls | Pause, resume and stop; MQTT delivery is not printer acknowledgement |
+| Built-in LAN camera | Camera-only activation, HTTP-FLV decoding, shared browser MJPEG and snapshots |
 | External camera | Existing configured external camera support |
-| Built-in camera, file transfer, archive, queue dispatch | Unavailable in this provider |
+| File transfer, archive, queue dispatch | Unavailable in this provider |
 | ACE drying, load/unload, slot edits, calibration, firmware | Unavailable in this provider |
 | Anycubic Cloud Profiles | Optional read-only account integration; see [Cloud Profiles setup](anycubic-cloud.md) |
 
@@ -97,6 +98,28 @@ automation. Queue dispatch, Bambu virtual-printer targets, built-in Bambu camera
 requests, live K-profiles and FTPS file operations are blocked. External camera
 configuration remains available.
 
+## Built-in LAN camera
+
+Open the printer card's camera button in a window or overlay. Bambuddy starts
+LAN capture through the existing pinned MQTT session, reads HTTP-FLV on the
+printer's port `18088` and uses its bundled ffmpeg to deliver MJPEG through
+Bambuddy's HTTPS endpoint. No Anycubic account, cloud relay or external-camera
+URL is required. Capture may illuminate the chamber; it sends no print or
+motion controls. Bambu light, object-skipping and diagnostic controls are hidden.
+
+Viewers and snapshots share one upstream. Closing the last viewer releases the
+HTTP connection and decoder after the normal grace period; it does not send a
+global `stopCapture` that would interrupt another slicer's camera view. Kobra
+4/X use the reported session path after their camera initialization sequence.
+Device-reported hosts cannot redirect capture away from the configured private
+printer address; redirects and environment proxies are disabled. Session paths
+remain on the backend and are omitted from logs and ffmpeg arguments.
+
+On October 28, 2026, a camera-only LAN probe received and decoded a live JPEG
+from the physical Kobra S1 on firmware 2.7.2.7. The updated Synology browser path
+and the other models' cameras still require operator acceptance. External
+cameras remain available as an override.
+
 ## Protocol provenance and the prior Orca plugin
 
 The user's previous independent Anycubic Orca plugin (`0.2.0.dev5`) supplied
@@ -139,7 +162,7 @@ before opening a PR.
 Suggested issue scope: an experimental Kobra S1 LAN provider with explicit
 capabilities, read-only two-ACE inventory, reviewed TLS pairing and three basic
 controls, plus an optional, separately scoped Cloud Profiles browser preserving
-Bambu defaults. Treat file upload/printing, built-in camera, archives, Cloud
+Bambu defaults. Treat file upload/printing, archives, Cloud
 profile writes and ACE mutations as separately reviewed additions. The
 [Cloud Profiles guide](anycubic-cloud.md) covers its token-only connection,
 permissions and current storage-host limitation.
