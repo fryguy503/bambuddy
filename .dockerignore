@@ -47,6 +47,9 @@ data/
 *.log
 *.db
 
+# Native HTTPS certificates and private keys are mounted at runtime.
+certs/
+
 # Build artifacts
 static/
 

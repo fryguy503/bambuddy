@@ -711,6 +711,12 @@ ports:
   - "3000:8000"  # Access on port 3000
 ```
 
+**Native HTTPS (optional):**
+
+The container can serve HTTPS directly using read-only PEM certificate and key
+mounts with `UVICORN_SSL_CERTFILE` and `UVICORN_SSL_KEYFILE`. The health check
+automatically follows HTTP or HTTPS. See [Docker HTTPS setup](docs/docker-https.md).
+
 **Reverse Proxy (Nginx):**
 
 ```nginx

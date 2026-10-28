@@ -79,6 +79,9 @@ node_modules/
 # MFA encryption key file (#1219) — same protection as .jwt_secret
 .mfa_encryption_key
 
+# Native HTTPS certificates/private keys are mounted at runtime.
+/certs/
+
 # SpoolBuddy SSH keys (generated at runtime for remote updates)
 spoolbuddy/ssh/
 
