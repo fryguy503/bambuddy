@@ -3750,6 +3750,23 @@ export default {
     },
   },
   profiles: {
+    anycubicCloud: {
+      exportJson: "Экспорт JSON",
+      tokenGuide: "Как получить токен доступа",
+      tab: 'Anycubic Cloud',
+      title: "Подключиться к Anycubic Cloud",
+      description: "Просматривайте и экспортируйте профили Anycubic Slicer Next.",
+      tokenHint: "Используйте токен доступа из существующего сеанса Anycubic. Управление принтером остаётся в локальной сети.",
+      readOnly: "Профили доступны только для чтения. Экспортируйте JSON для проверки в слайсере.",
+      unavailable: "Этот API Anycubic пока не предоставляет профили слайсера для данной учётной записи.",
+      noAuthMethod: "Проверенный способ входа недоступен.",
+      unsupported: "Другие типы профилей",
+      noReadPermission: "У вас нет разрешения на просмотр профилей Anycubic Cloud.",
+      noAuthPermission: "У вас нет разрешения на подключение или отключение Anycubic Cloud.",
+      authPermission: "Подключение или отключение Anycubic Cloud",
+      readPermission: "Просмотр и экспорт профилей Anycubic Cloud",
+      connected: "Подключено к Anycubic Cloud как {{account}}",
+    },
     title: "Профили",
     subtitle: "Управление профилями слайсера и калибровками Pressure Advance",
     tabs: {

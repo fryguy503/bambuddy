@@ -6,7 +6,11 @@ features remain unsupported.
 Protocol evidence comes from the user's Anycubic Orca plugin 0.2.0.dev5 and
 its independently audited Anycubic Slicer Next 2.0.0.3 native serializers.
 The original hardware evidence was a Kobra S1 on firmware 2.7.2.7 with two
-ACE 2 Pro units on firmware 1.1.36. The provider has not contacted that hardware.
+ACE 2 Pro units on firmware 1.1.36. A temporary read-only check of this provider
+on an S1 running 2.7.2.7 received live print-preparation telemetry and one
+four-slot ACE unit. Empty-slot metadata was cleared correctly. The session
+sent only status queries, then disconnected; no controls were tested. A second
+ACE unit was not reported, so eight-slot hardware acceptance remains pending.
 The private certificate-file utility adapts the user-owned plugin utility.
 Other implementation code was written for this repository.
 

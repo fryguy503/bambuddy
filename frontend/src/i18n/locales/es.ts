@@ -3937,6 +3937,23 @@ export default {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "Exportar JSON",
+      tokenGuide: "Cómo obtener un token de acceso",
+      tab: 'Anycubic Cloud',
+      title: "Conectar a Anycubic Cloud",
+      description: "Explora y exporta tus perfiles de Anycubic Slicer Next.",
+      tokenHint: "Usa un token de acceso de tu sesión actual de Anycubic. El control de la impresora continúa por LAN.",
+      readOnly: "Los perfiles son de solo lectura. Exporta el JSON para revisarlo en tu laminador.",
+      unavailable: "Esta API de Anycubic aún no proporciona perfiles de laminado para esta cuenta.",
+      noAuthMethod: "No hay ningún método de inicio de sesión verificado disponible.",
+      unsupported: "Otros tipos de perfil",
+      noReadPermission: "No tienes permiso para ver los perfiles de Anycubic Cloud.",
+      noAuthPermission: "No tienes permiso para conectar o desconectar Anycubic Cloud.",
+      authPermission: "Conectar o desconectar Anycubic Cloud",
+      readPermission: "Ver y exportar perfiles de Anycubic Cloud",
+      connected: "Conectado a Anycubic Cloud como {{account}}",
+    },
     title: 'Perfiles',
     subtitle: 'Gestione sus preajustes del laminador y las calibraciones de avance de presión',
     tabs: {

@@ -3964,6 +3964,23 @@ errors: {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "Exportera JSON",
+      tokenGuide: "Så hämtar du en åtkomsttoken",
+      tab: 'Anycubic Cloud',
+      title: "Anslut till Anycubic Cloud",
+      description: "Bläddra bland och exportera dina Anycubic Slicer Next-profiler.",
+      tokenHint: "Använd en åtkomsttoken från din befintliga Anycubic-session. Skrivarstyrningen fortsätter via LAN.",
+      readOnly: "Profiler är skrivskyddade. Exportera JSON för granskning i din slicer.",
+      unavailable: "Detta Anycubic-API tillhandahåller för närvarande inga slicerprofiler för kontot.",
+      noAuthMethod: "Ingen verifierad inloggningsmetod är tillgänglig.",
+      unsupported: "Andra profiltyper",
+      noReadPermission: "Du har inte behörighet att visa Anycubic Cloud-profiler.",
+      noAuthPermission: "Du har inte behörighet att ansluta eller koppla från Anycubic Cloud.",
+      authPermission: "Ansluta eller koppla från Anycubic Cloud",
+      readPermission: "Visa och exportera Anycubic Cloud-profiler",
+      connected: "Ansluten till Anycubic Cloud som {{account}}",
+    },
     title: 'Profiler',
     subtitle: 'Hantera dina slicer-inställningar och tryckkalibreringar',
     tabs: {

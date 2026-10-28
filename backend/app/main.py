@@ -28,6 +28,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from backend.app.api.routes import (
     ams_history,
     announcements,
+    anycubic_cloud,
     api_keys,
     archive_purge,
     archives,
@@ -11715,7 +11716,12 @@ async def _validation_error(_request, exc: RequestValidationError) -> JSONRespon
     them), and the default handler echoes the input back in its errors,
     which JSON cannot hold: the request ended in an error instead of a 422.
     """
-    return JSONResponse(status_code=422, content={"detail": _json_safe(jsonable_encoder(exc.errors()))})
+    errors = exc.errors()
+    if _request.url.path.rstrip("/") == app_settings.api_prefix + "/anycubic-cloud/token":
+        # Validation errors otherwise echo their input, including a pasted
+        # credential when a region or token-format field was rejected.
+        errors = [{key: value for key, value in error.items() if key not in ("input", "ctx")} for error in errors]
+    return JSONResponse(status_code=422, content={"detail": _json_safe(jsonable_encoder(errors))})
 
 
 # =============================================================================
@@ -12231,6 +12237,7 @@ app.include_router(settings_routes.router, prefix=app_settings.api_prefix)
 app.include_router(overlay_branding.router, prefix=app_settings.api_prefix)
 app.include_router(cloud.router, prefix=app_settings.api_prefix)
 app.include_router(orca_cloud.router, prefix=app_settings.api_prefix)
+app.include_router(anycubic_cloud.router, prefix=app_settings.api_prefix)
 app.include_router(local_presets.router, prefix=app_settings.api_prefix)
 app.include_router(smart_plugs.router, prefix=app_settings.api_prefix)
 app.include_router(ha_sensors.router, prefix=app_settings.api_prefix)

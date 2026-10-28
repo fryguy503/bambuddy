@@ -112,6 +112,7 @@ const placeholderRe = /\{\{[^{}]+\}\}/g;
 // numbers, hex codes, and ALL-CAPS acronyms. Cognates that happen to be the
 // same word in a specific locale go in IDENTICAL_TO_EN_ALLOWED instead.
 function isAlwaysAllowedIdentical(value) {
+  if (value === 'Anycubic Cloud') return true; // Provider brand name in every locale.
   if (!value) return true;
   if (/^[\s\W_]+$/.test(value)) return true;            // pure punctuation/whitespace
   if (value.length <= 2) return true;                   // single character or 2-char abbrev

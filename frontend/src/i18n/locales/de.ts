@@ -3935,6 +3935,23 @@ export default {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "JSON exportieren",
+      tokenGuide: "So erhalten Sie einen Zugriffstoken",
+      tab: 'Anycubic Cloud',
+      title: "Mit Anycubic Cloud verbinden",
+      description: "Anycubic Slicer Next-Profile durchsuchen und exportieren.",
+      tokenHint: "Einen Zugriffstoken aus der bestehenden Anycubic-Sitzung verwenden. Die Druckersteuerung erfolgt weiterhin über LAN.",
+      readOnly: "Profile sind schreibgeschützt. JSON zur Prüfung im Slicer exportieren.",
+      unavailable: "Diese Anycubic-API stellt derzeit keine Slicer-Profile für dieses Konto bereit.",
+      noAuthMethod: "Es ist keine bestätigte Anmeldemethode verfügbar.",
+      unsupported: "Weitere Profiltypen",
+      noReadPermission: "Keine Berechtigung zum Anzeigen von Anycubic Cloud-Profilen.",
+      noAuthPermission: "Keine Berechtigung zum Verbinden oder Trennen von Anycubic Cloud.",
+      authPermission: "Anycubic Cloud verbinden oder trennen",
+      readPermission: "Anycubic Cloud-Profile anzeigen und exportieren",
+      connected: "Mit Anycubic Cloud verbunden als {{account}}",
+    },
     title: 'Profile',
     subtitle: 'Verwalten Sie Ihre Slicer-Voreinstellungen und Druckvorschub-Kalibrierungen',
     tabs: {

@@ -3922,6 +3922,23 @@ export default {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "匯出 JSON",
+      tokenGuide: "如何取得存取權杖",
+      tab: 'Anycubic Cloud',
+      title: "連線至 Anycubic Cloud",
+      description: "瀏覽並匯出您的 Anycubic Slicer Next 設定檔。",
+      tokenHint: "使用現有 Anycubic 工作階段中的存取權杖。印表機仍透過區域網路控制。",
+      readOnly: "設定檔為唯讀。可匯出 JSON 並在切片軟體中檢查。",
+      unavailable: "此 Anycubic API 目前未提供此帳戶的切片設定檔。",
+      noAuthMethod: "沒有可用的已驗證登入方式。",
+      unsupported: "其他設定檔類型",
+      noReadPermission: "您沒有檢視 Anycubic Cloud 設定檔的權限。",
+      noAuthPermission: "您沒有連線或中斷 Anycubic Cloud 的權限。",
+      authPermission: "連線或中斷 Anycubic Cloud",
+      readPermission: "檢視並匯出 Anycubic Cloud 設定檔",
+      connected: "已以 {{account}} 身分連線至 Anycubic Cloud",
+    },
     title: '設定檔案',
     subtitle: '管理您的切片預設和壓力推進校準',
     tabs: {

@@ -3922,6 +3922,23 @@ export default {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "导出 JSON",
+      tokenGuide: "如何获取访问令牌",
+      tab: 'Anycubic Cloud',
+      title: "连接到 Anycubic Cloud",
+      description: "浏览并导出您的 Anycubic Slicer Next 配置。",
+      tokenHint: "使用现有 Anycubic 会话中的访问令牌。打印机仍通过局域网控制。",
+      readOnly: "配置为只读。可导出 JSON 并在切片软件中检查。",
+      unavailable: "此 Anycubic API 暂不提供此账户的切片配置。",
+      noAuthMethod: "没有可用的已验证登录方式。",
+      unsupported: "其他配置类型",
+      noReadPermission: "您没有查看 Anycubic Cloud 配置的权限。",
+      noAuthPermission: "您没有连接或断开 Anycubic Cloud 的权限。",
+      authPermission: "连接或断开 Anycubic Cloud",
+      readPermission: "查看并导出 Anycubic Cloud 配置",
+      connected: "已以 {{account}} 身份连接到 Anycubic Cloud",
+    },
     title: '配置文件',
     subtitle: '管理您的切片预设和压力推进校准',
     tabs: {

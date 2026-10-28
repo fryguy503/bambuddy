@@ -372,6 +372,7 @@ Optional but recommended — drop the [`slicer-api/` Compose stack](slicer-api/R
 - **Prometheus metrics** - Export printer telemetry for Grafana dashboards
 - Bambu Cloud profile management
 - **Orca Cloud profile sync** — read your OrcaSlicer 2.4.0+ cloud-synced profiles directly in Bambuddy, usable for slicing alongside Bambu Cloud / local / standard presets. Connect by approving a pairing code in Orca Cloud, read-only
+- **Anycubic Cloud Profiles (experimental)** — Optional token connection to browse, search, inspect and export Anycubic Slicer Next profiles. Separate from LAN printer control and Bambuddy slicing; see [setup and limitations](docs/anycubic-cloud.md).
 - **Local Profiles** - Import OrcaSlicer presets (`.orca_filament`, `.bbscfg`, `.bbsflmt`, `.zip`, `.json`) without Bambu Cloud
 - K-profiles (pressure advance)
 - **Git backup** - Schedule automatic backups of cloud profiles, k profiles and settings to GitHub, GitLab, Gitea or Forgejo, and restore chosen categories from one commit
@@ -383,7 +384,7 @@ Optional but recommended — drop the [`slicer-api/` Compose stack](slicer-api/R
 - Webhooks & API keys
   - Per-user ownership — each key acts on behalf of its creator
   - QR code with server URL and key when you create a key
-  - Optional **cloud-access scope** — opt in to let an API key read its owner's Bambu Cloud + Orca Cloud presets / filament catalogue / device list (off by default)
+  - Optional **cloud-access scope** — opt in to let an API key read its owner's Bambu Cloud + Orca Cloud presets / filament catalogue / device list (off by default); also required for Anycubic Cloud profile access
 - Interactive API browser with live testing
 
 ### 🖨️ Virtual Printer & Remote Printing
@@ -825,7 +826,10 @@ Full documentation available at **[wiki.bambuddy.cool](http://wiki.bambuddy.cool
 
 Experimental Anycubic Kobra S1 LAN support provides printer monitoring,
 read-only inventory for two ACE units (eight slots), and pause/resume/stop.
-See [setup and current limitations](docs/anycubic.md). Hardware acceptance is pending.
+See [setup and current limitations](docs/anycubic.md). A read-only physical
+check passed with one ACE; two-unit operation and print controls still need acceptance.
+An optional [Anycubic Cloud Profiles](docs/anycubic-cloud.md) account connection
+adds read-only profile browsing and export; LAN operation does not require it.
 
 ---
 

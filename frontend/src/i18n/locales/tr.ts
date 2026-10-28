@@ -3938,6 +3938,23 @@ export default {
 
   // Profiller
   profiles: {
+    anycubicCloud: {
+      exportJson: "JSON dışa aktar",
+      tokenGuide: "Erişim belirteci nasıl alınır",
+      tab: 'Anycubic Cloud',
+      title: "Anycubic Cloud'a bağlan",
+      description: "Anycubic Slicer Next profillerinize göz atın ve dışa aktarın.",
+      tokenHint: "Mevcut Anycubic oturumunuzun erişim belirtecini kullanın. Yazıcı kontrolü LAN üzerinden devam eder.",
+      readOnly: "Profiller salt okunurdur. Dilimleyicinizde incelemek için JSON dışa aktarın.",
+      unavailable: "Bu Anycubic API şu anda bu hesap için dilimleyici profilleri sunmuyor.",
+      noAuthMethod: "Doğrulanmış bir giriş yöntemi mevcut değil.",
+      unsupported: "Diğer profil türleri",
+      noReadPermission: "Anycubic Cloud profillerini görüntüleme izniniz yok.",
+      noAuthPermission: "Anycubic Cloud'a bağlanma veya bağlantıyı kesme izniniz yok.",
+      authPermission: "Anycubic Cloud'a bağlan veya bağlantıyı kes",
+      readPermission: "Anycubic Cloud profillerini görüntüle ve dışa aktar",
+      connected: "{{account}} olarak Anycubic Cloud'a bağlandı",
+    },
     title: 'Profiller',
     subtitle: 'Dilimleyici ön ayarlarını ve basınç ilerleme kalibrasyonlarını yönetin',
     tabs: {

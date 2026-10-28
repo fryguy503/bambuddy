@@ -3967,6 +3967,23 @@ export default {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "Export JSON",
+      tokenGuide: "How to get an access token",
+      tab: 'Anycubic Cloud',
+      title: "Connect to Anycubic Cloud",
+      description: "Browse and export your Anycubic Slicer Next profiles.",
+      tokenHint: "Use an access token from your existing Anycubic session. Printer control continues over LAN.",
+      readOnly: "Profiles are read-only. Export JSON for review in your slicer.",
+      unavailable: "This Anycubic API does not currently expose slicer profiles for this account.",
+      noAuthMethod: "No verified sign-in method is available.",
+      unsupported: "Other profile types",
+      noReadPermission: "You do not have permission to view Anycubic Cloud profiles.",
+      noAuthPermission: "You do not have permission to connect or disconnect Anycubic Cloud.",
+      authPermission: "Connect or disconnect Anycubic Cloud",
+      readPermission: "View and export Anycubic Cloud profiles",
+      connected: "Connected to Anycubic Cloud as {{account}}",
+    },
     title: 'Profiles',
     subtitle: 'Manage your slicer presets and pressure advance calibrations',
     tabs: {

@@ -2,7 +2,8 @@
 
 This provider supports an original Kobra S1 in stock firmware LAN mode, with
 one or two four-slot ACE units. It is a first integration of monitoring and
-basic controls. It has not yet been accepted on physical hardware in Bambuddy.
+basic controls. A read-only physical check passed on one S1 with one ACE;
+two-unit operation and physical print controls still need acceptance.
 
 | Feature | Initial implementation |
 | --- | --- |
@@ -13,7 +14,11 @@ basic controls. It has not yet been accepted on physical hardware in Bambuddy.
 | External camera | Existing configured external camera support |
 | Built-in camera, file transfer, archive, queue dispatch | Unavailable in this provider |
 | ACE drying, load/unload, slot edits, calibration, firmware | Unavailable in this provider |
-| Anycubic Cloud | Unavailable; no Anycubic account is needed |
+| Anycubic Cloud Profiles | Optional read-only account integration; see [Cloud Profiles setup](anycubic-cloud.md) |
+
+LAN monitoring and control do not require an Anycubic account. The optional
+Cloud Profiles tab uses a separate token connection to browse and export
+slicer presets; it never sends cloud printer commands.
 
 ## Adding a printer
 
@@ -102,8 +107,11 @@ documentation remain local until publication is requested.
 
 Suggested issue scope: an experimental Kobra S1 LAN provider with explicit
 capabilities, read-only two-ACE inventory, reviewed TLS pairing and three basic
-controls, preserving Bambu defaults. Treat file upload/printing, built-in
-camera, archives and ACE mutations as separately reviewed additions.
+controls, plus an optional, separately scoped Cloud Profiles browser preserving
+Bambu defaults. Treat file upload/printing, built-in camera, archives, Cloud
+profile writes and ACE mutations as separately reviewed additions. The
+[Cloud Profiles guide](anycubic-cloud.md) covers its token-only connection,
+permissions and current storage-host limitation.
 
 ## Physical acceptance checklist
 
@@ -118,7 +126,17 @@ camera, archives and ACE mutations as separately reviewed additions.
 - Confirm unavailable actions stay unavailable and a Bambu printer alongside
   the S1 retains its existing operation.
 
-No acceptance action above was performed during development.
+Public identity/certificate discovery and a 22-second authenticated read-only
+LAN session passed on a Kobra S1 running firmware 2.7.2.7. The provider received
+15 usable reports, including preparation/preheating state, temperatures,
+layers and remaining time. One ACE unit reported four slots: two occupied and
+two empty; the empty slots cleared correctly. No second unit was observed.
+The session sent no printer control commands and did not persist the account,
+printer or trust settings.
+
+Both ACE units together, restart/reconnect behavior and physical
+pause/resume/stop still need acceptance. The optional Cloud Profiles
+integration has not been tested with a live account.
 
 The original reviewed S1 firmware allowed certificate-only discovery. A
 firmware variant that requires a client certificate during a TLS 1.2 discovery

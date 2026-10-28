@@ -165,6 +165,8 @@ class Permission(StrEnum):
     # Cloud Auth (admin-level)
     CLOUD_AUTH = "cloud:auth"
     ORCA_CLOUD_AUTH = "orca_cloud:auth"
+    ANYCUBIC_CLOUD_AUTH = "anycubic_cloud:auth"
+    ANYCUBIC_CLOUD_READ = "anycubic_cloud:read"
 
     # MakerWorld Integration
     MAKERWORLD_VIEW = "makerworld:view"  # Resolve MakerWorld URLs and view model metadata
@@ -347,6 +349,8 @@ PERMISSION_CATEGORIES = {
     "Cloud": [
         Permission.CLOUD_AUTH,
         Permission.ORCA_CLOUD_AUTH,
+        Permission.ANYCUBIC_CLOUD_AUTH,
+        Permission.ANYCUBIC_CLOUD_READ,
     ],
     "MakerWorld": [
         Permission.MAKERWORLD_VIEW,
@@ -437,6 +441,8 @@ DEFAULT_GROUPS = {
             # (CLOUD_AUTH) stays admin-only — that one is a more sensitive
             # account binding.
             Permission.ORCA_CLOUD_AUTH.value,
+            Permission.ANYCUBIC_CLOUD_AUTH.value,
+            Permission.ANYCUBIC_CLOUD_READ.value,
             # Projects - full access
             Permission.PROJECTS_READ.value,
             Permission.PROJECTS_CREATE.value,

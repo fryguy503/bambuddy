@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import DateTime, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -72,6 +72,10 @@ class User(Base):
     orca_cloud_pending_verifier: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     orca_cloud_pending_state: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
     orca_cloud_pending_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
+
+    # One encrypted account record keeps the token, region and identity atomic.
+    # The settings-table fallback uses the same representation when auth is off.
+    anycubic_cloud_token: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
     # Relationship to groups through association table
     groups: Mapped[list[Group]] = relationship(

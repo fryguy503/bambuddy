@@ -3758,6 +3758,23 @@ export default {
     }
   },
   profiles: {
+    anycubicCloud: {
+      exportJson: "JSON 내보내기",
+      tokenGuide: "액세스 토큰을 얻는 방법",
+      tab: 'Anycubic Cloud',
+      title: "Anycubic Cloud에 연결",
+      description: "Anycubic Slicer Next 프로필을 찾아보고 내보내세요.",
+      tokenHint: "기존 Anycubic 세션의 액세스 토큰을 사용하세요. 프린터 제어는 계속 LAN으로 진행됩니다.",
+      readOnly: "프로필은 읽기 전용입니다. JSON을 내보내 슬라이서에서 검토하세요.",
+      unavailable: "현재 이 Anycubic API는 이 계정의 슬라이서 프로필을 제공하지 않습니다.",
+      noAuthMethod: "검증된 로그인 방법이 없습니다.",
+      unsupported: "기타 프로필 유형",
+      noReadPermission: "Anycubic Cloud 프로필을 볼 권한이 없습니다.",
+      noAuthPermission: "Anycubic Cloud를 연결하거나 해제할 권한이 없습니다.",
+      authPermission: "Anycubic Cloud 연결 또는 해제",
+      readPermission: "Anycubic Cloud 프로필 보기 및 내보내기",
+      connected: "{{account}} 계정으로 Anycubic Cloud에 연결됨",
+    },
     title: '프로필',
     subtitle: '슬라이서 프리셋 및 압력 전진 보정 관리',
     tabs: {

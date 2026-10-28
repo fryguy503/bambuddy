@@ -3935,6 +3935,23 @@ export default {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "JSONをエクスポート",
+      tokenGuide: "アクセストークンの取得方法",
+      tab: 'Anycubic Cloud',
+      title: "Anycubic Cloudに接続",
+      description: "Anycubic Slicer Nextのプロファイルを閲覧・エクスポートします。",
+      tokenHint: "既存のAnycubicセッションのアクセストークンを使用してください。プリンターの制御は引き続きLAN経由で行います。",
+      readOnly: "プロファイルは読み取り専用です。JSONをエクスポートしてスライサーで確認できます。",
+      unavailable: "このAnycubic APIでは、このアカウントのスライサープロファイルを現在取得できません。",
+      noAuthMethod: "確認済みのサインイン方法がありません。",
+      unsupported: "その他のプロファイル形式",
+      noReadPermission: "Anycubic Cloudのプロファイルを閲覧する権限がありません。",
+      noAuthPermission: "Anycubic Cloudに接続・切断する権限がありません。",
+      authPermission: "Anycubic Cloudへの接続・切断",
+      readPermission: "Anycubic Cloudプロファイルの閲覧・エクスポート",
+      connected: "{{account}}としてAnycubic Cloudに接続中",
+    },
     title: 'フィラメントプロファイル',
     subtitle: 'スライサープリセットと圧力キャリブレーションの管理',
     tabs: {

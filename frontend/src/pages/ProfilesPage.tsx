@@ -53,9 +53,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { KProfilesView } from '../components/KProfilesView';
 import { LocalProfilesView } from '../components/LocalProfilesView';
 import { OrcaCloudView } from '../components/OrcaCloudView';
+import { AnycubicCloudView } from '../components/AnycubicCloudView';
 
 type TFunction = (key: string, options?: Record<string, unknown>) => string;
-type ProfileTab = 'cloud' | 'orca_cloud' | 'local' | 'kprofiles';
+type ProfileTab = 'cloud' | 'orca_cloud' | 'anycubic_cloud' | 'local' | 'kprofiles';
 type LoginStep = 'email' | 'code' | 'token';
 type PresetType = 'all' | 'filament' | 'printer' | 'process';
 
@@ -2921,7 +2922,7 @@ export function ProfilesPage() {
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex border-b border-bambu-dark-tertiary mb-6">
+      <div className="flex overflow-x-auto whitespace-nowrap border-b border-bambu-dark-tertiary mb-6">
         <button
           onClick={() => setActiveTab('cloud')}
           className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
@@ -2943,6 +2944,17 @@ export function ProfilesPage() {
         >
           <Cloud className="w-4 h-4" />
           {t('profiles.tabs.orcaCloud')}
+        </button>
+        <button
+          onClick={() => setActiveTab('anycubic_cloud')}
+          className={`flex shrink-0 items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === 'anycubic_cloud'
+              ? 'text-bambu-green border-bambu-green'
+              : 'text-bambu-gray hover:text-white border-transparent'
+          }`}
+        >
+          <Cloud className="w-4 h-4" />
+          {t('profiles.anycubicCloud.tab')}
         </button>
         <button
           onClick={() => setActiveTab('local')}
@@ -3041,6 +3053,7 @@ export function ProfilesPage() {
 
       {/* Orca Cloud Profiles Tab */}
       {activeTab === 'orca_cloud' && <OrcaCloudView />}
+      {activeTab === 'anycubic_cloud' && <AnycubicCloudView />}
 
       {/* Local Profiles Tab */}
       {activeTab === 'local' && <LocalProfilesView />}

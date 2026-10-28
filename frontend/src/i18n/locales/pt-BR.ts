@@ -3922,6 +3922,23 @@ export default {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "Exportar JSON",
+      tokenGuide: "Como obter um token de acesso",
+      tab: 'Anycubic Cloud',
+      title: "Conectar ao Anycubic Cloud",
+      description: "Navegue e exporte seus perfis do Anycubic Slicer Next.",
+      tokenHint: "Use um token de acesso da sessão atual do Anycubic. O controle da impressora continua pela LAN.",
+      readOnly: "Os perfis são somente leitura. Exporte o JSON para revisão no fatiador.",
+      unavailable: "Esta API do Anycubic não disponibiliza perfis de fatiamento para esta conta no momento.",
+      noAuthMethod: "Nenhum método de entrada verificado está disponível.",
+      unsupported: "Outros tipos de perfil",
+      noReadPermission: "Você não tem permissão para visualizar os perfis do Anycubic Cloud.",
+      noAuthPermission: "Você não tem permissão para conectar ou desconectar o Anycubic Cloud.",
+      authPermission: "Conectar ou desconectar o Anycubic Cloud",
+      readPermission: "Visualizar e exportar perfis do Anycubic Cloud",
+      connected: "Conectado ao Anycubic Cloud como {{account}}",
+    },
     title: 'Perfis',
     subtitle: 'Gerencie seus presets de fatiador e calibrações de avanço de pressão',
     tabs: {

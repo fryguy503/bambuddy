@@ -1736,6 +1736,37 @@ export interface OrcaProfileDetail {
   setting: Record<string, unknown>;
 }
 
+export interface AnycubicCloudStatus {
+  connected: boolean;
+  region: string;
+  user_id: string | null;
+  display_name: string | null;
+  auth_methods: string[];
+  capabilities: { profiles: boolean; materials: boolean };
+  token_help_url?: string;
+  needs_login?: boolean;
+}
+
+export interface AnycubicCloudProfileMeta {
+  setting_id: string;
+  name: string;
+  type: string;
+  version?: string | null;
+  compatible_printers?: string[] | null;
+}
+
+export interface AnycubicCloudProfileList {
+  source: 'anycubic_cloud';
+  filament: AnycubicCloudProfileMeta[];
+  printer: AnycubicCloudProfileMeta[];
+  process: AnycubicCloudProfileMeta[];
+  unsupported: AnycubicCloudProfileMeta[];
+}
+
+export interface AnycubicCloudProfileDetail extends AnycubicCloudProfileMeta {
+  setting: Record<string, unknown>;
+}
+
 // MakerWorld integration. Full metadata/instance shapes come back as
 // Record<string, unknown> — MakerWorld's API adds fields over time, so we
 // pass them through verbatim rather than maintaining a brittle mirror.
@@ -4528,7 +4559,7 @@ export type Permission =
   | 'system:read'
   | 'settings:read' | 'settings:update' | 'settings:backup' | 'settings:restore'
   | 'github:backup' | 'github:restore'
-  | 'cloud:auth' | 'orca_cloud:auth'
+  | 'cloud:auth' | 'orca_cloud:auth' | 'anycubic_cloud:auth' | 'anycubic_cloud:read'
   | 'makerworld:view' | 'makerworld:import'
   | 'manyfold:view' | 'manyfold:import'
   | 'api_keys:read' | 'api_keys:create' | 'api_keys:update' | 'api_keys:delete'
@@ -6451,6 +6482,18 @@ export const api = {
     request<OrcaProfileListResponse>('/orca-cloud/profiles'),
   orcaCloudGetProfile: (id: string) =>
     request<OrcaProfileDetail>(`/orca-cloud/profiles/${id}`),
+  anycubicCloudStatus: () =>
+    request<AnycubicCloudStatus>('/anycubic-cloud/status'),
+  anycubicCloudSetToken: (token: string, region: string) =>
+    request<AnycubicCloudStatus>('/anycubic-cloud/token', {
+      method: 'POST', body: JSON.stringify({ token, region }),
+    }),
+  anycubicCloudLogout: () =>
+    request<{ success: boolean }>('/anycubic-cloud/logout', { method: 'POST' }),
+  anycubicCloudListProfiles: (refresh = false) =>
+    request<AnycubicCloudProfileList>(`/anycubic-cloud/profiles${refresh ? '?refresh=true' : ''}`),
+  anycubicCloudGetProfile: (id: string) =>
+    request<AnycubicCloudProfileDetail>(`/anycubic-cloud/profiles/${encodeURIComponent(id)}`),
   getCloudSettings: (version = '02.04.00.70') =>
     request<SlicerSettingsResponse>(`/cloud/settings?version=${version}`),
   getBuiltinFilaments: () =>

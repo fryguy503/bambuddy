@@ -356,7 +356,7 @@ def _assert_api_key_can_access_cloud(api_key: APIKey) -> None:
         raise HTTPException(
             status_code=403,
             detail=(
-                "This API key is not authorised to access Bambu Cloud data. "
+                "This API key is not authorised to access cloud data. "
                 "Enable 'Allow cloud access' on the key in Settings → API Keys."
             ),
         )

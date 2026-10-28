@@ -237,6 +237,8 @@ _APIKEY_SCOPE_BY_PERMISSION: dict[Permission, str | tuple[str, ...]] = {
     # owner" doesn't need a second toggle for Orca. Splitting later requires
     # a new column + migration — easy to add if the trust dimensions diverge.
     Permission.ORCA_CLOUD_AUTH: "can_access_cloud",
+    Permission.ANYCUBIC_CLOUD_AUTH: "can_access_cloud",
+    Permission.ANYCUBIC_CLOUD_READ: "can_access_cloud",
 }
 
 # Retained for documentation, drift-detection, and the prior "administrative

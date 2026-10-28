@@ -3965,6 +3965,23 @@ export default {
 
   // Profiles
   profiles: {
+    anycubicCloud: {
+      exportJson: "JSON exporteren",
+      tokenGuide: "Een toegangstoken verkrijgen",
+      tab: 'Anycubic Cloud',
+      title: "Verbinden met Anycubic Cloud",
+      description: "Bekijk en exporteer je Anycubic Slicer Next-profielen.",
+      tokenHint: "Gebruik een toegangstoken uit je bestaande Anycubic-sessie. De printerbesturing blijft via LAN verlopen.",
+      readOnly: "Profielen zijn alleen-lezen. Exporteer JSON om het in je slicer te bekijken.",
+      unavailable: "Deze Anycubic-API biedt momenteel geen slicerprofielen voor dit account.",
+      noAuthMethod: "Er is geen geverifieerde aanmeldmethode beschikbaar.",
+      unsupported: "Andere profieltypen",
+      noReadPermission: "Je hebt geen toestemming om Anycubic Cloud-profielen te bekijken.",
+      noAuthPermission: "Je hebt geen toestemming om Anycubic Cloud te verbinden of los te koppelen.",
+      authPermission: "Anycubic Cloud verbinden of loskoppelen",
+      readPermission: "Anycubic Cloud-profielen bekijken en exporteren",
+      connected: "Verbonden met Anycubic Cloud als {{account}}",
+    },
     title: 'Profielen',
     subtitle: 'Beheer je slicerpresets en pressure-advance-kalibraties',
     tabs: {

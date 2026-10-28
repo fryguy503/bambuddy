@@ -15,6 +15,10 @@ export function GroupEditPage() {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
   const { showToast } = useToast();
+  const providerPermissionLabels = useMemo(() => ({
+    'anycubic_cloud:auth': t('profiles.anycubicCloud.authPermission'),
+    'anycubic_cloud:read': t('profiles.anycubicCloud.readPermission'),
+  }), [t]);
   const isEditing = Boolean(id);
 
   const [name, setName] = useState('');
@@ -149,11 +153,11 @@ export function GroupEditPage() {
       .map((cat) => ({
         ...cat,
         permissions: cat.permissions.filter((p) =>
-          p.label.toLowerCase().includes(searchLower)
+          (providerPermissionLabels[p.value as keyof typeof providerPermissionLabels] ?? p.label).toLowerCase().includes(searchLower)
         ),
       }))
       .filter((cat) => cat.permissions.length > 0);
-  }, [permissionsData, searchLower]);
+  }, [permissionsData, searchLower, providerPermissionLabels]);
 
   const totalPermissions = permissionsData?.all_permissions.length ?? 0;
 
@@ -321,7 +325,7 @@ export function GroupEditPage() {
                         className="w-4 h-4 shrink-0 rounded border-bambu-gray text-bambu-green focus:ring-bambu-green focus:ring-offset-0 bg-bambu-dark-secondary"
                       />
                       <span className="flex flex-col">
-                        <span className="text-sm text-bambu-gray">{perm.label}</span>
+                        <span className="text-sm text-bambu-gray">{providerPermissionLabels[perm.value as keyof typeof providerPermissionLabels] ?? perm.label}</span>
                         {perm.value === 'websocket:connect' && (
                           <span className="text-xs text-bambu-gray/60">
                             {t('groups.editor.websocketHint')}

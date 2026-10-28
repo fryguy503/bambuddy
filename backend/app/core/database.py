@@ -5187,6 +5187,7 @@ async def _run_migrations(conn):
     # is SQLite-only — Postgres uses TIMESTAMP, so the datetime columns are
     # dialect-branched per project convention.
     await _safe_execute(conn, "ALTER TABLE users ADD COLUMN orca_cloud_token VARCHAR(2000)")
+    await _safe_execute(conn, "ALTER TABLE users ADD COLUMN anycubic_cloud_token TEXT")
     await _safe_execute(conn, "ALTER TABLE users ADD COLUMN orca_cloud_refresh_token VARCHAR(128)")
     if is_sqlite():
         await _safe_execute(conn, "ALTER TABLE users ADD COLUMN orca_cloud_expires_at DATETIME")
@@ -7803,6 +7804,11 @@ async def seed_default_groups():
                 perms.append("orca_cloud:auth")
                 changed = True
                 logger.info("Added orca_cloud:auth to Operators group (backfill)")
+            if non_admin_group_name == "Operators":
+                for permission in ("anycubic_cloud:auth", "anycubic_cloud:read"):
+                    if permission not in perms:
+                        perms.append(permission)
+                        changed = True
             if changed:
                 grp.permissions = perms
         await session.commit()

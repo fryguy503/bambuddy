@@ -1,47 +1,62 @@
-# Experimental Kobra S1 LAN provider
+# Experimental Kobra S1 LAN support and optional Anycubic Cloud Profiles
 
 Bambuddy's Bambu MQTT, FTPS, camera and AMS automation cannot communicate with
-an Anycubic Kobra S1. This change adds an independent, LAN-only provider for
-printer status, temperatures, print progress and read-only inventory for up to
-two ACE units/eight slots, plus pause/resume/stop.
+an Anycubic Kobra S1. This change adds an independent LAN provider for status,
+temperatures, progress and read-only inventory for two ACE units/eight slots,
+plus pause/resume/stop. A separate, optional Anycubic Cloud Profiles tab reads
+the account's native slicer-configuration ZIP for browsing and JSON export.
 
-New onboarding reviews the printer's TLS fingerprint explicitly. Existing
-printers remain Bambu by default. Unsupported Bambu operations are blocked
-before transport or automation work; a new Anycubic status cannot trigger
+LAN onboarding requires explicit review of the printer's TLS fingerprint.
+Existing printers remain Bambu by default. Unsupported Bambu operations are
+blocked before transport or automation work; Anycubic status cannot trigger
 Bambu archives, calibration, preset writes, queued uploads or virtual-printer
-bridging. No Anycubic cloud login or online service is used.
+bridging.
 
-Built-in camera playback, file transfer/print submission, archival, cloud
-access, ACE drying/load/unload and material writes are not included. This is
-experimental support, not full feature parity or hardware acceptance.
+The Cloud tab accepts an existing Anycubic user token in the fixed Global or
+China region. Account credentials are encrypted, owner-scoped and subject to
+the existing API-key Cloud-access fence and new read/auth permissions. Profiles
+retain native settings and material variants; connection secrets are masked in
+details and export. Unknown types remain visible. Nothing is automatically
+imported into the shared Local Profiles store or Bambu filament-ID resolver.
+
+Cloud access sends no printer commands and does not change LAN operation.
+Cloud profile writes, password/OAuth login, built-in camera playback, printer
+file transfer/print submission, archival and ACE mutations are not included.
+Configuration downloads currently admit only the observed Anycubic storage
+host; another regional host needs separate verification. This is experimental
+support, not full feature parity or completed hardware/account acceptance.
 
 ## Validation
 
-- 386 focused backend tests and 15 subtests passed in the final run, including
-  the Anycubic protocol, onboarding, controls, printer manager, Bambu bridge,
-  K-profile and backup regressions. Other runs separately cover the broader
-  API/printer-scope and scheduler/camera suites; their counts overlap.
-- 38 dedicated provider tests include loopback TLS verification, legacy
-  firmware discovery, two-ACE state, lifecycle freshness, reconnects and stale
-  callback rejection. These are included in the final backend run above.
-- Ruff lint and formatting passed across all backend files. Basedpyright
-  1.40.2 passed in baseline lock mode across 414 application files, using the
-  local Windows Python 3.12 environment. Linux's exact CI environment was not run.
-- Frontend TypeScript, affected ESLint, all 15 locales, production build and
-  Safari 16 browser baseline passed. A broader affected run passed 232 tests;
-  the final UI review fixes passed 86 relevant tests. These are overlapping runs.
-- No physical printer operations were performed. Hardware validation is
-  deferred because the printer is printing and is not currently in LAN mode.
+- Backend coverage includes LAN protocol/onboarding, TLS checks, two-ACE state,
+  reconnect and stale-callback behavior, provider capability fences and existing
+  Bambu regressions. Cloud tests use mocked HTTP, synthetic configuration ZIPs
+  and disposable databases for token validation, encryption, account isolation,
+  API-key permissions and bounded archive parsing.
+- Frontend checks cover token-only connection, account changes and expiry,
+  permissions, unknown profile types, native JSON export and existing
+  Bambu/Orca profile behavior. TypeScript, affected ESLint, all 15 locales,
+  production build and the Safari 16 browser baseline have passed locally.
+- Public identity/certificate discovery and authenticated read-only telemetry
+  passed on a physical Kobra S1 with firmware 2.7.2.7. A short session received
+  usable state, temperature, layer and remaining-time data and one four-slot ACE
+  unit with correct occupied/empty slots. No second unit was observed and no
+  control command was sent. Two-unit, restart/reconnect and physical
+  pause/resume/stop acceptance remain pending. No live Cloud account
+  acceptance is claimed.
+- The exact Linux CI environment and full upstream CI pipeline were not run.
 
 ## Before submission
 
-- Obtain maintainer agreement and an assigned upstream issue, as required by
-  CONTRIBUTING.md. Native support for additional manufacturers is not yet an
-  agreed upstream scope.
+- Obtain maintainer agreement and an assigned issue, as required by
+  CONTRIBUTING.md. Native multi-brand support and the optional Cloud profile
+  scope still need upstream agreement.
 - Target upstream `dev`. This branch is based on
   `cab3c8e5d92de38ae4b4de05d9915a0eab41cd5b`.
-- Prepare the required companion wiki change from `docs/anycubic.md` and link
-  its PR. Capture the required before/after UI screenshots.
-- Record hardware acceptance separately using the checklist in the setup guide.
+- Prepare companion wiki documentation from `docs/anycubic.md` and
+  `docs/anycubic-cloud.md`, link its PR, and prepare any required website update.
+  Capture the required before/after UI screenshots.
+- Record LAN hardware and Cloud account acceptance separately using the setup
+  guides. Verify any additional account download host before admitting it.
 
 No source, issue, PR, documentation or release was published during this work.
