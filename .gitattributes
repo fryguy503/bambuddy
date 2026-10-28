@@ -1,3 +1,6 @@
 # Force CRLF line endings for Windows batch files so cmd.exe can parse them
 # regardless of the user's core.autocrlf setting.
 *.bat text eol=crlf
+
+# The Synology build helper runs directly in DSM's Linux shell.
+deploy/build-synology.sh text eol=lf
