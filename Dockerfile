@@ -95,7 +95,9 @@ RUN mkdir -p /app/data /app/logs && \
 # Entrypoint script: handles PUID/PGID + ownership normalisation +
 # privilege drop. See deploy/docker-entrypoint.sh for the full rationale.
 COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Windows source checkouts can use CRLF; Linux needs a plain /bin/sh shebang.
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
@@ -133,15 +135,18 @@ EXPOSE 8000
 EXPOSE 8883
 EXPOSE 50000-50100
 
-# Health check (uses PORT env var via shell)
+# Health check follows Uvicorn's optional HTTPS configuration and pins the
+# mounted public certificate for a local TLS probe (including self-signed certs).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request, os; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\", \"8000\")}/health')" || exit 1
+    CMD ["python", "-m", "backend.app.core.docker_healthcheck"]
 
 # Run the application
 # Use standard asyncio loop (uvloop has permission issues in some Docker environments)
 # Port is configurable via PORT (default 8000); bind address via HOST (default
 # 0.0.0.0). Set HOST=127.0.0.1 to bind loopback only, e.g. when a reverse proxy
 # on the same host fronts the app.
+# Native HTTPS is opt-in through Uvicorn's UVICORN_SSL_CERTFILE and
+# UVICORN_SSL_KEYFILE environment variables, pointing at read-only PEM mounts.
 #
 # `exec` is load-bearing, not style. Without it the shell stays as PID 1 and
 # uvicorn runs as its child; dash does not forward signals, so `docker stop`
