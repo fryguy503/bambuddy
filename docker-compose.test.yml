@@ -40,6 +40,8 @@ services:
     environment:
       - TESTING=1
       - DATA_DIR=/app/data
+      # These API fixtures exercise HTTP; native/generated TLS has dedicated tests.
+      - BAMBUDDY_HTTPS=false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s

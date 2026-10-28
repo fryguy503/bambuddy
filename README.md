@@ -637,7 +637,9 @@ cd bambuddy
 docker compose up -d --build
 ```
 
-Open **http://localhost:8000** in your browser.
+Open **https://localhost:8000** in your browser. Docker generates a persistent
+self-signed certificate on first startup; your browser will show a trust warning.
+See [HTTPS setup](docs/docker-https.md) to trust it or supply your own certificate.
 
 > **Multi-architecture support:** Pre-built images are available for `linux/amd64` and `linux/arm64` (Raspberry Pi 4/5).
 
@@ -711,13 +713,17 @@ ports:
   - "3000:8000"  # Access on port 3000
 ```
 
-**Native HTTPS (optional):**
+**Native HTTPS:**
 
-The container can serve HTTPS directly using read-only PEM certificate and key
-mounts with `UVICORN_SSL_CERTFILE` and `UVICORN_SSL_KEYFILE`. The health check
-automatically follows HTTP or HTTPS. See [Docker HTTPS setup](docs/docker-https.md).
+The container generates and retains a self-signed certificate in the data volume
+by default. Read-only PEM mounts with `UVICORN_SSL_CERTFILE` and
+`UVICORN_SSL_KEYFILE` override it with your own certificate. Set
+`BAMBUDDY_HTTPS=false` for an HTTP backend behind a reverse proxy. See
+[Docker HTTPS setup](docs/docker-https.md).
 
 **Reverse Proxy (Nginx):**
+
+Set `BAMBUDDY_HTTPS=false` on the container for the HTTP upstream in this example.
 
 ```nginx
 server {

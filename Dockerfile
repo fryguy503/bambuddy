@@ -104,6 +104,7 @@ ENV PYTHONUNBUFFERED=1
 ENV DATA_DIR=/app/data
 ENV LOG_DIR=/app/logs
 ENV PORT=8000
+ENV BAMBUDDY_HTTPS=true
 # Provide a local username + home for tools that call getpass.getuser() /
 # os.path.expanduser() under arbitrary PUIDs. With `user: "1001:1001"` the
 # stock python:3.13-slim image has no /etc/passwd entry for that UID, so
@@ -135,8 +136,8 @@ EXPOSE 8000
 EXPOSE 8883
 EXPOSE 50000-50100
 
-# Health check follows Uvicorn's optional HTTPS configuration and pins the
-# mounted public certificate for a local TLS probe (including self-signed certs).
+# Health check resolves the same generated/supplied certificate as startup,
+# then pins it for the local TLS probe.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD ["python", "-m", "backend.app.core.docker_healthcheck"]
 
@@ -145,8 +146,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 # Port is configurable via PORT (default 8000); bind address via HOST (default
 # 0.0.0.0). Set HOST=127.0.0.1 to bind loopback only, e.g. when a reverse proxy
 # on the same host fronts the app.
-# Native HTTPS is opt-in through Uvicorn's UVICORN_SSL_CERTFILE and
-# UVICORN_SSL_KEYFILE environment variables, pointing at read-only PEM mounts.
+# HTTPS defaults to a persistent self-signed certificate in DATA_DIR/tls.
+# UVICORN_SSL_CERTFILE / UVICORN_SSL_KEYFILE override it with mounted PEMs;
+# BAMBUDDY_HTTPS=false opts out for reverse-proxy HTTP deployments.
 #
 # `exec` is load-bearing, not style. Without it the shell stays as PID 1 and
 # uvicorn runs as its child; dash does not forward signals, so `docker stop`

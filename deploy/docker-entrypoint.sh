@@ -18,9 +18,8 @@
 #
 # If the container is started with an explicit `user:` directive
 # (compose `user:` or `docker run --user`), the entrypoint runs as that
-# user instead of root and chown isn't possible. The script falls
-# through to direct exec without modifying ownership — preserving the
-# previous behavior for users who pin a specific uid via compose.
+# user instead of root and chown isn't possible. TLS preparation runs as
+# that user without modifying volume ownership, then execs the application.
 
 set -eu
 
@@ -63,10 +62,10 @@ else
     echo "[entrypoint] USE_SYSTEM_TRUST_STORE not set; skipping system trust store update"
 fi
 
-# If we're not root, we can't chown anything. Exec the original command
-# and trust that the user has set up host-side ownership themselves.
+# If we're not root, trust the operator's volume ownership. TLS preparation
+# and the application both run under the explicitly configured user.
 if [ "$(id -u)" -ne 0 ]; then
-    exec "$@"
+    exec python -m backend.app.core.docker_tls "$@"
 fi
 
 # `chown -R` is gated behind a top-level ownership check so a correctly-
@@ -94,7 +93,8 @@ if [ -d /app/data/virtual_printer ]; then
     chown_if_needed /app/data/virtual_printer
 fi
 
-# Drop privileges and run the application. python's file capabilities
+# Drop privileges before preparing TLS and exec'ing the application. The
+# generated key is owned by PUID:PGID, never root. Python's file capabilities
 # (cap_net_bind_service=+ep, set in the Dockerfile) survive the uid
 # switch, so binding to :322 / :990 still works post-drop.
-exec gosu "${PUID}:${PGID}" "$@"
+exec gosu "${PUID}:${PGID}" python -m backend.app.core.docker_tls "$@"

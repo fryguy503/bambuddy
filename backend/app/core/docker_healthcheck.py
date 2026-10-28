@@ -17,6 +17,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.app.core.docker_tls import TLSConfigurationError, resolve_tls
+
 
 class HealthCheckError(ValueError):
     """A safe diagnostic for the container's health log."""
@@ -47,16 +49,11 @@ def check(environ: Mapping[str, str] | None = None, *, timeout: float = 5) -> No
     port = int(environ.get("PORT") or "8000")
     if not 1 <= port <= 65535:
         raise HealthCheckError("PORT must be between 1 and 65535.")
-    certfile = environ.get("UVICORN_SSL_CERTFILE") or ""
-    keyfile = environ.get("UVICORN_SSL_KEYFILE") or ""
-    if keyfile and not certfile:
-        raise HealthCheckError("Configure UVICORN_SSL_CERTFILE when using UVICORN_SSL_KEYFILE.")
-    # Uvicorn also accepts a combined certificate/private-key PEM with only
-    # SSL_CERTFILE set. Do not mistake that valid configuration for HTTP.
+    files = resolve_tls(environ)
 
     connection: http.client.HTTPConnection
-    if certfile:
-        expected = _certificate_pin(certfile)
+    if files:
+        expected = _certificate_pin(str(files.certfile))
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         # Exact certificate pinning below replaces CA/hostname verification
         # for this local probe only, before sending the HTTP request. Browser
@@ -87,7 +84,7 @@ def check(environ: Mapping[str, str] | None = None, *, timeout: float = 5) -> No
 def main() -> int:
     try:
         check()
-    except HealthCheckError as error:
+    except (HealthCheckError, TLSConfigurationError) as error:
         print(str(error), file=sys.stderr)
         return 1
     except Exception as error:

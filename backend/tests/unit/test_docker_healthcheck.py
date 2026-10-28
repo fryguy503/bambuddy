@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 from backend.app.core.docker_healthcheck import HealthCheckError, check, main
+from backend.app.core.docker_tls import TLSConfigurationError, prepare_tls
 
 
 def certificate(directory, *, expired=False):
@@ -62,7 +63,7 @@ def endpoint(*, tls=None, status=200):
     worker = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True)
     worker.start()
     try:
-        yield {"HOST": "0.0.0.0", "PORT": str(server.server_port)}, paths
+        yield {"HOST": "0.0.0.0", "PORT": str(server.server_port), "BAMBUDDY_HTTPS": "false"}, paths
     finally:
         server.shutdown()
         server.server_close()
@@ -71,7 +72,12 @@ def endpoint(*, tls=None, status=200):
 
 
 def tls_environment(environ, files):
-    return {**environ, "UVICORN_SSL_CERTFILE": str(files[0]), "UVICORN_SSL_KEYFILE": str(files[1])}
+    return {
+        **environ,
+        "BAMBUDDY_HTTPS": "true",
+        "UVICORN_SSL_CERTFILE": str(files[0]),
+        "UVICORN_SSL_KEYFILE": str(files[1]),
+    }
 
 
 def test_http_health_uses_app_port_and_ignores_proxy_environment(monkeypatch):
@@ -114,8 +120,8 @@ def test_https_fullchain_uses_leaf_as_exact_pin(tmp_path):
 
 
 def test_key_without_certificate_does_not_fall_back_to_http():
-    with endpoint() as (environ, paths), pytest.raises(HealthCheckError, match="Configure UVICORN_SSL_CERTFILE"):
-        check({**environ, "UVICORN_SSL_KEYFILE": "/synthetic/unused.pem"})
+    with endpoint() as (environ, paths), pytest.raises(TLSConfigurationError, match="Configure UVICORN_SSL_CERTFILE"):
+        check({**environ, "BAMBUDDY_HTTPS": "true", "UVICORN_SSL_KEYFILE": "/synthetic/unused.pem"})
     assert paths == []
 
 
@@ -124,7 +130,7 @@ def test_https_combined_certificate_and_key_preserves_uvicorn_configuration(tmp_
     combined = tmp_path / "combined.pem"
     combined.write_bytes(files[0].read_bytes() + files[1].read_bytes())
     with endpoint(tls=(combined, None)) as (environ, paths):
-        check({**environ, "UVICORN_SSL_CERTFILE": str(combined)})
+        check({**environ, "BAMBUDDY_HTTPS": "true", "UVICORN_SSL_CERTFILE": str(combined)})
     assert paths == ["/health"]
 
 
@@ -140,6 +146,7 @@ def test_invalid_port_fails(port):
 
 
 def test_missing_certificate_diagnostic_does_not_echo_paths(monkeypatch, capsys):
+    monkeypatch.setenv("BAMBUDDY_HTTPS", "true")
     monkeypatch.setenv("UVICORN_SSL_CERTFILE", "/private/synthetic-name/cert.pem")
     monkeypatch.setenv("UVICORN_SSL_KEYFILE", "/private/synthetic-name/key.pem")
     assert main() == 1
@@ -149,9 +156,25 @@ def test_missing_certificate_diagnostic_does_not_echo_paths(monkeypatch, capsys)
 
 
 def test_main_reports_success_for_healthy_http(monkeypatch):
+    monkeypatch.setenv("BAMBUDDY_HTTPS", "false")
     monkeypatch.delenv("UVICORN_SSL_CERTFILE", raising=False)
     monkeypatch.delenv("UVICORN_SSL_KEYFILE", raising=False)
     with endpoint() as (environ, _):
         for name, value in environ.items():
             monkeypatch.setenv(name, value)
         assert main() == 0
+
+
+def test_generated_certificate_health_uses_persistent_path_without_exported_env(tmp_path):
+    settings = {"DATA_DIR": str(tmp_path), "BAMBUDDY_HTTPS": "true"}
+    files = prepare_tls(settings)
+    assert files is not None
+    with endpoint(tls=(files.certfile, files.keyfile)) as (environ, paths):
+        check({**environ, **settings})
+    assert paths == ["/health"]
+
+
+def test_passive_health_check_never_generates_missing_certificate(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        check({"DATA_DIR": str(tmp_path), "BAMBUDDY_HTTPS": "true"})
+    assert not (tmp_path / "tls").exists()
