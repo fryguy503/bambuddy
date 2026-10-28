@@ -1,0 +1,24 @@
+# Fresh, source-built Synology deployment. Persistent folders stay in the checkout
+# but are excluded from Git and the Docker build context.
+name: bambuddy-synology
+
+services:
+  bambuddy:
+    image: bambuddy:anycubic-https-testing
+    build: .
+    pull_policy: never
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "${BAMBUDDY_BIND_ADDRESS:-127.0.0.1}:${BAMBUDDY_HTTPS_PORT:-18443}:8000/tcp"
+    environment:
+      TZ: ${TZ:-America/New_York}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      HOST: 0.0.0.0
+      PORT: "8000"
+      BAMBUDDY_HTTPS: "true"
+      BAMBUDDY_HTTPS_HOSTNAMES: ${BAMBUDDY_HTTPS_HOSTNAMES:-${BAMBUDDY_BIND_ADDRESS:-127.0.0.1}}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
