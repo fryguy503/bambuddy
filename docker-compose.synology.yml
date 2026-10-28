@@ -1,5 +1,5 @@
-# Fresh, source-built Synology deployment. Persistent folders stay in the checkout
-# but are excluded from Git and the Docker build context.
+# Fresh, source-built Synology deployment. Docker-managed volumes keep application
+# data independent of DSM shared-folder ACLs on the source checkout.
 name: bambuddy-synology
 
 services:
@@ -20,5 +20,9 @@ services:
       BAMBUDDY_HTTPS: "true"
       BAMBUDDY_HTTPS_HOSTNAMES: ${BAMBUDDY_HTTPS_HOSTNAMES:-${BAMBUDDY_BIND_ADDRESS:-127.0.0.1}}
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - bambuddy_data:/app/data
+      - bambuddy_logs:/app/logs
+
+volumes:
+  bambuddy_data:
+  bambuddy_logs:

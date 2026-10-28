@@ -2,8 +2,9 @@
 
 Use `docker-compose.synology.yml` for a fresh installation on Synology Container
 Manager. It builds the Git checkout, publishes native HTTPS on port 18443 and
-keeps data/logs in persistent folders. It requires no Caddy container and has no
-dependency on volumes or networks from the old Linux testing host.
+keeps data/logs in Docker-managed persistent volumes. It requires no Caddy
+container and has no dependency on volumes or networks from the old Linux
+testing host.
 
 Synology lists the [DS1819+ as x86_64](https://kb.synology.com/en-global/DSM/tutorial/What_kind_of_CPU_does_my_NAS_have)
 and supports it in [Container Manager](https://www.synology.com/en-us/dsm/packages/ContainerManager).
@@ -49,12 +50,13 @@ checkout's `.env` file. Replace the example address with your NAS address:
 ```sh
 printf 'BAMBUDDY_BIND_ADDRESS=192.168.1.20\nPUID=%s\nPGID=%s\nTZ=America/New_York\n' \
   "$(id -u)" "$(id -g)" > .env
-mkdir data logs
 ```
 
-The UID/GID values let the application own its persistent folders without
+The UID/GID values let the application own its persistent volumes without
 running as root. The entrypoint performs initial volume ownership setup, then
-generates its private HTTPS key after dropping privileges.
+generates its private HTTPS key after dropping privileges. Docker creates the
+`bambuddy-synology_bambuddy_data` and `bambuddy-synology_bambuddy_logs` volumes;
+application data is separate from the source checkout's DSM shared-folder ACLs.
 
 ## Build and start
 
@@ -97,24 +99,51 @@ installation, rather than newer engines that may remove it.
 
 Use `sudo sh deploy/build-synology.sh` for subsequent builds on this NAS, followed
 by the same Compose `up --no-build` command. If a build fails, the subshell stops
-before starting or replacing the service; retain the checkout, `.env`, `data/`
-and `logs/` and resume from this section after fixing the reported error.
+before starting or replacing the service; retain the checkout, `.env` and
+persistent volumes and resume from this section after fixing the reported error.
 
 ### Verify the service
 
 Open `https://<NAS-LAN-IP>:18443`. The initial self-signed certificate requires
 browser trust. Persistent settings, database, tokens and generated certificate
-live in `data/`; logs live in `logs/`. Both folders and `.env` are excluded from
-Git and the image's build context.
+live in the `bambuddy_data` volume; logs live in `bambuddy_logs`. Compose prefixes
+both names with `bambuddy-synology` unless you select a different project name.
+These volumes survive container replacement and normal `docker compose down`.
+`docker compose down --volumes` deletes them and resets the installation.
 
 Once the service is healthy, export only its public certificate for a verified
 HTTPS check. The redirect creates a file owned by the SSH user:
 
 ```sh
+mkdir -p certs
 sudo docker compose -f docker-compose.synology.yml exec -T bambuddy \
-  cat /app/data/tls/cert.pem > data/bambuddy-public-cert.pem
-curl --fail --show-error --cacert ./data/bambuddy-public-cert.pem https://<NAS-LAN-IP>:18443/health
+  cat /app/data/tls/cert.pem > certs/bambuddy-public-cert.pem
+curl --fail --show-error --cacert ./certs/bambuddy-public-cert.pem https://<NAS-LAN-IP>:18443/health
 ```
+
+### Recover a failed first startup with shared-folder mounts
+
+Earlier revisions mounted `./data` and `./logs`. On a fresh installation,
+certificate setup runs before database initialization. If it failed with
+`PermissionError` creating `/app/data/tls`, update this fresh installation to the
+managed-volume configuration and recreate its container using the image already
+built:
+
+```sh
+(
+set -eu
+cd /volume1/docker/bambuddy-anycubic
+git pull --ff-only
+sudo docker compose -f docker-compose.synology.yml up -d --no-build --no-deps --pull never --wait --wait-timeout 120 bambuddy
+sudo docker compose -f docker-compose.synology.yml ps
+)
+```
+
+This starts separate data/log volumes; files in the earlier `./data` and `./logs`
+folders are not imported. For an existing working installation with settings or
+print history, migrate that data into the volumes before starting this version;
+see Docker's [volume backup and restore guide](https://docs.docker.com/engine/storage/volumes/#back-up-restore-or-migrate-data-volumes).
+The fresh-install recovery above does not change DSM share permissions.
 
 Bridge networking publishes only the web endpoint. Add the Kobra S1 manually by
 its LAN IP; Anycubic's unicast LAN discovery/pairing does not require host
@@ -137,5 +166,5 @@ sudo docker compose -f docker-compose.synology.yml up -d --no-deps --pull never 
 ```
 
 Building first leaves the current container running if a dependency download
-or build fails. Recreating the service retains the `data/` and `logs/` folders.
-Changing those paths or deleting their contents resets the installation.
+or build fails. Recreating the service reuses the managed data/log volumes.
+Keep the same Compose project name and volumes to retain the installation.
