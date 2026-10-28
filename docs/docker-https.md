@@ -6,6 +6,22 @@ certificate; no certificate setup is required to start the service.
 
 ## Default generated certificate
 
+For an existing `bambuddy-temp` test deployment, `docker-compose.testing.yml`
+builds this checkout and reuses its existing data/log volumes and network.
+Set `BAMBUDDY_BIND_ADDRESS` in the checkout's `.env` to the Docker host's LAN IP;
+the test HTTPS port defaults to 18443. Stop any proxy already using that port
+before the first switch. Subsequent source updates use:
+
+```sh
+git pull --ff-only
+docker compose -f docker-compose.testing.yml up -d --build --no-deps --wait bambuddy
+```
+
+The test Compose file deliberately requires existing volumes/network. It does
+not create an empty replacement database. Optional `BAMBUDDY_DATA_VOLUME`,
+`BAMBUDDY_LOGS_VOLUME` and `BAMBUDDY_NETWORK` variables select other existing
+resource names.
+
 ```sh
 docker compose up -d --build bambuddy
 ```

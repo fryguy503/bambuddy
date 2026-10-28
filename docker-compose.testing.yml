@@ -1,0 +1,35 @@
+# Source-built testing stack for an existing bambuddy-temp deployment.
+# Existing volumes/network are required; this never creates a fresh data volume.
+name: bambuddy-temp
+
+services:
+  bambuddy:
+    image: bambuddy:anycubic-https-testing
+    build: .
+    pull_policy: never
+    restart: "no"
+    stop_grace_period: 30s
+    ports:
+      - "${BAMBUDDY_BIND_ADDRESS:-127.0.0.1}:${BAMBUDDY_TEST_PORT:-18443}:8000/tcp"
+    environment:
+      TZ: ${TZ:-America/New_York}
+      HOST: 0.0.0.0
+      PORT: "8000"
+      BAMBUDDY_HTTPS: "true"
+      BAMBUDDY_HTTPS_HOSTNAMES: ${BAMBUDDY_HTTPS_HOSTNAMES:-${BAMBUDDY_BIND_ADDRESS:-127.0.0.1}}
+    volumes:
+      - bambuddy_data:/app/data
+      - bambuddy_logs:/app/logs
+
+volumes:
+  bambuddy_data:
+    external: true
+    name: ${BAMBUDDY_DATA_VOLUME:-bambuddy-temp_bambuddy_data}
+  bambuddy_logs:
+    external: true
+    name: ${BAMBUDDY_LOGS_VOLUME:-bambuddy-temp_bambuddy_logs}
+
+networks:
+  default:
+    external: true
+    name: ${BAMBUDDY_NETWORK:-bambuddy-temp_default}
