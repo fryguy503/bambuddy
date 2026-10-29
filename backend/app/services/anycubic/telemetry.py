@@ -182,6 +182,8 @@ class Telemetry:
                     remaining = number(slot.get("consumables_percent"), 0, 100)
                     if remaining is not None and tray.get("tray_type"):
                         tray["remain"] = remaining
+                    elif unit_full:
+                        tray.pop("remain", None)
                 if unit_full and indexes != {0, 1, 2, 3}:
                     raise AnycubicError("Incomplete ACE snapshot")
                 box["tray"] = [trays[i] for i in sorted(trays)]

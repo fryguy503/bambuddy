@@ -34,6 +34,7 @@ def cloud_service():
         service = constructor.return_value
         service.validate_token = AsyncMock(return_value=PUBLIC)
         service.account_token = SECRET
+        service.makeronline_token = None
         service.account_namespace = "anycubic:global:account-1"
         service.close = AsyncMock()
         yield service

@@ -89,6 +89,7 @@ async def connect_token(
     try:
         identity = await service.validate_token()
         token = service.account_token
+        makeronline_token = service.makeronline_token
     except AnycubicCloudAuthError:
         raise HTTPException(
             401, "Anycubic rejected the token. Sign in again in Slicer Next or the Cloud website and reconnect."
@@ -102,6 +103,7 @@ async def connect_token(
         current_user,
         expected=previous,
         token=token,
+        makeronline_token=makeronline_token,
         region=body.region,
         user_id=identity["user_id"],
         display_name=identity.get("display_name"),

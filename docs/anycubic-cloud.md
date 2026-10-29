@@ -22,8 +22,10 @@ printer's network mode or enable cloud printer commands.
 For Global accounts, a Slicer Next JWT with `tokenType=access-token` is first
 exchanged at `POST /v3/public/loginWithAccessToken`. That request has the access
 token in its JSON body and no `XX-Token` header. The returned workbench user
-token is validated with `userInfo` and saved encrypted; the original Slicer
-token is not retained. Website user tokens and China-region tokens use the
+token is validated with `userInfo` and saved encrypted. The original Global
+Slicer SSO token is retained in the same encrypted connection for optional
+MakerOnline downloads. The tokens have different authorities: the workbench
+token is never substituted for MakerOnline SSO. Website user tokens and China-region tokens use the
 existing direct validation path. Unverified JWT claims only select the exchange;
 the vendor's exchange and account response establish authentication.
 
@@ -32,6 +34,33 @@ login, embedded desktop OAuth or automatic credential extraction. An OAuth ID
 token is not a substitute for the Cloud user token. If the token expires or is
 revoked, obtain a new one and reconnect. **Disconnect** clears Bambuddy's saved
 connection and profile caches; it does not revoke the token at Anycubic.
+
+## MakerOnline model sources
+
+Open **Model Sources → MakerOnline**, paste a model-page link, resolve its files,
+and import a 3MF, STL or STEP into your own library. Files land in a MakerOnline
+folder with provider provenance and scoped duplicate detection. Multiple plates
+of the same complete 3MF appear once. Slice imported projects for the intended
+printer before printing; importing never uploads to a printer or starts a job.
+
+Downloads reuse the Global Slicer Next SSO saved above. Reconnect an older
+connection with a current Slicer Next access token to retain it. A workbench
+website user token alone can still read Profiles but does not enable MakerOnline
+downloads. China-region credentials are not sent to the Global website.
+
+The provider uses the website's fixed `www.makeronline.com/api/mold/detail` and
+`/api/file/get-download-url` contracts. It sends raw SSO Authorization only to
+that website. Signed file URLs are restricted to observed vendor storage hosts
+and fetched with a separate client without account headers or cookies.
+Authentication, gated content and website challenges are reported as errors;
+the integration does not bypass them. The original site remains available for
+browser login, browsing, licensing and any verification required by a model.
+
+Viewing requires `anycubic_cloud:read`; importing also requires `library:upload`.
+An API key needs its owner and Allow Cloud Access. A logout/account revision
+check fences a download before saving. Signing out clears both encrypted
+credentials. Public metadata and fixture downloads were validated; actual
+MakerOnline account-token acceptance still requires an operator login test.
 
 If the account has no presets, sync the desired configuration from Anycubic
 Slicer Next and select **Refresh**. The printer can remain in LAN mode.

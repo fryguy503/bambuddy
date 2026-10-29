@@ -287,13 +287,16 @@ export default {
       failed: 'Det gick inte att spara ändringen: {{error}}',
     },
     anycubic: {
+      waitingForControls: "Väntar på aktuella skrivarfunktioner",
+      filesHelp: "Ladda upp .gcode skivad för denna Anycubic-modell. Uppladdning startar ingen utskrift.",
+      verifyingFile: "Bekräftar filen i skrivarens katalog…",
       builtInFeeder: "Inbyggd matare",
       manufacturer: "Tillverkare",
       discover: "Hitta Anycubic-skrivare",
       fingerprint: "TLS-certifikatets fingeravtryck (SHA-256)",
       trustFingerprint: "Jag har kontrollerat skrivaren och litar på dess certifikat.",
       connectionHelp: "Aktivera LAN-läget och hitta skrivaren på adressen ovan. Kontrollera certifikatet i ett betrott lokalt nätverk.",
-      supportNote: "Stöder övervakning, LAN-kameravisning, paus, återupptagning och stopp. ACE-platser är skrivskyddade. Filöverföring är inte tillgänglig.",
+      supportNote: "Stöder LAN-övervakning, kamera, filuppladdning och tillgängliga kontroller. ACE-platser är skrivskyddade.",
       discoveryFailed: "Det gick inte att hitta skrivaren. Kontrollera adressen och LAN-läget.",
       identityMismatch: "Den här adressen tillhör en annan skrivare. Serienumret måste stämma överens.",
       scanHelp: "Välj skrivarens LAN-subnät (till exempel 192.168.1.0/24). Aktivera LAN-läge före sökningen, välj sedan ett resultat och granska certifikatet nedan.",
@@ -7935,6 +7938,8 @@ errors: {
   },
 
   modelSources: {
+    makeronlineHelp: "Klistra in en MakerOnline-länk för att importera 3MF-, STL- eller STEP-filer. Skiva för din skrivare före utskrift.",
+    makeronlineConnect: "Hämtningar använder den globala Anycubic Cloud-anslutningen. Anslut under Profiler med en Slicer Next-åtkomsttoken.",
     title: 'Modellkällor',
     tabMakerworld: 'MakerWorld',
     tabManyfold: 'Manyfold',

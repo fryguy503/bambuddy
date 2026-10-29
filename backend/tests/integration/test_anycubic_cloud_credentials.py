@@ -26,6 +26,7 @@ def cloud_service():
         service = constructor.return_value
         service.validate_token = AsyncMock(return_value={"user_id": "42", "display_name": "Fixture Workshop"})
         service.account_token = SECRET
+        service.makeronline_token = None
         service.close = AsyncMock()
         yield service
 
@@ -56,6 +57,68 @@ async def _stored(db, headers):
 
 async def _connect(client, headers):
     return await client.post(ROOT + "/token", headers=headers, json={"token": SECRET, "region": "global"})
+
+
+async def test_shared_sso_stays_encrypted_and_logout_removes_it(async_client, db_session, cloud_service, connection):
+    from backend.app.core.encryption import mfa_decrypt
+
+    sso = "synthetic-makeronline-sso"
+    cloud_service.makeronline_token = sso
+    response = await _connect(async_client, connection)
+    assert response.status_code == 200
+    stored = await _stored(db_session, connection)
+    assert sso not in stored
+    assert json.loads(mfa_decrypt(stored))["makeronline_token"] == sso
+    status = await async_client.get("/api/v1/makeronline/status", headers=connection)
+    assert status.status_code == 200 and status.json()["connected"] is True
+    assert sso not in response.text + status.text
+    assert (await async_client.post(ROOT + "/logout", headers=connection)).status_code == 200
+    assert (await async_client.get("/api/v1/makeronline/status", headers=connection)).json()["connected"] is False
+
+
+async def test_makeronline_import_is_fenced_after_profiles_logout(async_client, db_session, cloud_service):
+    from backend.app.api.routes import makerworld
+    from backend.app.services.anycubic_cloud_credentials import ensure_current, load_credentials
+    from backend.app.services.model_providers.base import ProviderDownload, ProviderDownloadInfo, ProviderResourceRef
+
+    assert (await _connect(async_client, {})).status_code == 200
+    credentials = await load_credentials(db_session, None)
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def download(_info):
+        started.set()
+        await finish.wait()
+        return ProviderDownload(b"PK\x03\x04fixture", "Example.3mf")
+
+    service = AsyncMock()
+    service.get_download.return_value = ProviderDownloadInfo(
+        ProviderResourceRef("makeronline", "12", "34"), "https://storage.invalid", "Example.3mf"
+    )
+    service.download.side_effect = download
+
+    async def validate():
+        await ensure_current(db_session, None, credentials)
+
+    service.validate_before_save.side_effect = validate
+    with (
+        patch.object(makerworld, "_build_service", return_value=service),
+        patch.object(makerworld, "save_3mf_bytes_to_library", new_callable=AsyncMock) as save,
+    ):
+        pending = asyncio.create_task(
+            async_client.post(
+                "/api/v1/makerworld/import", json={"source_type": "makeronline", "model_id": 12, "profile_id": 34}
+            )
+        )
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            assert (await async_client.post(ROOT + "/logout")).status_code == 200
+            finish.set()
+            assert (await asyncio.wait_for(pending, 5)).status_code == 409
+        finally:
+            finish.set()
+            if not pending.done():
+                pending.cancel()
+        save.assert_not_awaited()
 
 
 async def test_logout_of_encrypted_account_works_when_encryption_key_is_unavailable(

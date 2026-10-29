@@ -29,6 +29,7 @@ from backend.app.api.routes import (
     ams_history,
     announcements,
     anycubic_cloud,
+    anycubic_files,
     api_keys,
     archive_purge,
     archives,
@@ -58,6 +59,7 @@ from backend.app.api.routes import (
     local_presets,
     location_ha_sensors,
     maintenance,
+    makeronline,
     makerworld,
     manyfold,
     metrics,
@@ -12238,6 +12240,8 @@ app.include_router(overlay_branding.router, prefix=app_settings.api_prefix)
 app.include_router(cloud.router, prefix=app_settings.api_prefix)
 app.include_router(orca_cloud.router, prefix=app_settings.api_prefix)
 app.include_router(anycubic_cloud.router, prefix=app_settings.api_prefix)
+app.include_router(anycubic_files.router, prefix=app_settings.api_prefix)
+app.include_router(makeronline.router, prefix=app_settings.api_prefix)
 app.include_router(local_presets.router, prefix=app_settings.api_prefix)
 app.include_router(smart_plugs.router, prefix=app_settings.api_prefix)
 app.include_router(ha_sensors.router, prefix=app_settings.api_prefix)

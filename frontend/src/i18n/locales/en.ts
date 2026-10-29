@@ -289,13 +289,16 @@ export default {
       failed: 'Could not save the change: {{error}}',
     },
     anycubic: {
+      waitingForControls: "Waiting for current printer capabilities",
+      filesHelp: "Upload .gcode sliced for this Anycubic model. Uploading does not start a print.",
+      verifyingFile: "Confirming the file in the printer catalog…",
       builtInFeeder: "Built-in feeder",
       manufacturer: "Manufacturer",
       discover: "Discover Anycubic printer",
       fingerprint: "TLS certificate fingerprint (SHA-256)",
       trustFingerprint: "I verified this printer and trust its certificate.",
       connectionHelp: "Enable LAN mode and discover the printer at the address above. Verify its certificate on a trusted local network.",
-      supportNote: "Supports monitoring, LAN camera viewing, and pause, resume and stop. ACE slots are read-only. File transfer is unavailable.",
+      supportNote: "Supports LAN monitoring, camera, file upload and supported print controls. ACE slots are read-only.",
       discoveryFailed: "Discovery failed. Check the address and LAN mode.",
       identityMismatch: "This address belongs to a different printer. The serial number must match.",
       scanHelp: "Choose the printer's LAN subnet (for example 192.168.1.0/24). Enable LAN mode before scanning, then select a result and review its certificate below.",
@@ -7939,6 +7942,8 @@ export default {
   },
 
   modelSources: {
+    makeronlineHelp: "Paste a MakerOnline model link to import its 3MF, STL or STEP files into your library. Slice for your printer before printing.",
+    makeronlineConnect: "Downloads reuse your Global Anycubic Cloud connection. Connect or reconnect in Profiles with a Slicer Next access token.",
     title: 'Model Sources',
     tabMakerworld: 'MakerWorld',
     tabManyfold: 'Manyfold',

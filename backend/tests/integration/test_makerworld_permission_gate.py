@@ -72,6 +72,20 @@ def _import_service():
     )
 
 
+@pytest.mark.parametrize("permissions", [["anycubic_cloud:read"], ["library:upload"]])
+async def test_makeronline_requires_both_cloud_read_and_library_upload(async_client, permissions):
+    admin = await _setup_auth_with_admin(async_client)
+    token = await _make_user(async_client, admin, username="makeronline_member", permissions=permissions)
+    with patch("backend.app.services.model_providers.makeronline.makeronline_provider.build_service") as build:
+        response = await async_client.post(
+            "/api/v1/makerworld/import",
+            headers={"Authorization": "Bearer " + token},
+            json={"source_type": "makeronline", "model_id": 12, "profile_id": 34},
+        )
+    assert response.status_code == 403
+    build.assert_not_called()
+
+
 class TestAnonymousIsRefusedFirst:
     @pytest.mark.asyncio
     @pytest.mark.integration

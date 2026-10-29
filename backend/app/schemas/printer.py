@@ -379,6 +379,7 @@ class NextPause(BaseModel):
 
 
 class PrinterStatus(BaseModel):
+    anycubic_controls: dict | None = None
     id: int
     name: str
     connected: bool

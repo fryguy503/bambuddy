@@ -22,7 +22,7 @@ from backend.app.services.discovery import (
     is_running_in_docker,
     subnet_scanner,
 )
-from backend.app.services.network_utils import get_network_interfaces
+from backend.app.services.network_utils import get_all_interface_ips
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/discovery", tags=["discovery"])
@@ -74,7 +74,9 @@ async def get_discovery_info(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.DISCOVERY_SCAN),
 ):
     """Get discovery environment info (Docker detection, etc.)."""
-    subnets = [iface["subnet"] for iface in get_network_interfaces()]
+    # Include secondary addresses: one physical interface may carry several
+    # LANs. Prefixes come from the OS, never an assumed /24 based on an IP.
+    subnets = list(dict.fromkeys(iface["subnet"] for iface in get_all_interface_ips()))
     return DiscoveryInfo(
         is_docker=is_running_in_docker(),
         ssdp_running=discovery_service.is_running,

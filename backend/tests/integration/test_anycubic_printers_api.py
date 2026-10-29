@@ -1,6 +1,7 @@
 """Vendor admission and onboarding, using disposable DBs and no printer I/O."""
 
-from unittest.mock import AsyncMock, patch
+import time
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -8,6 +9,68 @@ from backend.app.models.printer import Printer
 from backend.app.schemas.printer import PrinterCreate
 
 PIN = "ab" * 32
+
+
+@pytest.mark.parametrize(
+    "suffix,params,expected",
+    [
+        (
+            "temperature/nozzle",
+            {"target": 220},
+            ("print", "update", {"taskid": "active", "settings": {"target_nozzle_temp": 220}}),
+        ),
+        (
+            "temperature/bed",
+            {"target": 55},
+            ("print", "update", {"taskid": "active", "settings": {"target_hotbed_temp": 55}}),
+        ),
+        (
+            "fan-speed",
+            {"fan": "part", "speed": 60},
+            ("print", "update", {"taskid": "active", "settings": {"fan_speed_pct": 60}}),
+        ),
+        ("print-speed", {"mode": 3}, ("print", "update", {"taskid": "active", "settings": {"print_speed_mode": 3}})),
+    ],
+)
+async def test_native_settings_routes_use_native_payloads(async_client, anycubic_printer, suffix, params, expected):
+    from backend.app.services.anycubic import AnycubicMQTTClient
+
+    printer = anycubic_printer
+    client = AnycubicMQTTClient(printer.ip_address, printer.serial_number, model=printer.model, tls_fingerprint=PIN)
+    client.state.connected, client.state.state = True, "RUNNING"
+    client._last_message_monotonic = client._last_state_time = time.monotonic()
+    client._telemetry.task_id = "active"
+    client._reported_fans["fan_speed_pct"] = 100
+    client._publish = MagicMock(return_value=True)
+    with patch("backend.app.api.routes.printers.printer_manager.get_client", return_value=client):
+        result = await async_client.post(f"/api/v1/printers/{printer.id}/{suffix}", params=params)
+    assert result.status_code == 200, result.text
+    assert result.json()["queued"] is True
+    client._publish.assert_called_once_with(*expected)
+
+
+@pytest.mark.parametrize(
+    "suffix,params",
+    [
+        ("temperature/nozzle", {"target": 321}),
+        ("temperature/nozzle", {"target": 220, "nozzle": 1}),
+        ("temperature/bed", {"target": 121}),
+        ("print-speed", {"mode": 4}),
+        ("fan-speed", {"fan": "chamber", "speed": 50}),
+    ],
+)
+async def test_native_route_limits_reject_before_publish(async_client, anycubic_printer, suffix, params):
+    from backend.app.services.anycubic import AnycubicMQTTClient
+
+    printer = anycubic_printer
+    client = AnycubicMQTTClient(printer.ip_address, printer.serial_number, model=printer.model, tls_fingerprint=PIN)
+    client.state.connected, client.state.state = True, "RUNNING"
+    client._last_message_monotonic = client._last_state_time = time.monotonic()
+    client._publish = MagicMock()
+    with patch("backend.app.api.routes.printers.printer_manager.get_client", return_value=client):
+        response = await async_client.post(f"/api/v1/printers/{printer.id}/{suffix}", params=params)
+    assert response.status_code in (400, 422), response.text
+    client._publish.assert_not_called()
 
 
 def test_anycubic_identity_is_case_sensitive_and_has_no_bambu_access_code():
@@ -170,7 +233,6 @@ async def test_create_uses_anycubic_probe_and_persists_provider(async_client):
         ("get", "storage"),
         ("post", "calibration"),
         ("post", "drying/start"),
-        ("post", "temperature/nozzle"),
         ("post", "ams/load"),
     ],
 )

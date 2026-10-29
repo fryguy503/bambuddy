@@ -287,13 +287,16 @@ export default {
       failed: 'No se pudo guardar el cambio: {{error}}',
     },
     anycubic: {
+      waitingForControls: "Esperando las funciones actuales de la impresora",
+      filesHelp: "Sube .gcode laminado para este modelo Anycubic. La carga no inicia una impresión.",
+      verifyingFile: "Confirmando el archivo en el catálogo de la impresora…",
       builtInFeeder: "Alimentador integrado",
       manufacturer: "Fabricante",
       discover: "Detectar impresora Anycubic",
       fingerprint: "Huella del certificado TLS (SHA-256)",
       trustFingerprint: "He verificado esta impresora y confío en su certificado.",
       connectionHelp: "Activa el modo LAN y detecta la impresora en la dirección indicada. Verifica su certificado en una red local de confianza.",
-      supportNote: "Permite supervisión, cámara por LAN, pausa, reanudación y detención. Las ranuras ACE son de solo lectura. La transferencia de archivos no está disponible.",
+      supportNote: "Permite supervisión LAN, cámara, carga de archivos y controles disponibles. Las ranuras ACE son de solo lectura.",
       discoveryFailed: "Error de detección. Comprueba la dirección y el modo LAN.",
       identityMismatch: "Esta dirección pertenece a otra impresora. El número de serie debe coincidir.",
       scanHelp: "Elige la subred LAN de la impresora (por ejemplo, 192.168.1.0/24). Activa el modo LAN antes de buscar, selecciona un resultado y revisa su certificado abajo.",
@@ -7894,6 +7897,8 @@ export default {
   },
 
   modelSources: {
+    makeronlineHelp: "Pega un enlace de MakerOnline para importar archivos 3MF, STL o STEP. Lamínalos para tu impresora antes de imprimir.",
+    makeronlineConnect: "Las descargas usan la conexión global de Anycubic Cloud. Conecta en Perfiles con un token de acceso de Slicer Next.",
     title: 'Fuentes de modelos',
     tabMakerworld: 'MakerWorld',
     tabManyfold: 'Manyfold',

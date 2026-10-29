@@ -120,6 +120,28 @@ from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C, aux_fan_sides, 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["printers"], dependencies=[Depends(require_printer_operation)])
 
+
+def _anycubic_control_capabilities(printer, client):
+    if (
+        not isinstance(client, AnycubicMQTTClient)
+        or client.ip_address != printer.ip_address
+        or client.serial_number != printer.serial_number
+        or client.model != printer.model
+        or client.tls_fingerprint != printer.tls_fingerprint
+    ):
+        raise HTTPException(503, "The Anycubic LAN connection is unavailable or updating")
+    capabilities = client.control_capabilities()
+    if not capabilities["ready"]:
+        raise HTTPException(409, "Wait for fresh idle or printing status before changing settings")
+    return capabilities
+
+
+def _anycubic_control_result(queued):
+    if not queued:
+        raise HTTPException(409, "The Anycubic setting could not be queued for the current printer state")
+    return {"success": True, "queued": True, "message": "Anycubic LAN setting request queued"}
+
+
 # Seconds the /hms/execute-action route waits for a printer status push
 # confirming the command landed before reporting 502 to the UI. Module-level
 # so tests can monkeypatch a near-zero value instead of mocking asyncio.sleep.
@@ -803,6 +825,7 @@ async def _printer_status(db: AsyncSession, printer: Printer) -> PrinterStatus:
 
     return PrinterStatus(
         id=printer_id,
+        anycubic_controls=raw_data.get("anycubic_controls") if printer.printer_type == "anycubic" else None,
         name=printer.name,
         connected=state.connected,
         state=state.state,
@@ -3750,6 +3773,11 @@ async def set_print_speed(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    if printer.printer_type == "anycubic":
+        capabilities = _anycubic_control_capabilities(printer, client)
+        if mode not in capabilities["speed_modes"]:
+            raise HTTPException(422, "This Anycubic printer supports speed modes 1, 2 and 3")
+        return _anycubic_control_result(client.set_print_speed(mode))
     success = client.set_print_speed(mode)
     if not success:
         raise HTTPException(500, "Failed to set print speed")
@@ -3761,7 +3789,7 @@ async def set_print_speed(
 @router.post("/{printer_id}/temperature/nozzle")
 async def set_nozzle_temperature(
     printer_id: int,
-    target: int = Query(..., ge=0, le=320, description="Target nozzle temperature in Celsius; 0 turns heating off"),
+    target: int = Query(..., ge=0, le=350, description="Target nozzle temperature in Celsius; 0 turns heating off"),
     nozzle: int = Query(0, ge=0, le=1, description="Nozzle/extruder index (0=right/default, 1=left)"),
     _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
     db: AsyncSession = Depends(get_db, scope="function"),
@@ -3776,6 +3804,13 @@ async def set_nozzle_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    if printer.printer_type == "anycubic":
+        capabilities = _anycubic_control_capabilities(printer, client)
+        if nozzle != 0 or target > capabilities["nozzle_max"]:
+            raise HTTPException(422, "The nozzle selection or target exceeds this Anycubic printer's limits")
+        return _anycubic_control_result(client.set_nozzle_temperature(target, nozzle))
+    if target > 320:
+        raise HTTPException(422, "The nozzle target must not exceed 320 degrees")
     success = client.set_nozzle_temperature(target, nozzle)
     if not success:
         raise HTTPException(500, "Failed to set nozzle temperature")
@@ -3800,6 +3835,11 @@ async def set_bed_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    if printer.printer_type == "anycubic":
+        capabilities = _anycubic_control_capabilities(printer, client)
+        if target > capabilities["bed_max"]:
+            raise HTTPException(422, "The bed target exceeds this Anycubic printer's limits")
+        return _anycubic_control_result(client.set_bed_temperature(target))
     success = client.set_bed_temperature(target)
     if not success:
         raise HTTPException(500, "Failed to set bed temperature")
@@ -3883,6 +3923,13 @@ async def set_fan_speed(
     client = printer_manager.get_client(printer_id)
     if not client:
         raise HTTPException(400, "Printer not connected")
+
+    if printer.printer_type == "anycubic":
+        capabilities = _anycubic_control_capabilities(printer, client)
+        if fan not in capabilities["fans"]:
+            raise HTTPException(400, "This fan or its control scale has not been reported by the Anycubic printer")
+        assert isinstance(client, AnycubicMQTTClient)  # Validated by the capability helper.
+        return _anycubic_control_result(client.set_fan_percent(fan, speed))
 
     # Presence gate for the accessory fan. Without this, aux2 is accepted for
     # every model and an A1 would be sent M106 P10 for a fan it does not have.

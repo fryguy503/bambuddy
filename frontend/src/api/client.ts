@@ -5,6 +5,12 @@ import { batched, byField, byId } from './batch';
 
 const API_BASE = '/api/v1';
 
+export interface MakeronlineModel {
+  model_id: number;
+  design: { title: string; url: string; license: number | null };
+  instances: { id: number; filename: string; printer: string }[];
+}
+
 export class ApiError extends Error {
   status: number;
   /** Stable error code from a structured backend detail (`{code, message}`).
@@ -636,6 +642,7 @@ export interface UsbCamera {
 }
 
 export interface PrinterStatus {
+  anycubic_controls?: { ready: boolean; nozzle_max: number; bed_max: number; fans: string[]; speed_modes: number[] } | null;
   id: number;
   name: string;
   connected: boolean;
@@ -6515,6 +6522,38 @@ export const api = {
     );
   },
 
+  listAnycubicFiles: (printerId: number, path = '/', page = 1) =>
+    request<AnycubicFileCatalog>(`/printers/${printerId}/anycubic/files?${new URLSearchParams({ path, page: String(page) })}`),
+  getAnycubicTransfer: (printerId: number, id: string) =>
+    request<AnycubicTransfer>(`/printers/${printerId}/anycubic/files/uploads/${encodeURIComponent(id)}`),
+  cancelAnycubicTransfer: (printerId: number, id: string) =>
+    request<AnycubicTransfer>(`/printers/${printerId}/anycubic/files/uploads/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  uploadAnycubicFile: (printerId: number, file: File, progress?: (percent: number) => void): Promise<AnycubicTransfer> =>
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/printers/${printerId}/anycubic/files/upload`);
+      xhr.withCredentials = true;
+      xhr.timeout = 300000;
+      if (authToken) xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+      xhr.upload.onprogress = event => { if (event.lengthComputable) progress?.(Math.round(event.loaded * 100 / event.total)); };
+      xhr.onload = () => {
+        try {
+          const result = JSON.parse(xhr.responseText);
+          if (xhr.status >= 200 && xhr.status < 300) resolve(result);
+          else reject(new Error(typeof result.detail === 'string' ? result.detail : `HTTP ${xhr.status}`));
+        } catch { reject(new Error('File transfer returned an invalid response')); }
+      };
+      xhr.onerror = () => reject(new Error('Transfer interrupted; check the printer file list before retrying'));
+      xhr.ontimeout = () => reject(new Error('Transfer timed out; check the printer file list before retrying'));
+      xhr.onabort = () => reject(new Error('Transfer interrupted; check the printer file list before retrying'));
+      const body = new FormData();
+      body.append('file', file);
+      xhr.send(body);
+    }),
+
+  getMakeronlineStatus: () => request<{ connected: boolean; region: string }>('/makeronline/status'),
+  resolveMakeronlineUrl: (url: string) => request<MakeronlineModel>('/makerworld/resolve', { method: 'POST', body: JSON.stringify({ url }) }),
+  importMakeronlineFile: (model_id: number, profile_id: number) => request<MakerworldImportResponse>('/makerworld/import', { method: 'POST', body: JSON.stringify({ source_type: 'makeronline', model_id, profile_id }) }),
   // MakerWorld URL-paste import flow.
   getMakerworldStatus: () =>
     request<MakerworldStatus>('/makerworld/status'),
@@ -8947,6 +8986,24 @@ export interface DiscoveredPrinter {
   ip_address: string;
   model: string | null;
   discovered_at: string | null;
+}
+
+export interface AnycubicFileCatalog {
+  path: string;
+  page: number;
+  pages: number;
+  total: number;
+  files: { name: string; path: string; size: number | null; is_dir: boolean }[];
+}
+
+export interface AnycubicTransfer {
+  id: string;
+  printer_id: number;
+  filename: string;
+  size: number;
+  sent: number;
+  phase: 'uploading' | 'verifying' | 'completed' | 'uploaded_unverified' | 'failed' | 'unknown' | 'cancelled';
+  message: string | null;
 }
 
 export interface DiscoveryStatus {

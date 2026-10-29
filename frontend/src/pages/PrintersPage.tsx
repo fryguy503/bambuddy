@@ -173,6 +173,7 @@ import { AnycubicAceStatus } from '../components/AnycubicAceStatus';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { BulkPrinterToolbar, type PrinterState } from '../components/BulkPrinterToolbar';
 import { FileManagerModal } from '../components/FileManagerModal';
+import { AnycubicFilesModal } from '../components/AnycubicFilesModal';
 import { useEmbeddedCameras } from '../contexts/EmbeddedCameraContext';
 import { CameraWall } from '../components/CameraWall';
 import { DEFAULT_CAM_WALL_TILE_SIZE } from '../components/camWallTileSize';
@@ -4563,8 +4564,11 @@ function PrinterCard({
               const rightNozzleSlot = status.nozzle_rack?.find(s => s.id === 0);
               // Single-nozzle models (H2D, H2C): use the primary nozzle (id 0)
               const singleNozzleSlot = rightNozzleSlot || leftNozzleSlot;
-              const canUseStatusControls = !isAnycubic && status.connected && hasPermission('printers:control');
-              const statusControlTitle = canUseStatusControls ? undefined : t('printers.permission.noControl');
+              const canUseStatusControls = status.connected && hasPermission('printers:control') && (!isAnycubic || status.anycubic_controls?.ready === true);
+              const statusControlTitle = canUseStatusControls ? undefined
+                : !hasPermission('printers:control') ? t('printers.permission.noControl')
+                : !status.connected ? t('printers.status.offline')
+                : t('printers.anycubic.waitingForControls');
               const statusControlClass = `relative text-center px-2 py-1.5 bg-bambu-dark rounded-lg flex-1 flex flex-col justify-center items-center transition-colors ${
                 canUseStatusControls ? 'cursor-pointer hover:bg-bambu-dark-tertiary' : 'cursor-default opacity-80'
               }`;
@@ -4573,7 +4577,7 @@ function PrinterCard({
               // the widget there is at best dead UI and at worst suggests a
               // control that does nothing. Mirrors the enclosure-door badge
               // gate above.
-              const hasChamberFan = MODELS_WITH_CHAMBER_FAN.has(printer.model ?? '');
+              const hasChamberFan = isAnycubic ? status.big_fan2_speed != null : MODELS_WITH_CHAMBER_FAN.has(printer.model ?? '');
               // On P2S/X2D the big_fan2 fan is the dedicated chamber EXHAUST fan
               // ("Exhaust" in Bambu's naming) and is an add-on kit, not preinstalled:
               // show it only when the printer actually reports it (airduct part id 3,
@@ -4645,7 +4649,7 @@ function PrinterCard({
                       },
                     ]
                   : []),
-              ];
+              ].filter(item => !isAnycubic || status.anycubic_controls?.fans.includes(item.key));
 
               return (
                 <>
@@ -4728,9 +4732,9 @@ function PrinterCard({
                             title="Set Nozzle Temperature"
                             unit="°C"
                             customMin={0}
-                            customMax={320}
+                            customMax={isAnycubic ? status.anycubic_controls?.nozzle_max ?? 320 : 320}
                             isPending={nozzleTemperatureMutation.isPending}
-                            options={buildPresetOptions(nozzleTempPresets, 'C')}
+                            options={buildPresetOptions(nozzleTempPresets, 'C').filter(option => !isAnycubic || option.value <= (status.anycubic_controls?.nozzle_max ?? 320))}
                             onClose={() => setStatusControlMenu(null)}
                             onSubmit={(target) => nozzleTemperatureMutation.mutate({ target, nozzle: status.active_extruder ?? 0 })}
                           />
@@ -4763,9 +4767,9 @@ function PrinterCard({
                           title="Set Bed Temperature"
                           unit="°C"
                           customMin={0}
-                          customMax={140}
+                          customMax={isAnycubic ? status.anycubic_controls?.bed_max ?? 120 : 140}
                           isPending={bedTemperatureMutation.isPending}
-                          options={buildPresetOptions(bedTempPresets, 'C')}
+                          options={buildPresetOptions(bedTempPresets, 'C').filter(option => !isAnycubic || option.value <= (status.anycubic_controls?.bed_max ?? 120))}
                           onClose={() => setStatusControlMenu(null)}
                           onSubmit={(target) => bedTemperatureMutation.mutate(target)}
                         />
@@ -4926,6 +4930,26 @@ function PrinterCard({
 
                   <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-2">
                     {/* Left: Secondary controls */}
+                    {isAnycubic && (
+                      <div className="relative flex gap-2">
+                        <button type="button" className={iconControlClass}
+                          disabled={!isPrinting || !hasPermission('printers:control') || !status.anycubic_controls?.ready}
+                          title={!hasPermission('printers:control') ? t('printers.permission.noControl') : t('printers.speed.title')}
+                          onClick={() => setShowSpeedMenu(showSpeedMenu === printer.id ? null : printer.id)}>
+                          <Gauge className="w-4 h-4" />
+                        </button>
+                        {showSpeedMenu === printer.id && (
+                          <div className="absolute bottom-full left-0 mb-1 z-50 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-lg py-1">
+                            {[{ mode: 1, key: 'silent' }, { mode: 2, key: 'standard' }, { mode: 3, key: 'sport' }].map(({ mode, key }) => (
+                              <button key={mode} type="button" className="block w-full px-3 py-1.5 text-left text-xs hover:bg-bambu-dark-tertiary"
+                                onClick={() => { printSpeedMutation.mutate(mode); setShowSpeedMenu(null); }}>
+                                {t(`printers.speed.${key}`)}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {!isAnycubic && <div className="flex flex-wrap items-center gap-2 min-w-0">
                       <button
                         onClick={() => chamberLightMutation.mutate(!status.chamber_light)}
@@ -5304,7 +5328,7 @@ function PrinterCard({
             })()}
 
             {/* AMS Units - 2-Column Grid Layout */}
-            {isAnycubic && viewMode === 'expanded' && <AnycubicAceStatus units={amsData} />}
+            {isAnycubic && viewMode === 'expanded' && <AnycubicAceStatus units={amsData} printerId={printer.id} printerName={printer.name} />}
             {!isAnycubic && (amsData?.length > 0 || status.vt_tray.length > 0) && viewMode === 'expanded' && (() => {
               // Separate regular AMS (4-tray) from HT AMS (1-tray), by unit id
               const regularAms = amsData.filter(ams => !isAmsHtUnit(ams.id));
@@ -6704,7 +6728,7 @@ function PrinterCard({
                     onClose={() => setCameraMenuAnchor(null)}
                   />
                 )}
-                {!isAnycubic && <Button
+                <Button
                   variant="secondary"
                   size="sm"
                   onClick={() => setShowFileManager(true)}
@@ -6713,7 +6737,7 @@ function PrinterCard({
                   className={footerIconButtonClass}
                 >
                   <HardDrive className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
-                </Button>}
+                </Button>
                 {/* Shown whatever the printer is doing (#2849): this uploads a
                     file and queues it, which a busy or offline printer is no
                     reason to refuse -- it only means the item waits. Hiding it
@@ -6753,7 +6777,7 @@ function PrinterCard({
 
       {/* File Manager Modal */}
       {showFileManager && (
-        <FileManagerModal
+        isAnycubic ? <AnycubicFilesModal printerId={printer.id} printerName={printer.name} onClose={() => setShowFileManager(false)} /> : <FileManagerModal
           printerId={printer.id}
           printerName={printer.name}
           onClose={() => setShowFileManager(false)}

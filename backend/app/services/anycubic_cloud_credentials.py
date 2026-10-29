@@ -22,6 +22,7 @@ _DISCONNECTED_PREFIX = "anycubic-disconnected:v1:"
 @dataclass(repr=False)
 class AnycubicCredentials:
     token: str | None = field(default=None, repr=False)
+    makeronline_token: str | None = field(default=None, repr=False)
     region: Literal["global", "china"] = "global"
     user_id: str | None = None
     display_name: str | None = None
@@ -54,6 +55,15 @@ async def load_credentials(db: AsyncSession, user: User | None) -> AnycubicCrede
         if not isinstance(body, dict) or body.get("region", "global") not in ("global", "china"):
             raise ValueError
         token = body.get("token")
+        makeronline_token = body.get("makeronline_token")
+        if makeronline_token is not None and (
+            not isinstance(makeronline_token, str)
+            or not 1 <= len(makeronline_token) <= 16384
+            or not makeronline_token.isascii()
+            or any(ord(c) < 33 or ord(c) > 126 for c in makeronline_token)
+            or body.get("region", "global") != "global"
+        ):
+            raise ValueError
         if token is not None and (not isinstance(token, str) or not 1 <= len(token) <= 16384):
             raise ValueError
         for key in ("user_id", "display_name"):
@@ -61,6 +71,7 @@ async def load_credentials(db: AsyncSession, user: User | None) -> AnycubicCrede
                 raise ValueError
         return AnycubicCredentials(
             token=token,
+            makeronline_token=makeronline_token,
             region=body.get("region", "global"),
             user_id=body.get("user_id"),
             display_name=body.get("display_name"),
@@ -79,6 +90,7 @@ async def store_credentials(
     *,
     expected: str | None,
     token: str | None = None,
+    makeronline_token: str | None = None,
     region: Literal["global", "china"] = "global",
     user_id: str | None = None,
     display_name: str | None = None,
@@ -96,6 +108,7 @@ async def store_credentials(
         body = json.dumps(
             {
                 "token": token,
+                "makeronline_token": makeronline_token,
                 "region": region,
                 "user_id": user_id,
                 "display_name": display_name,

@@ -45,6 +45,7 @@ function AnycubicCloudAccount({ actor }: { actor: number | string }) {
     ]);
     queryClient.removeQueries({ queryKey: PROFILE_CACHE });
     queryClient.removeQueries({ queryKey: DETAIL_CACHE });
+    queryClient.removeQueries({ queryKey: ['makeronline-status'] });
   }, [queryClient]);
 
   const expireSession = useCallback(() => {

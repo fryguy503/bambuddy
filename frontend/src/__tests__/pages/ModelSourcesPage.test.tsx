@@ -11,7 +11,7 @@ import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
 import { server } from '../mocks/server';
 import { ModelSourcesPage } from '../../pages/ModelSourcesPage';
-import { setAuthToken } from '../../api/client';
+import { api, setAuthToken } from '../../api/client';
 
 function sources(opts: { manyfoldConfigured: boolean }) {
   const served = { status: 0 };
@@ -55,6 +55,34 @@ function signedInWith(permissions: string[]) {
 }
 
 describe('ModelSourcesPage', () => {
+  it('opens MakerOnline with the Profiles account and imports the selected native file id', async () => {
+    const user = userEvent.setup();
+    sources({ manyfoldConfigured: false });
+    signedInWith(['anycubic_cloud:read', 'library:upload']);
+    vi.spyOn(api, 'getMakeronlineStatus').mockResolvedValue({ connected: true, region: 'global' });
+    const resolve = vi.spyOn(api, 'resolveMakeronlineUrl').mockResolvedValue({ model_id: 12, design: { title: 'S1 Project', url: 'https://www.makeronline.com/en/model/example/12.html', license: 1 }, instances: [{ id: 34, filename: 'Project.3mf', printer: 'Kobra S1' }] });
+    const upload = vi.spyOn(api, 'importMakeronlineFile').mockResolvedValue({ library_file_id: 5, filename: 'Project.3mf', folder_id: 2, profile_id: 34, was_existing: false });
+    render(<ModelSourcesPage />);
+    const url = await screen.findByLabelText('MakerOnline URL');
+    await user.type(url, 'https://www.makeronline.com/en/model/example/12.html');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText('Project.3mf')).toBeInTheDocument();
+    expect(resolve).toHaveBeenCalledWith('https://www.makeronline.com/en/model/example/12.html');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await waitFor(() => expect(upload).toHaveBeenCalledWith(12, 34));
+    expect(await screen.findByText('Success')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Access Token')).not.toBeInTheDocument();
+  });
+
+  it('directs an older Profiles connection to reconnect without collecting a second token', async () => {
+    sources({ manyfoldConfigured: false });
+    signedInWith(['anycubic_cloud:read']);
+    vi.spyOn(api, 'getMakeronlineStatus').mockResolvedValue({ connected: false, region: 'global' });
+    render(<ModelSourcesPage />);
+    expect(await screen.findByText(/Downloads reuse your Global Anycubic Cloud connection/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Profiles' })).toHaveAttribute('href', '/profiles?tab=anycubic');
+    expect(screen.queryByLabelText('Access Token')).not.toBeInTheDocument();
+  });
   beforeEach(() => {
     URL.createObjectURL = vi.fn(() => 'blob:preview');
     URL.revokeObjectURL = vi.fn();

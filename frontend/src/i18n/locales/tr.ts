@@ -287,13 +287,16 @@ export default {
       failed: 'Değişiklik kaydedilemedi: {{error}}',
     },
     anycubic: {
+      waitingForControls: "Güncel yazıcı özellikleri bekleniyor",
+      filesHelp: "Bu Anycubic modeli için dilimlenmiş .gcode yükleyin. Yükleme baskıyı başlatmaz.",
+      verifyingFile: "Dosya yazıcı kataloğunda doğrulanıyor…",
       builtInFeeder: "Dahili besleyici",
       manufacturer: "Üretici",
       discover: "Anycubic yazıcıyı keşfet",
       fingerprint: "TLS sertifika parmak izi (SHA-256)",
       trustFingerprint: "Bu yazıcıyı doğruladım ve sertifikasına güveniyorum.",
       connectionHelp: "LAN modunu açın ve yukarıdaki adresteki yazıcıyı keşfedin. Sertifikayı güvenilir bir yerel ağda doğrulayın.",
-      supportNote: "İzleme, LAN kamerasını görüntüleme, duraklatma, sürdürme ve durdurma desteklenir. ACE yuvaları salt okunurdur. Dosya aktarımı kullanılamaz.",
+      supportNote: "LAN izleme, kamera, dosya yükleme ve kullanılabilir kontroller desteklenir. ACE yuvaları salt okunurdur.",
       discoveryFailed: "Keşif başarısız. Adresi ve LAN modunu kontrol edin.",
       identityMismatch: "Bu adres başka bir yazıcıya ait. Seri numarası eşleşmelidir.",
       scanHelp: "Yazıcının LAN alt ağını seçin (örneğin 192.168.1.0/24). Taramadan önce LAN modunu açın, ardından bir sonuç seçip aşağıdaki sertifikayı inceleyin.",
@@ -7825,6 +7828,8 @@ export default {
   },
 
   modelSources: {
+    makeronlineHelp: "3MF, STL veya STEP dosyalarını içe aktarmak için MakerOnline bağlantısı yapıştırın. Baskıdan önce yazıcınız için dilimleyin.",
+    makeronlineConnect: "İndirmeler global Anycubic Cloud bağlantısını kullanır. Profiller bölümünde Slicer Next erişim belirteciyle bağlanın.",
     title: 'Model Kaynakları',
     tabMakerworld: 'MakerWorld',
     tabManyfold: 'Manyfold',

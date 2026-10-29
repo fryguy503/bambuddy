@@ -1,9 +1,11 @@
-# Experimental Kobra S1 LAN support and optional Anycubic Cloud Profiles
+# Experimental Anycubic LAN support, Cloud Profiles and MakerOnline
 
 Bambuddy's Bambu MQTT, FTPS, camera and AMS automation cannot communicate with
 an Anycubic Kobra S1. This change adds an independent LAN provider for status,
 temperatures, progress and read-only inventory for two ACE units/eight slots,
-plus pause/resume/stop and shared LAN camera viewing/snapshots. A separate, optional Anycubic Cloud Profiles tab reads
+plus pause/resume/stop, bounded temperature/fan/speed controls, upload-only G-code
+transfer and shared LAN camera viewing/snapshots. ACE displays reported remaining
+percentages and opens the existing sensor history. A separate, optional Anycubic Cloud Profiles tab reads
 the account's native slicer-configuration ZIP for browsing and JSON export.
 
 LAN onboarding requires explicit review of the printer's TLS fingerprint.
@@ -23,9 +25,18 @@ retain native settings and material variants; connection secrets are masked in
 details and export. Unknown types remain visible. Nothing is automatically
 imported into the shared Local Profiles store or Bambu filament-ID resolver.
 
+MakerOnline is registered with the existing model-provider interface. Its Model
+Sources tab resolves pasted links and imports model/project files into an owned
+library folder. It reuses the encrypted Global Slicer SSO token from Profiles,
+requires Cloud read plus library upload permission, and checks the account
+revision before persisting a download. Workbench tokens are not sent to the
+website; account headers are not sent to signed storage URLs.
+
 Cloud access sends no printer commands and does not change LAN operation.
-Cloud profile writes, password/OAuth login, printer
-file transfer/print submission, archival and ACE mutations are not included.
+Cloud profile writes, password/OAuth login, print submission, archival and ACE
+mutations are not included. LAN uploads obtain the current session endpoint,
+validate the sliced model, use a unique filename and confirm its catalog size;
+they never start or enqueue a print. Uncertain transfers are not replayed.
 Configuration downloads currently admit only the observed Anycubic storage
 host; another regional host needs separate verification. This is experimental
 support, not full feature parity or completed hardware/account acceptance.
@@ -49,9 +60,16 @@ support, not full feature parity or completed hardware/account acceptance.
   slots. No control command was sent. Material changes, restart/reconnect and
   physical pause/resume/stop acceptance remain pending. No live Cloud account
   acceptance is claimed.
+- An upload-only physical S1 test transferred an existing 8,530,707-byte sliced
+  export and confirmed its unique filename and matching size in the catalog.
+  The probe blocked every non-read MQTT operation, including print start.
+  Physical acceptance of heater/fan/speed changes and RFID remaining estimates
+  is pending. No settings were changed by these tests.
 - A camera-only LAN probe activated the S1 camera and decoded a live JPEG.
   Multiple-viewer, snapshot and cleanup checks use isolated fixtures; the
-  updated Synology browser path and cameras on other models remain unverified.
+  operator has since reported the Synology camera working. Other models remain
+  unverified. MakerOnline has public API/fixture validation; a real account
+  download test remains pending.
 - The exact Linux CI environment and full upstream CI pipeline were not run.
 
 ## Before submission
@@ -67,4 +85,5 @@ support, not full feature parity or completed hardware/account acceptance.
 - Record LAN hardware and Cloud account acceptance separately using the setup
   guides. Verify any additional account download host before admitting it.
 
-No source, issue, PR, documentation or release was published during this work.
+Source is published on the fork's testing branch. An upstream issue/PR, wiki
+contribution and release have not been submitted by this change.

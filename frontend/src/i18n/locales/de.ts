@@ -287,13 +287,16 @@ export default {
       failed: 'Die Änderung konnte nicht gespeichert werden: {{error}}',
     },
     anycubic: {
+      waitingForControls: "Warte auf aktuelle Druckerfunktionen",
+      filesHelp: "Lade für dieses Anycubic-Modell geslicte .gcode-Dateien hoch. Der Upload startet keinen Druck.",
+      verifyingFile: "Datei im Druckerverzeichnis wird bestätigt…",
       builtInFeeder: "Integrierter Filamenteinzug",
       manufacturer: "Hersteller",
       discover: "Anycubic-Drucker erkennen",
       fingerprint: "TLS-Zertifikat-Fingerabdruck (SHA-256)",
       trustFingerprint: "Ich habe diesen Drucker überprüft und vertraue seinem Zertifikat.",
       connectionHelp: "LAN-Modus aktivieren und den Drucker an der obigen Adresse erkennen. Das Zertifikat in einem vertrauenswürdigen lokalen Netzwerk überprüfen.",
-      supportNote: "Unterstützt Überwachung, LAN-Kameraanzeige sowie Pause, Fortsetzen und Stoppen. ACE-Steckplätze sind schreibgeschützt. Dateiübertragung ist nicht verfügbar.",
+      supportNote: "Unterstützt LAN-Überwachung, Kamera, Datei-Upload und verfügbare Drucksteuerung. ACE-Steckplätze sind schreibgeschützt.",
       discoveryFailed: "Erkennung fehlgeschlagen. Adresse und LAN-Modus überprüfen.",
       identityMismatch: "Diese Adresse gehört zu einem anderen Drucker. Die Seriennummer muss übereinstimmen.",
       scanHelp: "Wähle das LAN-Subnetz des Druckers (z. B. 192.168.1.0/24). Aktiviere vor dem Scannen den LAN-Modus, wähle dann ein Ergebnis und prüfe unten das Zertifikat.",
@@ -7886,6 +7889,8 @@ export default {
   },
 
   modelSources: {
+    makeronlineHelp: "Füge einen MakerOnline-Modelllink ein, um 3MF-, STL- oder STEP-Dateien zu importieren. Vor dem Druck für deinen Drucker slicen.",
+    makeronlineConnect: "Downloads nutzen die globale Anycubic-Cloud-Verbindung. Unter Profile mit einem Slicer-Next-Zugriffstoken verbinden.",
     title: 'Modellquellen',
     tabMakerworld: 'MakerWorld',
     tabManyfold: 'Manyfold',

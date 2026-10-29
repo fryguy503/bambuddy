@@ -13,18 +13,23 @@ class AnycubicModel:
     model_id: str
     name: str
     ace_ids: tuple[int, ...] = (0, 1)
+    # Installed Slicer Next 2.0.0.3 model bounds. Firmware limits may lower
+    # these. Values bound controls, not proof of a feature's presence.
+    nozzle_max: int = 300
+    bed_max: int = 110
+    bed_idle_max: int | None = None
 
 
 MODELS = {
     model.model_id: model
     for model in (
-        AnycubicModel("20025", "Kobra S1"),
-        AnycubicModel("20029", "Kobra S1 Max", (0, 1, 2, 3)),
-        AnycubicModel("20024", "Kobra 3"),
+        AnycubicModel("20025", "Kobra S1", nozzle_max=320, bed_max=120),
+        AnycubicModel("20029", "Kobra S1 Max", (0, 1, 2, 3), nozzle_max=350, bed_max=120),
+        AnycubicModel("20024", "Kobra 3", bed_idle_max=100),
         AnycubicModel("20027", "Kobra 3 V2"),
-        AnycubicModel("20026", "Kobra 3 Max"),
-        AnycubicModel("20028", "Kobra 4"),
-        AnycubicModel("20030", "Kobra X", (-1, 0, 1, 2, 3)),
+        AnycubicModel("20026", "Kobra 3 Max", nozzle_max=260, bed_max=100, bed_idle_max=90),
+        AnycubicModel("20028", "Kobra 4", bed_idle_max=100),
+        AnycubicModel("20030", "Kobra X", (-1, 0, 1, 2, 3), bed_idle_max=100),
     )
 }
 

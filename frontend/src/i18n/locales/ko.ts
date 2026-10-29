@@ -281,13 +281,16 @@ export default {
       failed: '변경 사항을 저장하지 못했습니다: {{error}}',
     },
     anycubic: {
+      waitingForControls: "프린터의 현재 기능을 기다리는 중",
+      filesHelp: "이 Anycubic 모델용으로 슬라이스한 .gcode를 업로드하세요. 업로드는 인쇄를 시작하지 않습니다.",
+      verifyingFile: "프린터 파일 목록에서 확인 중…",
       builtInFeeder: "내장 피더",
       manufacturer: "제조사",
       discover: "Anycubic 프린터 검색",
       fingerprint: "TLS 인증서 지문 (SHA-256)",
       trustFingerprint: "이 프린터를 확인했으며 인증서를 신뢰합니다.",
       connectionHelp: "LAN 모드를 켜고 위 주소의 프린터를 검색하세요. 신뢰할 수 있는 로컬 네트워크에서 인증서를 확인하세요.",
-      supportNote: "상태 모니터링, LAN 카메라 보기, 일시 중지, 재개 및 중지를 지원합니다. ACE 슬롯은 읽기 전용입니다. 파일 전송은 지원하지 않습니다.",
+      supportNote: "LAN 모니터링, 카메라, 파일 업로드 및 지원되는 제어를 제공합니다. ACE 슬롯은 읽기 전용입니다.",
       discoveryFailed: "검색하지 못했습니다. 주소와 LAN 모드를 확인하세요.",
       identityMismatch: "이 주소는 다른 프린터의 주소입니다. 일련번호가 일치해야 합니다.",
       scanHelp: "프린터의 LAN 서브넷을 선택하세요(예: 192.168.1.0/24). 검색 전에 LAN 모드를 켜고, 검색 결과를 선택한 다음 아래에서 인증서를 확인하세요.",
@@ -7331,6 +7334,8 @@ export default {
     noHistory: '아직 감지 없음.'
   },
   modelSources: {
+    makeronlineHelp: "MakerOnline 모델 링크를 붙여 넣어 3MF, STL 또는 STEP 파일을 가져오세요. 인쇄 전 사용 중인 프린터용으로 슬라이스하세요.",
+    makeronlineConnect: "다운로드는 글로벌 Anycubic Cloud 연결을 사용합니다. 프로필에서 Slicer Next 액세스 토큰으로 연결하세요.",
     title: '모델 소스',
     tabMakerworld: 'MakerWorld',
     tabManyfold: 'Manyfold',

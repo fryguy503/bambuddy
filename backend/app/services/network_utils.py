@@ -263,7 +263,10 @@ def get_all_interface_ips(include_excluded: bool = False) -> list[dict]:
                 continue
 
             ip = addr_info.get("local", "")
-            prefix = addr_info.get("prefixlen", 24)
+            prefix = addr_info.get("prefixlen")
+            if type(prefix) is not int or not 0 <= prefix <= 32:
+                # An address alone does not establish the local subnet.
+                continue
             label = addr_info.get("label", ifname)
 
             try:

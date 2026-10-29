@@ -122,6 +122,41 @@ describe('Anycubic onboarding', () => {
 });
 
 describe('ACE monitoring', () => {
+  it('allows reported native temperature controls while printing', async () => {
+    const user = userEvent.setup();
+    const setTemperature = vi.spyOn(api, 'setNozzleTemperature').mockResolvedValue({ success: true, message: 'queued' });
+    server.use(
+      http.get('/api/v1/printers/', () => HttpResponse.json([{ id: 1, name: 'Control S1', printer_type: 'anycubic', model: 'Kobra S1', serial_number: 'fixture', ip_address: '192.168.1.50', is_active: true, auto_archive: false, nozzle_count: 1 }])),
+      http.get('/api/v1/printers/:id/status', () => HttpResponse.json({ connected: true, state: 'RUNNING', progress: 20, temperatures: { nozzle: 210, bed: 60 }, vt_tray: [], ams: [], anycubic_controls: { ready: true, nozzle_max: 320, bed_max: 120, fans: ['part'], speed_modes: [1, 2, 3] } })),
+    );
+    render(<PrintersPage />);
+    await user.click(await screen.findByText('210°C'));
+    await user.click(await screen.findByRole('button', { name: '220 C' }));
+    await waitFor(() => expect(setTemperature).toHaveBeenCalledWith(1, 220, 0));
+    expect(screen.queryByTitle('You do not have permission to control printers')).not.toBeInTheDocument();
+  });
+  it('shows a reported zero and low fill while leaving unknown amounts distinct', () => {
+    render(<AnycubicAceStatus units={[{ id: 0, tray: [
+      { id: 0, tray_type: 'PLA', remain: 0 },
+      { id: 1, tray_type: 'PETG', remain: 9 },
+      { id: 2, tray_type: 'PLA' },
+      { id: 3, exists: false, remain: 100 },
+    ] }] as AMSUnit[]} />);
+    expect(screen.getByText('0%')).toBeInTheDocument();
+    expect(screen.getByText('9%')).toBeInTheDocument();
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    expect(screen.getAllByRole('progressbar').map(bar => bar.getAttribute('aria-valuenow'))).toEqual(['0', '9']);
+    expect(screen.queryByText('100%')).not.toBeInTheDocument();
+  });
+
+  it('opens the selected ACE sensor history with the physical unit id', async () => {
+    const user = userEvent.setup();
+    const history = vi.spyOn(api, 'getAMSHistory').mockResolvedValue({ printer_id: 7, ams_id: 1, data: [], min_humidity: null, max_humidity: null, avg_humidity: null, min_temperature: null, max_temperature: null, avg_temperature: null });
+    render(<AnycubicAceStatus printerId={7} printerName="Workshop S1" units={[{ id: 1, humidity: 30, temp: 35, tray: [] }] as AMSUnit[]} />);
+    await user.click(screen.getByRole('button', { name: '35°C' }));
+    await waitFor(() => expect(history).toHaveBeenCalledWith(7, 1, 24));
+    expect(screen.getByText('ACE 2 History')).toBeInTheDocument();
+  });
   it('labels the X built-in feeder separately and suppresses dry-box readings', () => {
     render(<AnycubicAceStatus units={[
       { id: -1, humidity: 0, temp: 0, tray: [{ id: 0, tray_type: 'PLA' }] },
@@ -185,7 +220,7 @@ describe('ACE monitoring', () => {
     expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Print' })).not.toBeInTheDocument();
-    expect(screen.queryByTitle('Browse Files')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Browse printer files')).toBeInTheDocument();
     expect(screen.queryByTestId('speed-control')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Skip objects')).not.toBeInTheDocument();
     expect(slotPresets).not.toHaveBeenCalled();

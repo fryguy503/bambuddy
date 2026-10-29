@@ -6,8 +6,10 @@ silently returns nothing and the VP bind-interface dropdown comes up empty.
 Everything that isn't Linux must go through the cross-platform psutil path.
 """
 
+import json
 import socket
 from collections import namedtuple
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.app.services import network_utils
@@ -15,6 +17,26 @@ from backend.app.services import network_utils
 # Mimic the shape of psutil.net_if_addrs() / net_if_stats() entries we read.
 _Addr = namedtuple("snicaddr", ["family", "address", "netmask", "broadcast", "ptp"])
 _Stats = namedtuple("snicstats", ["isup", "duplex", "speed", "mtu", "flags"])
+
+
+def test_linux_missing_mask_does_not_guess_a_slash_24():
+    report = [
+        {
+            "ifname": "eth0",
+            "addr_info": [
+                {"family": "inet", "local": "10.42.9.7", "prefixlen": 23},
+                {"family": "inet", "local": "10.10.1.7"},
+            ],
+        }
+    ]
+    with (
+        patch.object(network_utils.sys, "platform", "linux"),
+        patch.object(network_utils, "_IP_CMD", "/sbin/ip"),
+        patch.object(
+            network_utils.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=json.dumps(report))
+        ),
+    ):
+        assert [entry["subnet"] for entry in network_utils.get_all_interface_ips()] == ["10.42.8.0/23"]
 
 
 def _fake_psutil():

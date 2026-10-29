@@ -346,6 +346,8 @@ async def import_instance(
     # which the UI lists anyway; anonymous callers never get this far.
     provider = _provider_for_source(body.source_type)
     current_user = await _authorize_for_provider(provider, provider.import_permission, credentials, x_api_key)
+    for permission in provider.additional_import_permissions:
+        await _authorize_for_provider(provider, permission, credentials, x_api_key)
 
     if body.folder_id is not None:
         # Only into a folder the user may write to (#3201).
@@ -414,6 +416,7 @@ async def import_instance(
             )
 
         download = await service.download(info)
+        await service.validate_before_save()
     except ProviderError as exc:
         raise _map_service_error(exc) from exc
     finally:

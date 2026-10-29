@@ -71,6 +71,10 @@ async def test_slicer_access_token_is_exchanged_without_xx_token_then_identity_i
         identity = await service.validate_token()
         assert identity["user_id"] == "42"
         assert service.account_token == issued
+        assert service.makeronline_token == source
+        await service.close()
+        with pytest.raises(AnycubicCloudAuthError):
+            _ = service.makeronline_token
         assert source not in repr(service)
         assert issued not in repr(identity)
     assert calls == [API_PREFIX + TOKEN_EXCHANGE_PATH, API_PREFIX + USER_INFO_PATH]

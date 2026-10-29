@@ -145,12 +145,16 @@ print history, migrate that data into the volumes before starting this version;
 see Docker's [volume backup and restore guide](https://docs.docker.com/engine/storage/volumes/#back-up-restore-or-migrate-data-volumes).
 The fresh-install recovery above does not change DSM share permissions.
 
-Bridge networking publishes only the web endpoint. Add the Kobra S1 manually by
-its LAN IP; Anycubic's unicast LAN discovery/pairing does not require host
-networking. See [LAN printer setup](anycubic.md). If DSM's firewall restricts the
-connection, allow your clients to reach the chosen web port and the container
-to reach the printer's LAN endpoints. Virtual Printer listener ports are not
-published by this deployment.
+This Linux profile uses host networking so discovery can enumerate the NAS's
+actual interface addresses and netmasks, including secondary addresses. No LAN
+subnet or `/24` mask is assumed. The web server binds only to
+`BAMBUDDY_BIND_ADDRESS:BAMBUDDY_HTTPS_PORT` (port 18443 by default), preserving
+the previous browser URL when updating from bridge mode. Keep optional Virtual
+Printer listeners disabled unless their host ports have been reviewed. See
+[LAN printer setup](anycubic.md). If DSM's firewall restricts the connection,
+allow clients to reach the configured HTTPS endpoint and Bambuddy to reach the
+printer's LAN endpoints. Bridge-mode deployments can still scan an explicitly
+selected subnet, but their network namespace cannot expose the host's LAN mask.
 
 For a supplied certificate, add a read-only certificate mount and the Uvicorn
 certificate settings described in [HTTPS setup](docker-https.md). The image
@@ -161,9 +165,15 @@ validates those files at startup and uses them in preference to generated files.
 ```sh
 cd /volume1/docker/bambuddy-anycubic
 git pull --ff-only
-sudo env DOCKER_BUILDKIT=1 docker compose -f docker-compose.synology.yml build bambuddy
-sudo docker compose -f docker-compose.synology.yml up -d --no-deps --pull never bambuddy
+sudo sh deploy/build-synology.sh
+sudo docker compose -f docker-compose.synology.yml up -d --no-deps --pull never --wait --wait-timeout 120 bambuddy
+sudo docker compose -f docker-compose.synology.yml ps
 ```
+
+The classic builder works on DSM without a Buildx package. Updates preserve the
+Docker-managed data/log volumes and generated certificate. Do not use
+`down --volumes` when updating. The host-network profile retains the configured
+NAS address and port 18443 while exposing real interface masks to discovery.
 
 Building first leaves the current container running if a dependency download
 or build fails. Recreating the service reuses the managed data/log volumes.

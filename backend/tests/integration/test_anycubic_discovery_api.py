@@ -42,6 +42,18 @@ async def test_anycubic_results_are_separate_from_bambu_results(async_client, sc
         assert "tls_fingerprint" not in response.text
 
 
+async def test_detected_subnets_use_os_masks_include_aliases_and_remove_duplicates(async_client):
+    interfaces = [
+        {"subnet": "10.42.8.0/23", "ip": "10.42.9.7", "is_alias": False},
+        {"subnet": "172.22.4.0/22", "ip": "172.22.5.20", "is_alias": True},
+        {"subnet": "10.42.8.0/23", "ip": "10.42.9.8", "is_alias": True},
+    ]
+    with patch.object(routes, "get_all_interface_ips", return_value=interfaces):
+        response = await async_client.get(ROOT + "/info")
+    assert response.status_code == 200
+    assert response.json()["subnets"] == ["10.42.8.0/23", "172.22.4.0/22"]
+
+
 async def test_start_reports_running_before_returning_and_stop_cancels_only_anycubic(async_client, scanner):
     import asyncio
 

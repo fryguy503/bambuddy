@@ -5,10 +5,11 @@ import { Globe, Library } from 'lucide-react';
 
 import { api } from '../api/client';
 import { ManyfoldTab } from '../components/ManyfoldTab';
+import { MakerOnlineTab } from '../components/MakerOnlineTab';
 import { useAuth } from '../contexts/AuthContext';
 import { MakerworldPage } from './MakerworldPage';
 
-type SourceTab = 'makerworld' | 'manyfold';
+type SourceTab = 'makerworld' | 'manyfold' | 'makeronline';
 
 /**
  * Model Sources (#1471): the places models come into the library from, one tab
@@ -33,6 +34,7 @@ export function ModelSourcesPage() {
   const tabs: { id: SourceTab; label: string; icon: typeof Globe }[] = [];
   if (hasPermission('makerworld:view')) tabs.push({ id: 'makerworld', label: t('modelSources.tabMakerworld'), icon: Globe });
   if (showManyfold) tabs.push({ id: 'manyfold', label: t('modelSources.tabManyfold'), icon: Library });
+  if (hasPermission('anycubic_cloud:read')) tabs.push({ id: 'makeronline', label: 'MakerOnline', icon: Globe });
 
   const requested = searchParams.get('tab');
   // A Manyfold-only user, before Manyfold is connected, has no tab; show them
@@ -73,6 +75,7 @@ export function ModelSourcesPage() {
 
       {active === 'makerworld' && <MakerworldPage embedded />}
       {active === 'manyfold' && <ManyfoldTab />}
+      {active === 'makeronline' && <MakerOnlineTab />}
     </div>
   );
 }

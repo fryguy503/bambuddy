@@ -276,6 +276,14 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(units[1]["tray"][2]["tray_color"], "FF0000FF")
         self.assertEqual(units[1]["humidity_raw"], 25)
 
+    def test_full_inventory_clears_no_longer_reported_remaining(self):
+        self.full()
+        value = box()
+        for slot in value["slots"]:
+            slot.pop("consumables_percent", None)
+        self.full([value])
+        self.assertNotIn("remain", self.telemetry.state.raw_data["ams"][0]["tray"][0])
+
     def test_status_four_clears_cached_material_even_when_firmware_repeats_type(self):
         self.full()
         self.telemetry.apply(

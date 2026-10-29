@@ -28,12 +28,13 @@ being treated as an S1. Combo bundles use the underlying printer model.
 | LAN pairing and connection | Signed bootstrap and explicitly reviewed TLS certificate |
 | Printer status | State, temperatures, progress, layers and remaining time |
 | ACE inventory | Model-specific physical unit IDs and four slots per unit; read-only |
-| Print controls | Pause, resume and stop; MQTT delivery is not printer acknowledgement |
+| Print controls | Pause/resume/stop, bounded nozzle/bed targets, reported fans and three native speed modes; MQTT delivery is not printer acknowledgement |
 | Built-in LAN camera | Camera-only activation, HTTP-FLV decoding, shared browser MJPEG and snapshots |
 | External camera | Existing configured external camera support |
-| File transfer, archive, queue dispatch | Unavailable in this provider |
+| LAN files | Native catalog and model-matched sliced `.gcode` upload, progress and catalog confirmation; never starts printing |
+| Archive, queue dispatch and print submission | Unavailable in this provider |
 | ACE drying, load/unload, slot edits, calibration, firmware | Unavailable in this provider |
-| Anycubic Cloud Profiles | Optional read-only account integration; see [Cloud Profiles setup](anycubic-cloud.md) |
+| Anycubic Cloud Profiles / MakerOnline | Optional shared account for profile exports and model imports; see [Cloud setup](anycubic-cloud.md) |
 
 LAN monitoring and control do not require an Anycubic account. The optional
 Cloud Profiles tab uses a separate token connection to browse and export
@@ -44,8 +45,10 @@ slicer presets; it never sends cloud printer commands.
 1. Enable LAN mode on the printer and give Bambuddy access to its local network.
 2. Add a printer and select **Anycubic**.
 3. Use **Scan Subnet** to find LAN-mode printers on the selected subnet, or
-   enter the IP directly. On Synology/Docker, choose the printer's LAN subnet
-   (for example `192.168.1.0/24`), rather than the container's bridge subnet.
+   enter the IP directly. Detected subnets use OS interface addresses and actual
+   netmasks, including secondary addresses, without a fixed LAN range. The
+   Synology profile uses host networking to expose the NAS interfaces;
+   bridge-mode containers can scan a manually selected LAN subnet.
    Select a result to fill in its address, actual model and identity.
 4. Select **Discover Anycubic printer**, review the displayed identity and
    SHA-256 certificate fingerprint, and explicitly trust it before saving.
@@ -66,6 +69,54 @@ the dialog stops its scan. Existing printers are omitted from the result list.
 The existing discovery API accepts `printer_type=anycubic` in the scan request
 body and on the result/status/stop query parameters; omission retains Bambu
 behavior. All discovery endpoints retain the `discovery:scan` permission.
+
+## Settings, ACE fill and history
+
+With fresh idle/printing/paused status, nozzle and bed popovers send the native
+temperature operation for that state. Model limits and any lower reported
+firmware limits apply on both the card and API. Fans appear only after the
+printer reports them and their control scale; percentages are not converted
+to Bambu PWM. Speed uses Anycubic's three modes while printing. Stale or unknown
+capabilities show a waiting state instead of a permission error. Controls
+retain the existing printer-control permission and scope. These settings have
+offline payload tests; physical heater, fan and speed acceptance remains
+pending. No physical setting was changed in testing.
+
+ACE slots show the printer's `consumables_percent`, including a reported zero.
+Missing values display **Unknown**; fill is never fabricated from material or
+color. Empty slots have no fill bar. Whether RFID supplies a useful estimate
+depends on the tag and firmware. An October 28 live read reported zero for the
+one occupied slot; a nearly empty RFID spool comparison is pending. Click an
+ACE humidity or temperature reading for the existing five-minute history.
+Bambu K-factor, RFID reread, load/unload, drying and slot edits are unavailable.
+
+## Upload without starting a print
+
+Open **Browse printer files**, choose `.gcode` sliced with Anycubic Slicer Next
+or OrcaSlicer for the saved printer model, and select **Upload**. Validation
+requires exact model metadata and text G-code. Projects, renamed binary files,
+missing/mismatched model headers and unexpanded templates are rejected. The
+maximum size is 512 MiB. Matching metadata is a compatibility check, not
+certification of sliced settings; review the export in your slicer.
+
+The backend obtains a fresh upload endpoint from the current pinned LAN MQTT
+session, uploads once to that printer's HTTP port 18910 and verifies the unique
+filename and byte size in the native catalog. Progress, errors and catalog
+pages use this native transport. Both printer-file and printer-control
+permission are required. Uploads do not queue or start a print.
+
+New names have unique suffixes to avoid overwriting existing files. A cancelled
+or interrupted transfer can leave a complete or partial file on the printer.
+Inspect its catalog before retrying; transfers are never replayed automatically.
+In-process progress expires after ten minutes and is lost on server restart.
+Files are not automatically deleted from the printer.
+
+On October 28, an upload-only hardware test on S1 firmware 2.7.2.7 transferred
+an existing 8,530,707-byte S1-sliced export and confirmed
+`bambuddy-lan-upload-test-97572bad47bc.gcode` with the matching size in the live
+catalog. The probe rejected all non-read MQTT operations, including print
+start. The file remains on the printer. Other models need separate upload
+acceptance.
 
 The provider uses HTTP port **18910** for the native LAN bootstrap and MQTT over
 TLS on **9883**. Discovered endpoints are bound to the entered printer IP and
@@ -129,8 +180,8 @@ printer address; redirects and environment proxies are disabled. Session paths
 remain on the backend and are omitted from logs and ffmpeg arguments.
 
 On October 28, 2026, a camera-only LAN probe received and decoded a live JPEG
-from the physical Kobra S1 on firmware 2.7.2.7. The updated Synology browser path
-and the other models' cameras still require operator acceptance. External
+from the physical Kobra S1 on firmware 2.7.2.7. The operator subsequently reported
+the Synology camera working; the other models still need acceptance. External
 cameras remain available as an override.
 
 ## Protocol provenance and the prior Orca plugin
@@ -174,9 +225,9 @@ before opening a PR.
 
 Suggested issue scope: an experimental Kobra S1 LAN provider with explicit
 capabilities, read-only two-ACE inventory, reviewed TLS pairing and three basic
-controls, plus an optional, separately scoped Cloud Profiles browser preserving
-Bambu defaults. Treat file upload/printing, archives, Cloud
-profile writes and ACE mutations as separately reviewed additions. The
+controls and native settings, upload-only file browsing/transfer, and optional
+Cloud Profiles/MakerOnline access preserving Bambu defaults. Treat print start,
+archives, Cloud profile writes and ACE mutations as separate additions. The
 [Cloud Profiles guide](anycubic-cloud.md) covers its token-only connection,
 permissions and current storage-host limitation.
 

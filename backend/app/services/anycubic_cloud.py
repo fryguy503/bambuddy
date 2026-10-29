@@ -174,6 +174,7 @@ class AnycubicCloudService:
         self._owns_client = client is None
         self._closed = False
         self._account_id: str | None = None
+        self._makeronline_token: str | None = None
         self._config_download_url: str | None = None
 
     def __repr__(self) -> str:
@@ -196,12 +197,20 @@ class AnycubicCloudService:
             raise AnycubicCloudAuthError()
         return self._token
 
+    @property
+    def makeronline_token(self) -> str | None:
+        """Sensitive SSO access token for the separate MakerOnline authority."""
+        if self._account_id is None:
+            raise AnycubicCloudAuthError()
+        return self._makeronline_token
+
     async def close(self) -> None:
         if self._owns_client and self._client is not None:
             await self._client.aclose()
         self._closed = True
         self._token = None
         self._account_id = None
+        self._makeronline_token = None
         self._config_download_url = None
 
     async def __aenter__(self) -> AnycubicCloudService:
@@ -213,7 +222,9 @@ class AnycubicCloudService:
     async def connect_token(self, token: str) -> dict[str, str]:
         """Validate before replacing a previously accepted account token."""
         candidate = _token_text(token)
+        source_token = None
         if self._region == "global" and _is_slicer_access_token(candidate):
+            source_token = candidate
             exchange = await self._request(
                 "POST",
                 TOKEN_EXCHANGE_PATH,
@@ -228,6 +239,7 @@ class AnycubicCloudService:
         identity = self._identity(body, candidate)
         self._token = candidate
         self._account_id = identity["user_id"]
+        self._makeronline_token = source_token
         self._config_download_url = None
         return identity
 

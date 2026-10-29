@@ -1786,6 +1786,7 @@ def printer_state_to_dict(
         "next_pause": next_pause(state),
         # Fan speeds (0-100 percentage, None if not available)
         "cooling_fan_speed": state.cooling_fan_speed,
+        "anycubic_controls": (state.raw_data or {}).get("anycubic_controls"),
         "big_fan1_speed": state.big_fan1_speed,
         "big_fan2_speed": state.big_fan2_speed,
         "heatbreak_fan_speed": state.heatbreak_fan_speed,

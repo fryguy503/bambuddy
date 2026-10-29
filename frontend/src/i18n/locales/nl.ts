@@ -287,13 +287,16 @@ export default {
       failed: 'De wijziging kon niet worden opgeslagen: {{error}}',
     },
     anycubic: {
+      waitingForControls: "Wachten op actuele printerfuncties",
+      filesHelp: "Upload .gcode gesliced voor dit Anycubic-model. Uploaden start geen afdruk.",
+      verifyingFile: "Bestand in de printercatalogus bevestigen…",
       builtInFeeder: "Ingebouwde invoer",
       manufacturer: "Fabrikant",
       discover: "Anycubic-printer detecteren",
       fingerprint: "Vingerafdruk TLS-certificaat (SHA-256)",
       trustFingerprint: "Ik heb deze printer gecontroleerd en vertrouw het certificaat.",
       connectionHelp: "Schakel LAN-modus in en detecteer de printer op het bovenstaande adres. Controleer het certificaat op een vertrouwd lokaal netwerk.",
-      supportNote: "Ondersteunt bewaking, LAN-camerabeelden, pauzeren, hervatten en stoppen. ACE-sleuven zijn alleen-lezen. Bestandsoverdracht is niet beschikbaar.",
+      supportNote: "Ondersteunt LAN-bewaking, camera, bestandsupload en beschikbare bediening. ACE-slots zijn alleen-lezen.",
       discoveryFailed: "Detectie mislukt. Controleer het adres en de LAN-modus.",
       identityMismatch: "Dit adres hoort bij een andere printer. Het serienummer moet overeenkomen.",
       scanHelp: "Kies het LAN-subnet van de printer (bijvoorbeeld 192.168.1.0/24). Schakel vóór het scannen de LAN-modus in, selecteer een resultaat en controleer hieronder het certificaat.",
@@ -7937,6 +7940,8 @@ export default {
   },
 
   modelSources: {
+    makeronlineHelp: "Plak een MakerOnline-link om 3MF-, STL- of STEP-bestanden te importeren. Slice ze voor je printer voordat je afdrukt.",
+    makeronlineConnect: "Downloads gebruiken de globale Anycubic Cloud-verbinding. Verbind via Profielen met een Slicer Next-toegangstoken.",
     title: 'Modelbronnen',
     tabMakerworld: 'MakerWorld',
     tabManyfold: 'Manyfold',

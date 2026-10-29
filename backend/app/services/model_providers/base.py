@@ -196,6 +196,7 @@ class ModelProvider(ABC):
     #: unrestricted (see ``makerworld._authorize_for_provider``).
     view_permission: Permission | None = None
     import_permission: Permission | None = None
+    additional_import_permissions: tuple[Permission, ...] = ()
 
     @abstractmethod
     async def build_service(
@@ -286,6 +287,10 @@ class ProviderService(ABC):
     Providers must be closed after use (:meth:`close`); the shared connection
     pool is only closed by the owner.
     """
+
+    async def validate_before_save(self) -> None:
+        """Providers with mutable account credentials can fence an in-flight import."""
+        return None
 
     @abstractmethod
     async def close(self) -> None:

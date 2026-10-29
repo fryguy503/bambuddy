@@ -13,14 +13,14 @@ const printer = {
   ip_address: '192.168.1.151', discovered_at: null,
 };
 
-function setup(docker: boolean, running = false) {
+function setup(docker: boolean, running = false, subnet = '192.168.1.0/24') {
   const scans: unknown[] = [];
   const queries: string[] = [];
   const stops: string[] = [];
   const certificates = vi.fn();
   server.use(
     http.get(ROOT + '/info', () => HttpResponse.json({
-      is_docker: docker, subnets: ['192.168.1.0/24'], ssdp_running: false, scan_running: false,
+      is_docker: docker, subnets: [subnet], ssdp_running: false, scan_running: false,
     })),
     http.post(ROOT + '/scan', async ({ request }) => {
       scans.push(await request.json());
@@ -49,6 +49,16 @@ function setup(docker: boolean, running = false) {
 }
 
 describe('Anycubic LAN discovery in Add Printer', () => {
+  it.each(['10.42.8.0/23', '172.22.4.0/22', '192.168.97.0/24'])('uses the detected subnet %s without a fixed range or netmask', async (subnet) => {
+    const calls = setup(true, false, subnet);
+    const user = userEvent.setup();
+    render(<AddPrinterModal onClose={() => {}} onAdd={() => {}} existingSerials={[]} />);
+    await screen.findByDisplayValue(subnet);
+    await user.selectOptions(screen.getByLabelText('Manufacturer'), 'anycubic');
+    await user.click(screen.getByRole('button', { name: /Scan Subnet/ }));
+    expect(calls.scans).toEqual([{ subnet, timeout: 1, printer_type: 'anycubic' }]);
+  });
+
   it.each([true, false])('scans on Docker=%s and still requires certificate review before saving', async (docker) => {
     const calls = setup(docker);
     const user = userEvent.setup();

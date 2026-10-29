@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -2862,7 +2863,8 @@ export function ProfilesPage() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
-  const [activeTab, setActiveTab] = useState<ProfileTab>('cloud');
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<ProfileTab>(searchParams.get('tab') === 'anycubic' ? 'anycubic_cloud' : 'cloud');
   const [lastSyncTime, setLastSyncTime] = useState<Date>();
 
   const { data: status, isLoading: statusLoading } = useQuery({
