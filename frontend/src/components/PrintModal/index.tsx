@@ -2100,8 +2100,8 @@ export function PrintModal({
               />
             )}
 
-            {/* Printer selection with per-printer mapping — hidden when printer is pre-selected via props */}
-            {!isCrossModel && !hasEditingVariants && !initialSelectedPrinterIds?.length && (
+            {/* Preselection sets the initial target; keep its identity and status visible. */}
+            {!isCrossModel && !hasEditingVariants && (
               <PrinterSelector
                 printers={printers || []}
                 selectedPrinterIds={selectedPrinters}

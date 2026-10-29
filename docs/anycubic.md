@@ -194,6 +194,11 @@ pagination. Filtering and name/size sorting apply to the current page, as
 indicated in the browser. Bambu-only shortcuts and unimplemented download,
 delete and preview actions are not offered.
 
+Upload confirmation searches the full validated catalog snapshot on firmware
+that ignores its filename-search parameter. Local pagination is applied after
+that search, so uploads beyond the first page can still be confirmed. Both
+the unique filename and exact byte size must match before queued printing.
+
 Open **Browse printer files**, choose `.gcode` sliced with Anycubic Slicer Next
 or OrcaSlicer for the saved printer model, and select **Upload**. Validation
 requires exact model metadata and text G-code. Projects, renamed binary files,
@@ -235,6 +240,10 @@ existing queue. Model load balancing and cross-model variants remain Bambu
 features. The file must identify its slicer, exact printer model, material and
 color for every used zero-based tool. The server re-reads the actual file at
 admission and dispatch rather than trusting editable library metadata.
+
+The shared printer selector remains visible when only one printer exists or a
+printer was preselected from its card. Its name, model, address, selection and
+reported status remain visible before submission.
 
 Selecting several native G-code files offers **Queue files**. This queues every
 selected file in the arranged order on one matching printer; it does not create
