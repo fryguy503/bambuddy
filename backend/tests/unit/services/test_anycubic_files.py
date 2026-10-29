@@ -61,6 +61,30 @@ def test_s1_complete_catalog_is_paged_locally_without_false_server_ack():
     assert [row["name"] for row in value["files"]] == [f"file-{i}.gcode" for i in (20, 21, 22)]
 
 
+def test_s1_keyword_filters_complete_snapshot_before_local_pagination():
+    records = [{"filename": f"existing-{i}.gcode", "size": i, "is_dir": False} for i in range(245)]
+    records.append({"filename": "part-abcdef123456.gcode", "size": 7885843, "is_dir": False})
+    value = files.parse_catalog({"list_mode": 0, "records": records}, 1, 100, "/", "abcdef123456.gcode")
+    assert value["pagination"] == "local"
+    assert value["total"] == value["pages"] == 1
+    assert value["files"] == [
+        {"name": "part-abcdef123456.gcode", "path": "/part-abcdef123456.gcode", "size": 7885843, "is_dir": False}
+    ]
+    missing = files.parse_catalog({"list_mode": 0, "records": records}, 1, 100, "/", "no-such-file")
+    assert missing["total"] == missing["pages"] == 0
+    assert missing["files"] == []
+
+
+def test_local_search_keeps_exact_record_metadata_and_validates_even_filtered_entries():
+    records = [{"filename": "Part-ABCDEF.gcode", "size": None, "is_dir": False}]
+    value = files.parse_catalog({"list_mode": 0, "records": records}, 1, 100, "/", "abcdef")
+    assert value["files"][0]["name"] == "Part-ABCDEF.gcode"
+    assert value["files"][0]["size"] is None
+    records.append({"filename": "../not-matching.gcode", "size": 100, "is_dir": False})
+    with pytest.raises(AnycubicError):
+        files.parse_catalog({"list_mode": 0, "records": records}, 1, 100, "/", "abcdef")
+
+
 def test_sdk_paginated_catalog_retains_server_validation():
     data = {
         "current": 1,
@@ -202,6 +226,38 @@ async def test_transfer_requires_catalog_name_and_size_and_never_starts_print(tm
     client.start_print.assert_not_called()
     client.publish_raw.assert_not_called()
     assert service.get(8, job.id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("catalog_size", ["matching", "wrong", "unknown"])
+async def test_transfer_verifies_uploaded_file_beyond_first_s1_page(tmp_path, catalog_size):
+    export = artifact(tmp_path)
+    client = connected()
+    context = files.FileSession(HOST, "Kobra S1", client._generation, client._client, URL)
+    client.file_session = MagicMock(return_value=context)
+    size = export.size if catalog_size == "matching" else export.size + 1 if catalog_size == "wrong" else None
+    records = [{"filename": f"existing-{index}.gcode", "size": index, "is_dir": False} for index in range(245)]
+    records.append({"filename": export.filename, "size": size, "is_dir": False})
+
+    def publish(kind, action, data):
+        assert (kind, action) == ("file", "listLocal")  # Every other operation, including print, fails.
+        assert data["keyword"] == export.filename.rsplit("-", 1)[-1]
+        # Reproduce stock S1 firmware: keyword and requested page are ignored;
+        # the full list_mode=0 snapshot always includes the uploaded file last.
+        client._file_report("file", {"action": action, "code": 200, "data": {"list_mode": 0, "records": records}})
+        return True
+
+    client._publish = MagicMock(side_effect=publish)
+    service = Transfers()
+    with (
+        patch("backend.app.services.anycubic.transfers.upload_gcode", new_callable=AsyncMock) as upload,
+        patch("backend.app.services.anycubic.transfers.asyncio.sleep", new_callable=AsyncMock),
+    ):
+        job = service.start(7, client, export)
+        await job.task
+    upload.assert_awaited_once()
+    assert job.phase == ("completed" if catalog_size == "matching" else "uploaded_unverified")
+    assert client._publish.call_count == (1 if catalog_size == "matching" else 3)
 
 
 @pytest.mark.asyncio

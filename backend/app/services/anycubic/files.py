@@ -70,11 +70,12 @@ def upload_url(host, reported):
     return reported
 
 
-def parse_catalog(data, page, limit, path):
+def parse_catalog(data, page, limit, path, keyword=""):
     if not isinstance(data, dict) or not isinstance(data.get("records"), list) or len(data["records"]) > 4096:
         raise AnycubicError("The printer returned an invalid file catalog")
     page_fields = {"total", "size", "current", "pages"}
     paged = bool(page_fields.intersection(data))
+    total = pages = 0
     if paged:
         for key in page_fields:
             if type(data.get(key)) is not int or not 0 <= data[key] <= 1_000_000:
@@ -90,8 +91,6 @@ def parse_catalog(data, page, limit, path):
         # a server pagination acknowledgement.
         if data.get("list_mode") != 0:
             raise AnycubicError("The printer returned an unsupported file-list mode")
-        total = len(data["records"])
-        pages = (total + limit - 1) // limit
     files, names = [], set()
     for raw in data["records"]:
         if not isinstance(raw, dict) or type(raw.get("is_dir")) is not bool:
@@ -105,6 +104,14 @@ def parse_catalog(data, page, limit, path):
             raise AnycubicError("The printer returned an invalid file size")
         files.append({"name": name, "size": size, "is_dir": raw["is_dir"], "path": f"{path or '/'}{name}"})
     if not paged:
+        # Stock S1 firmware ignores the requested keyword and sends its complete
+        # list_mode=0 inventory. Search that snapshot before local pagination;
+        # otherwise upload verification only sees the first page forever.
+        if keyword:
+            search = keyword.casefold()
+            files = [row for row in files if search in row["name"].casefold()]
+        total = len(files)
+        pages = (total + limit - 1) // limit
         files = files[(page - 1) * limit : page * limit]
     return {
         "path": path or "/",

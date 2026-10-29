@@ -416,7 +416,9 @@ class AnycubicMQTTClient:
             pending["event"].set()
         elif isinstance(data, dict) and "records" in data:
             try:
-                pending["result"] = parse_catalog(data, pending["page"], pending["limit"], pending["path"])
+                pending["result"] = parse_catalog(
+                    data, pending["page"], pending["limit"], pending["path"], pending.get("keyword", "")
+                )
             except AnycubicError:
                 pending["error"] = "The printer returned an unsupported file catalog"
             pending["event"].set()
@@ -471,6 +473,7 @@ class AnycubicMQTTClient:
                 "page": page,
                 "limit": limit,
                 "path": path,
+                "keyword": keyword,
                 "result": None,
                 "error": None,
             }
