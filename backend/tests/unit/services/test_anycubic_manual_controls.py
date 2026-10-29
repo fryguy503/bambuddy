@@ -129,7 +129,10 @@ def test_feed_operations_address_one_physical_slot(operation, code):
 def test_idle_speed_uses_native_mode_setting():
     client = manual()
     assert client.set_print_speed(3)
-    client._publish.assert_called_once_with("print", "setSpeedMode", {"speed_mode": 3})
+    assert [call.args for call in client._publish.call_args_list] == [
+        ("print", "setSpeedMode", {"speed_mode": 3}),
+        ("info", "query", None),
+    ]
 
 
 def test_cancel_of_own_manual_feed_remains_available_during_its_busy_phase():

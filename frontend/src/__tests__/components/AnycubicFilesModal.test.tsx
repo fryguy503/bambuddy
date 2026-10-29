@@ -45,4 +45,75 @@ describe('Native Anycubic files', () => {
     await waitFor(() => expect(upload).toHaveBeenCalledWith(7, file, expect.any(Function)));
     expect(library).not.toHaveBeenCalled();
   });
+  it('uses the shared file manager controls without unsupported Bambu operations or fixed folders', async () => {
+    render(<AnycubicFilesModal printerId={7} printerName="KS1" onClose={() => {}} />);
+    await screen.findByText('stored.gcode');
+    expect(screen.getByText('File Manager')).toBeInTheDocument();
+    expect(screen.getByText('KS1')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'File Manager · KS1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Root' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter files...')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Sort files' })).toBeInTheDocument();
+    expect(screen.getByText('1 of 1 files')).toBeInTheDocument();
+    for (const action of ['Download', 'Delete', 'Cache', 'Models', 'Timelapse', '3D View']) {
+      expect(screen.queryByRole('button', { name: action })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /oldest|newest/i })).not.toBeInTheDocument();
+  });
+  it('filters and sorts the current catalog page, keeping folders first and unknown sizes last', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listAnycubicFiles).mockResolvedValue({ path: '/', page: 1, pages: 1, total: 4, files: [
+      { name: 'large.gcode', path: '/large.gcode', is_dir: false, size: 900 },
+      { name: 'unknown.gcode', path: '/unknown.gcode', is_dir: false, size: null },
+      { name: 'small.gcode', path: '/small.gcode', is_dir: false, size: 10 },
+      { name: 'folder', path: '/folder', is_dir: true, size: null },
+    ] });
+    render(<AnycubicFilesModal printerId={7} printerName="KS1" onClose={() => {}} />);
+    await screen.findByText('large.gcode');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Sort files' }), 'size-asc');
+    expect(screen.getByText('folder').compareDocumentPosition(screen.getByText('small.gcode')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('small.gcode').compareDocumentPosition(screen.getByText('large.gcode')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('large.gcode').compareDocumentPosition(screen.getByText('unknown.gcode')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.type(screen.getByPlaceholderText('Filter files...'), 'SMALL');
+    expect(screen.queryByText('large.gcode')).not.toBeInTheDocument();
+    expect(screen.getByText('1 of 4 files')).toBeInTheDocument();
+    await user.clear(screen.getByPlaceholderText('Filter files...'));
+    await user.type(screen.getByPlaceholderText('Filter files...'), 'missing');
+    expect(screen.getByText('No matching files')).toBeInTheDocument();
+  });
+  it('keeps native pagination and refresh requests on the actual printer page', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listAnycubicFiles).mockImplementation(async (_id, path = '/', page = 1) => ({
+      path, page, pages: 2, total: 2,
+      files: [{ name: `page-${page}.gcode`, path: `/page-${page}.gcode`, size: 10, is_dir: false }],
+    }));
+    render(<AnycubicFilesModal printerId={7} printerName="KS1" onClose={() => {}} />);
+    await screen.findByText('page-1.gcode');
+    expect(screen.getByText('Page 1 / 2')).toBeInTheDocument();
+    expect(screen.getByText('Filter and sort apply to the current page.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('page-2.gcode');
+    expect(api.listAnycubicFiles).toHaveBeenLastCalledWith(7, '/', 2);
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    const requests = vi.mocked(api.listAnycubicFiles).mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(api.listAnycubicFiles).toHaveBeenCalledTimes(requests + 1));
+    expect(api.listAnycubicFiles).toHaveBeenLastCalledWith(7, '/', 2);
+  });
+  it('navigates reported folders and the parent breadcrumb without inventing native directories', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listAnycubicFiles).mockImplementation(async (_id, path = '/', page = 1) => ({
+      path, page, pages: 1, total: 1,
+      files: path === '/' ? [{ name: 'jobs', path: '/jobs', is_dir: true, size: null }]
+        : [{ name: 'nested.gcode', path: '/jobs/nested.gcode', is_dir: false, size: 10 }],
+    }));
+    render(<AnycubicFilesModal printerId={7} printerName="KS1" onClose={() => {}} />);
+    await user.click(await screen.findByRole('button', { name: 'jobs' }));
+    await screen.findByText('nested.gcode');
+    expect(api.listAnycubicFiles).toHaveBeenLastCalledWith(7, '/jobs/', 1);
+    await user.click(screen.getByRole('button', { name: 'Go to parent folder' }));
+    await screen.findByRole('button', { name: 'jobs' });
+    expect(screen.getByRole('button', { name: 'Go to parent folder' })).toBeDisabled();
+  });
 });

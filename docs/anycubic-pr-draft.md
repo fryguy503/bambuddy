@@ -87,7 +87,8 @@ support, not full feature parity or completed hardware/account acceptance.
   File Library uploads also admit validated native G-code with model metadata;
   the Bambu queue and dispatcher still reject that format. The printer card's
   direct uploader/drop path never enters the Bambu library/print flow.
-  Physical acceptance of drying, light, motion, material/feed controls,
+  The operator confirmed that starting an ACE drying cycle worked.
+  Physical acceptance of light, motion, material/feed controls,
   heater/fan/speed changes and RFID remaining estimates
   is pending. No settings were changed by these tests.
 - A camera-only LAN probe activated the S1 camera and decoded a live JPEG.

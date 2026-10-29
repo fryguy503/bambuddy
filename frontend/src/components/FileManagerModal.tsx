@@ -3,20 +3,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   X,
-  Folder,
-  File,
   ChevronLeft,
   Download,
   Trash2,
   Loader2,
-  HardDrive,
-  RefreshCw,
-  Film,
-  FileBox,
   FileText,
-  Image,
-  Search,
-  ArrowUpDown,
   CheckSquare,
   Square,
   MinusSquare,
@@ -31,6 +22,8 @@ import { GcodeToolpathViewer } from './GcodeToolpathViewer';
 import type { PlateMetadata } from '../types/plates';
 import { useToast } from '../contexts/ToastContext';
 import { formatFileSize } from '../utils/file';
+import { PrinterFileBrowserHeader, PrinterFileBrowserToolbar, PrinterFileBrowserPath, PrinterFileBrowserFooter } from './PrinterFileBrowser';
+import { getPrinterFileIcon, PRINTER_FILE_ROW_CLASS, type PrinterFileSort } from '../utils/printerFiles';
 
 interface FileManagerModalProps {
   printerId: number;
@@ -247,38 +240,6 @@ function formatStorageSize(bytes: number): string {
   return `${mb.toFixed(0)} MB`;
 }
 
-function getFileIcon(filename: string, isDirectory: boolean) {
-  if (isDirectory) return Folder;
-
-  const ext = filename.toLowerCase().split('.').pop() || '';
-  switch (ext) {
-    case '3mf':
-      return FileBox;
-    case 'gcode':
-      return FileText;
-    case 'mp4':
-    case 'avi':
-      return Film;
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-      return Image;
-    default:
-      return File;
-  }
-}
-
-type SortOption = 'name-asc' | 'name-desc' | 'size-asc' | 'size-desc' | 'date-asc' | 'date-desc';
-
-const SORT_OPTIONS: { value: SortOption; label: string }[] = [
-  { value: 'name-asc', label: 'Name (A-Z)' },
-  { value: 'name-desc', label: 'Name (Z-A)' },
-  { value: 'size-asc', label: 'Size (smallest)' },
-  { value: 'size-desc', label: 'Size (largest)' },
-  { value: 'date-asc', label: 'Date (oldest)' },
-  { value: 'date-desc', label: 'Date (newest)' },
-];
-
 export function FileManagerModal({ printerId, printerName, onClose }: FileManagerModalProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
@@ -287,7 +248,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [filesToDelete, setFilesToDelete] = useState<string[]>([]);
-  const [sortBy, setSortBy] = useState<SortOption>('name-asc');
+  const [sortBy, setSortBy] = useState<PrinterFileSort>('name-asc');
   const [downloadProgress, setDownloadProgress] = useState<{ current: number; total: number } | null>(null);
   const [viewerFile, setViewerFile] = useState<{ path: string; name: string } | null>(null);
   const selectionAnchorRef = useRef<string | null>(null);
@@ -493,7 +454,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
 
   // Quick navigation buttons for common directories
   const quickDirs = [
-    { path: '/', label: 'Root' },
+    { path: '/', label: t('printerFiles.root') },
     { path: '/cache', label: 'Cache' },
     { path: '/model', label: 'Models' },
     { path: '/timelapse', label: 'Timelapse' },
@@ -508,16 +469,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
         className="w-full max-w-3xl max-h-[85vh] flex flex-col bg-bambu-dark-secondary rounded-xl border border-bambu-dark-tertiary overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary flex-shrink-0">
-            <div className="flex items-center gap-3">
-              <HardDrive className="w-5 h-5 text-bambu-green" />
-              <div>
-                <h2 className="text-lg font-semibold text-white">{t('printerFiles.title')}</h2>
-                <p className="text-sm text-bambu-gray">{printerName}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
+        <PrinterFileBrowserHeader printerName={printerName} onClose={onClose}>
               {/* Storage info */}
               {storageData && (storageData.used_bytes != null || storageData.free_bytes != null) && (
                 <div className="text-sm text-bambu-gray flex items-center gap-2">
@@ -532,87 +484,13 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
                   )}
                 </div>
               )}
-              <button
-                onClick={onClose}
-                className="text-bambu-gray hover:text-white transition-colors"
-                title="Close file manager"
-                aria-label="Close file manager"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-
-        {/* Quick Navigation */}
-        <div className="flex items-center gap-2 p-3 border-b border-bambu-dark-tertiary bg-bambu-dark/50 flex-shrink-0">
-          {quickDirs.map((dir) => (
-            <button
-              key={dir.path}
-              onClick={() => {
-                navigateToFolder(dir.path);
-                setSearchQuery('');
-              }}
-              className={`px-3 py-1 text-sm rounded-full transition-colors ${
-                currentPath === dir.path
-                  ? 'bg-bambu-green text-white'
-                  : 'bg-bambu-dark-tertiary text-bambu-gray hover:text-white'
-              }`}
-            >
-              {dir.label}
-            </button>
-          ))}
-          <div className="flex-1" />
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-bambu-gray" />
-            <input
-              type="text"
-              placeholder={t('printerFiles.filterPlaceholder')}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-40 pl-8 pr-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
-            />
-          </div>
-          <div className="relative flex items-center gap-1">
-            <ArrowUpDown className="w-4 h-4 text-bambu-gray" />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortOption)}
-              className="appearance-none bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm py-1.5 pl-2 pr-6 focus:border-bambu-green focus:outline-none cursor-pointer"
-              title="Sort files"
-              aria-label="Sort files"
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => refetch()}
-            disabled={isLoading}
-            aria-label={t('common.refresh')}
-            title={t('common.refresh')}
-          >
-            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-          </Button>
-        </div>
-
-        {/* Path breadcrumb */}
-        <div className="flex items-center gap-2 px-4 py-2 bg-bambu-dark text-sm flex-shrink-0">
-            <button
-              onClick={navigateUp}
-              disabled={currentPath === '/'}
-              className="p-1 rounded hover:bg-bambu-dark-tertiary disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Go to parent folder"
-              aria-label="Go to parent folder"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="text-bambu-gray font-mono">{currentPath}</span>
-          </div>
+        </PrinterFileBrowserHeader>
+        <PrinterFileBrowserToolbar
+          path={currentPath} shortcuts={quickDirs} onNavigate={navigateToFolder}
+          search={searchQuery} onSearch={setSearchQuery} sort={sortBy} onSort={setSortBy}
+          onRefresh={() => void refetch()} refreshing={isLoading}
+        />
+        <PrinterFileBrowserPath path={currentPath} onUp={navigateUp} />
 
         {/* File list */}
         <div className="flex-1 overflow-y-auto p-2 min-h-0">
@@ -635,13 +513,13 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
             ) : (
               <div className="space-y-1">
                 {visibleFiles.map((file) => {
-                    const FileIcon = getFileIcon(file.name, file.is_directory);
+                    const FileIcon = getPrinterFileIcon(file.name, file.is_directory);
                     const isSelected = selectedFiles.has(file.path);
 
                     return (
                       <div
                         key={file.path}
-                        className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
+                        className={`${PRINTER_FILE_ROW_CLASS} cursor-pointer ${
                           isSelected
                             ? 'bg-bambu-green/20 border border-bambu-green/50'
                             : 'hover:bg-bambu-dark-tertiary'
@@ -707,7 +585,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
           </div>
 
         {/* Action bar */}
-        <div className="flex items-center justify-between p-4 border-t border-bambu-dark-tertiary bg-bambu-dark/50 flex-shrink-0">
+        <PrinterFileBrowserFooter>
           <div className="flex items-center gap-4">
             <div className="text-sm text-bambu-gray">
               {selectedFiles.size > 0
@@ -772,7 +650,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
               {t('printerFiles.deleteButton')}{selectedFiles.size > 1 ? ` (${selectedFiles.size})` : ''}
             </Button>
           </div>
-        </div>
+        </PrinterFileBrowserFooter>
       </div>
 
       {/* Delete Confirmation Modal */}

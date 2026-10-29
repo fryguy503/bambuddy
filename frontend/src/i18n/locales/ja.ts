@@ -299,7 +299,7 @@ export default {
       resolvePrint: "印刷が開始されていないことを確認",
       resolvePrintHelp: "まずプリンターを確認してください。このジョブが開始されていない場合のみ確定します。キューの保留を解除し、試行を失敗として記録します。プリンターコマンドは送信しません。",
       printStartUnknown: "印刷開始が未確認です。再試行する前にプリンターを確認してください。",
-      silent: "静音",
+      quiet: "静音",
       dryingHelp: "乾燥はこのACE内の全スプールを加熱します。制限は機種と素材に応じます。",
       slotHelp: "プリンターの素材と色を設定します。スプール割り当ては在庫と個別に連携します。",
       rfidReadonly: "RFID素材の設定は読み取り専用です。",
@@ -307,8 +307,8 @@ export default {
       idleRequired: "待機中のプリンターと最新のスロット状態が必要です。",
       motionHelp: "移動と原点復帰は待機中のみ可能です。造形エリアを空けてください。",
       extruderPulseHelp: "Eボタンは0.5秒のパルスを送ります。ノズル温度は170°C以上が必要です。",
-      normal: "標準",
-      turbo: "ターボ",
+      standard: "標準",
+      sport: "スポーツ",
       commandQueued: "コマンドを送信待ちにしました。状態の更新を待っています。",
       configureSlot: "ACEスロットを設定",
       waitingForControls: "プリンターの現在の機能を待機中",
@@ -3430,6 +3430,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "ルート",
+    currentPageOnly: "絞り込みと並べ替えは現在のページに適用されます。",
     zipStarted_one: '{{count}} 個のファイルの ZIP ダウンロードを開始しました',
     zipStarted_other: '{{count}} 個のファイルの ZIP ダウンロードを開始しました',
     zipPartial: '{{total}} 個中 {{successful}} 個のファイルで ZIP ダウンロードを開始しました。残りは取得できませんでした',

@@ -294,7 +294,7 @@ export default {
       resolvePrint: "인쇄가 시작되지 않았음을 확인",
       resolvePrintHelp: "먼저 프린터를 확인하세요. 이 작업이 시작되지 않은 경우에만 확인합니다. 대기열 보류를 해제하고 시도를 실패로 표시하며 프린터 명령은 보내지 않습니다.",
       printStartUnknown: "인쇄 시작 미확인 — 재시도 전에 프린터를 확인하세요.",
-      silent: "저소음",
+      quiet: "저소음",
       dryingHelp: "건조는 이 ACE의 모든 스풀을 가열합니다. 제한은 모델과 재료에 따라 달라집니다.",
       slotHelp: "프린터의 재료와 색상을 설정합니다. 스풀 할당은 재고를 별도로 연결합니다.",
       rfidReadonly: "RFID 재료 설정은 읽기 전용입니다.",
@@ -302,8 +302,8 @@ export default {
       idleRequired: "대기 중인 프린터와 최신 슬롯 상태가 필요합니다.",
       motionHelp: "이동과 원점 복귀는 프린터 대기 중에만 가능합니다. 출력 영역을 비워 주세요.",
       extruderPulseHelp: "E 버튼은 0.5초 펄스를 보냅니다. 노즐 온도는 170°C 이상이어야 합니다.",
-      normal: "일반",
-      turbo: "터보",
+      standard: "표준",
+      sport: "스포츠",
       commandQueued: "명령이 대기열에 등록되었습니다. 프린터 상태를 기다리는 중입니다.",
       configureSlot: "ACE 슬롯 구성",
       waitingForControls: "프린터의 현재 기능을 기다리는 중",
@@ -3274,6 +3274,8 @@ export default {
     all: '전체'
   },
   printerFiles: {
+    root: "루트",
+    currentPageOnly: "필터와 정렬은 현재 페이지에 적용됩니다.",
     zipStarted_one: '{{count}}개 파일의 ZIP 다운로드를 시작했습니다',
     zipStarted_other: '{{count}}개 파일의 ZIP 다운로드를 시작했습니다',
     zipPartial: '{{total}}개 중 {{successful}}개 파일로 ZIP 다운로드를 시작했습니다. 나머지는 가져오지 못했습니다',

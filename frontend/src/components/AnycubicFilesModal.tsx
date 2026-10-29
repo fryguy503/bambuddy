@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, File, Folder, Loader2, RefreshCw, Upload, X } from 'lucide-react';
+import { ChevronLeft, Loader2, Upload } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { formatFileSize } from '../utils/file';
 import { Button } from './Button';
+import { PrinterFileBrowserHeader, PrinterFileBrowserToolbar, PrinterFileBrowserPath, PrinterFileBrowserFooter } from './PrinterFileBrowser';
+import { getPrinterFileIcon, PRINTER_FILE_ROW_CLASS, type PrinterFileSort } from '../utils/printerFiles';
 
 const active = (phase?: string) => phase === 'uploading' || phase === 'verifying';
 
@@ -18,6 +20,9 @@ export function AnycubicFilesModal({ printerId, printerName, onClose, initialFil
   const storageKey = `bambuddy.anycubic.transfer.${printerId}`;
   const [path, setPath] = useState('/');
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<PrinterFileSort>('name-asc');
+  const pageSummaryId = useId();
   const [selected, setSelected] = useState<globalThis.File | null>(initialFile);
   const [receiving, setReceiving] = useState(false);
   const [received, setReceived] = useState(0);
@@ -50,47 +55,66 @@ export function AnycubicFilesModal({ printerId, printerName, onClose, initialFil
     try {
       const next = await api.uploadAnycubicFile(printerId, selected, value => { if (mounted.current) setReceived(value); });
       try { sessionStorage.setItem(storageKey, next.id); } catch { /* progress recall is optional */ }
-      if (mounted.current) { cache.setQueryData(['anycubic-transfer', printerId, next.id], next); setJobId(next.id); setSelected(null); setPath('/'); setPage(1); }
+      if (mounted.current) { cache.setQueryData(['anycubic-transfer', printerId, next.id], next); setJobId(next.id); setSelected(null); setPath('/'); setPage(1); setSearch(''); }
     } catch (failure) {
       if (mounted.current) setError(failure instanceof Error ? failure.message : t('common.uploadFailed'));
     } finally { if (mounted.current) setReceiving(false); }
   };
 
-  const changePath = (next: string) => { setPath(next); setPage(1); };
+  const changePath = (next: string) => { setPath(next); setPage(1); setSearch(''); };
   const parent = '/' + path.split('/').filter(Boolean).slice(0, -1).join('/') + (path.split('/').filter(Boolean).length > 1 ? '/' : '');
   const percent = receiving ? received : job?.size ? Math.min(100, Math.round(job.sent * 100 / job.size)) : 0;
 
+  const visibleFiles = useMemo(() => [...(catalog.data?.files ?? [])]
+    .filter(file => file.name.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      if (sort === 'size-asc' || sort === 'size-desc') {
+        // Unknown sizes stay last, rather than pretending they are zero.
+        if (a.size === null || b.size === null) return a.size === b.size ? 0 : a.size === null ? 1 : -1;
+        return sort === 'size-asc' ? a.size - b.size : b.size - a.size;
+      }
+      return sort === 'name-desc' ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name);
+    }), [catalog.data?.files, search, sort]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <section role="dialog" aria-modal="true" aria-label={`${printerName} · ${t('printers.files')}`} className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-xl bg-bambu-dark-secondary p-5 text-white" onClick={event => event.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">{printerName} · {t('printers.files')}</h2>
-          <button type="button" title={t('common.close')} onClick={onClose}><X className="h-5 w-5" /></button>
+      <section role="dialog" aria-modal="true" aria-label={`${t('printerFiles.title')} · ${printerName}`} className="w-full max-w-3xl max-h-[85vh] flex flex-col bg-bambu-dark-secondary rounded-xl border border-bambu-dark-tertiary overflow-hidden text-white" onClick={event => event.stopPropagation()}>
+        <PrinterFileBrowserHeader printerName={printerName} onClose={onClose} />
+        <PrinterFileBrowserToolbar
+          path={path} shortcuts={[{ path: '/', label: t('printerFiles.root') }]} onNavigate={changePath}
+          search={search} onSearch={setSearch} sort={sort} onSort={setSort} dateSort={false}
+          onRefresh={() => void catalog.refetch()} refreshing={catalog.isFetching}
+        />
+        <PrinterFileBrowserPath path={path} onUp={() => changePath(parent)} />
+        {(catalog.data?.pages ?? 0) > 1 && <p id={pageSummaryId} className="px-4 py-2 text-xs text-bambu-gray">{t('printerFiles.currentPageOnly')}</p>}
+        <div className="flex-1 overflow-y-auto p-2 min-h-32" aria-describedby={(catalog.data?.pages ?? 0) > 1 ? pageSummaryId : undefined}>
+          {catalog.isLoading ? <div className="flex justify-center py-12"><Loader2 aria-label={t('printerFiles.loadingFiles')} className="h-8 w-8 text-bambu-green animate-spin" /></div>
+            : catalog.error ? <p role="alert" className="text-center py-12 text-red-400">{catalog.error.message}</p>
+            : !visibleFiles.length ? <p className="text-center py-12 text-bambu-gray">{t(search ? 'fileManager.noMatchingFiles' : 'printerFiles.noFiles')}</p>
+            : <div className="space-y-1">{visibleFiles.map(file => {
+              const FileIcon = getPrinterFileIcon(file.name, file.is_dir);
+              const content = <>
+                <FileIcon className={`w-5 h-5 shrink-0 ${file.is_dir ? 'text-bambu-green' : 'text-bambu-gray'}`} />
+                <span title={file.name} className="min-w-0 flex-1 truncate text-left">{file.name}</span>
+                {file.is_dir ? <ChevronLeft className="w-4 h-4 text-bambu-gray rotate-180" /> : <span className="text-sm text-bambu-gray">{file.size === null ? t('common.unknown') : formatFileSize(file.size)}</span>}
+              </>;
+              return file.is_dir
+                ? <button type="button" key={file.path} className={`${PRINTER_FILE_ROW_CLASS} w-full hover:bg-bambu-dark-tertiary`} onClick={() => changePath(file.path.replace(/\/$/, '') + '/')}>{content}</button>
+                : <div key={file.path} className={PRINTER_FILE_ROW_CLASS}>{content}</div>;
+            })}</div>}
         </div>
-        <p className="mb-4 text-sm text-bambu-gray">{t('printers.anycubic.filesHelp')}</p>
-        <div className="mb-3 flex items-center gap-2">
-          <Button variant="secondary" disabled={path === '/'} onClick={() => changePath(parent)}><ChevronLeft className="h-4 w-4" /></Button>
-          <code className="min-w-0 flex-1 truncate text-xs">{path}</code>
-          <Button variant="secondary" disabled={catalog.isFetching} onClick={() => void catalog.refetch()} title={t('common.refresh')}><RefreshCw className="h-4 w-4" /></Button>
-        </div>
-        {catalog.isFetching && <Loader2 aria-label={t('common.loading')} className="mb-2 h-4 w-4 animate-spin" />}
-        {catalog.error && <p role="alert" className="mb-3 text-sm text-red-400">{catalog.error.message}</p>}
-        <div className="max-h-72 overflow-auto divide-y divide-bambu-dark-tertiary">
-          {catalog.data?.files.map(file => (
-            <div key={file.path} className="flex items-center gap-3 py-2 text-sm">
-              {file.is_dir ? <Folder className="h-4 w-4 shrink-0 text-bambu-green" /> : <File className="h-4 w-4 shrink-0 text-bambu-gray" />}
-              {file.is_dir ? <button className="min-w-0 flex-1 truncate text-left hover:text-bambu-green" onClick={() => changePath(file.path + '/')}>{file.name}</button> : <span title={file.name} className="min-w-0 flex-1 truncate">{file.name}</span>}
-              {!file.is_dir && <span className="text-xs text-bambu-gray">{file.size == null ? t('common.unknown') : formatFileSize(file.size)}</span>}
-            </div>
-          ))}
-          {catalog.data?.files.length === 0 && <p className="py-4 text-sm text-bambu-gray">{t('common.none')}</p>}
-        </div>
-        <div className="my-3 flex justify-between">
-          <Button variant="secondary" disabled={page <= 1} onClick={() => setPage(page - 1)}>{t('common.previous')}</Button>
-          <span className="text-sm text-bambu-gray">{page} / {Math.max(1, catalog.data?.pages ?? 1)}</span>
-          <Button variant="secondary" disabled={!catalog.data || page >= catalog.data.pages} onClick={() => setPage(page + 1)}>{t('common.next')}</Button>
-        </div>
-        <div className="border-t border-bambu-dark-tertiary pt-4">
+        <PrinterFileBrowserFooter>
+          <span className="text-sm text-bambu-gray">{t('fileManager.resultsCount', { showing: visibleFiles.length, total: catalog.data?.total ?? 0 })}</span>
+          <div className="flex items-center gap-3">
+            <Button variant="secondary" size="sm" disabled={page <= 1 || catalog.isFetching} onClick={() => setPage(page - 1)}>{t('common.previous')}</Button>
+            <span className="text-sm text-bambu-gray">{t('archives.pagination.page')} {page} / {Math.max(1, catalog.data?.pages ?? 1)}</span>
+            <Button variant="secondary" size="sm" disabled={!catalog.data || page >= catalog.data.pages || catalog.isFetching} onClick={() => setPage(page + 1)}>{t('common.next')}</Button>
+          </div>
+        </PrinterFileBrowserFooter>
+        <div className="border-t border-bambu-dark-tertiary p-4 flex-shrink-0 max-h-[30vh] overflow-y-auto">
+          <p className="mb-3 text-xs text-bambu-gray">{t('printers.anycubic.filesHelp')}</p>
+
           <div className="flex flex-wrap items-center gap-3">
             <input aria-label={t('common.upload')} type="file" accept=".gcode" disabled={busy || !hasPermission('printers:control')} onChange={event => setSelected(event.target.files?.[0] ?? null)} className="min-w-0 flex-1 text-sm" />
             <Button disabled={!selected || busy || !hasPermission('printers:control')} onClick={() => void upload()} title={!hasPermission('printers:control') ? t('printers.permission.noControl') : undefined}><Upload className="h-4 w-4" />{t('common.upload')}</Button>

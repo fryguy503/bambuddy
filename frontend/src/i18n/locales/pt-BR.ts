@@ -300,7 +300,7 @@ export default {
       resolvePrint: "Confirmar que a impressão não iniciou",
       resolvePrintHelp: "Verifique a impressora primeiro. Confirme apenas se este trabalho não iniciou. Isso libera o bloqueio da fila e marca a tentativa como falha, sem enviar comandos à impressora.",
       printStartUnknown: "Início não confirmado — verifique a impressora antes de tentar novamente.",
-      silent: "Silencioso",
+      quiet: "Silencioso",
       dryingHelp: "A secagem aquece todas as bobinas deste ACE. Os limites dependem do modelo e dos materiais.",
       slotHelp: "Defina material e cor na impressora. Atribuir bobina vincula o inventário separadamente.",
       rfidReadonly: "As configurações de material RFID são somente leitura.",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "Requer uma impressora ociosa e dados recentes do slot.",
       motionHelp: "Movimento e retorno à origem exigem uma impressora ociosa. Mantenha livre a área de impressão.",
       extruderPulseHelp: "Os botões E enviam um pulso de 0,5 segundo. O bico deve estar a pelo menos 170°C.",
-      normal: "Normal",
-      turbo: "Turbo",
+      standard: "Padrão",
+      sport: "Esportivo",
       commandQueued: "Comando na fila; aguardando o estado da impressora.",
       configureSlot: "Configurar slot ACE",
       waitingForControls: "Aguardando os recursos atuais da impressora",
@@ -3417,6 +3417,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "Raiz",
+    currentPageOnly: "O filtro e a ordenação se aplicam à página atual.",
     zipStarted_one: 'Download ZIP iniciado para {{count}} arquivo',
     zipStarted_other: 'Download ZIP iniciado para {{count}} arquivos',
     zipPartial: 'Download ZIP iniciado com {{successful}} de {{total}} arquivos; não foi possível obter os demais',

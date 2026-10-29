@@ -672,6 +672,19 @@ class AnycubicMQTTClient:
         data = envelope.get("data")
         if envelope.get("code", 200) not in (0, 200) or not isinstance(data, dict):
             return False
+        if kind in {"info", "print"}:
+            # Native LAN reports the current profile in info/project and in
+            # print/update settings as well as at the info root. A settings
+            # report does not carry lifecycle telemetry, but must still reach
+            # the status callback so the UI can show the observed profile.
+            # Native info root overrides project metadata, which may be cached.
+            sources = (data, data.get("project")) if kind == "info" else (data.get("settings"), data)
+            for source in sources:
+                mode = source.get("print_speed_mode") if isinstance(source, dict) else None
+                if type(mode) is int and mode in (1, 2, 3):
+                    self.state.speed_level = mode
+                    changed = True
+                    break
         if kind == "info":
             self._info_observed = time.monotonic()
             if isinstance(data.get("features"), dict):
@@ -681,10 +694,6 @@ class AnycubicMQTTClient:
                     if name in OPTION_FEATURES.values()
                 }
                 self._print_features_seen = self._info_observed
-                changed = True
-            mode = data.get("print_speed_mode")
-            if type(mode) is int and mode in (1, 2, 3):
-                self.state.speed_level = mode
                 changed = True
             for source in ("temp_limit", "free_temp_limit"):
                 limits = data.get(source)
@@ -1202,8 +1211,14 @@ class AnycubicMQTTClient:
             if not self._controls_ready() or type(mode) is not int or mode not in (1, 2, 3):
                 return False
             if self.state.state == "IDLE":
-                return self._publish("print", "setSpeedMode", {"speed_mode": mode})
-            return self._settings_update({"print_speed_mode": mode})
+                queued = self._publish("print", "setSpeedMode", {"speed_mode": mode})
+            else:
+                queued = self._settings_update({"print_speed_mode": mode})
+            if queued:
+                # Read back the actual profile instead of optimistically
+                # displaying an MQTT queue result as hardware acceptance.
+                self._publish("info", "query", None)
+            return queued
 
     def _reset_camera(self):
         self._camera_requested = False

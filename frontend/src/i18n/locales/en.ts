@@ -302,7 +302,7 @@ export default {
       resolvePrint: "Confirm print did not start",
       resolvePrintHelp: "Check the printer first. Confirm only if this job did not start. This releases the queue hold and marks the attempt failed; it sends no printer commands.",
       printStartUnknown: "Print start unconfirmed — check the printer before retrying.",
-      silent: "Silent",
+      quiet: "Quiet",
       dryingHelp: "Drying heats every spool in this ACE. Limits follow its model and loaded materials.",
       slotHelp: "Set the printer’s material type and color. Assign Spool links your inventory separately.",
       rfidReadonly: "RFID material settings are read-only.",
@@ -310,8 +310,8 @@ export default {
       idleRequired: "Requires an idle printer and fresh slot status.",
       motionHelp: "Jog and home require an idle printer. Keep the build area clear.",
       extruderPulseHelp: "E buttons send a 0.5-second pulse. The nozzle must be at least 170°C.",
-      normal: "Normal",
-      turbo: "Turbo",
+      standard: "Standard",
+      sport: "Sport",
       commandQueued: "Command queued; waiting for printer status.",
       configureSlot: "Configure ACE Slot",
       waitingForControls: "Waiting for current printer capabilities",
@@ -3462,6 +3462,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "Root",
+    currentPageOnly: "Filter and sort apply to the current page.",
     zipStarted_one: 'Started ZIP download for {{count}} file',
     zipStarted_other: 'Started ZIP download for {{count}} files',
     zipPartial: 'ZIP download started with {{successful}} of {{total}} files; the rest could not be retrieved',

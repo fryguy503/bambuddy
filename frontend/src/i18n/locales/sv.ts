@@ -300,7 +300,7 @@ export default {
       resolvePrint: "Bekräfta att utskriften inte startade",
       resolvePrintHelp: "Kontrollera först skrivaren. Bekräfta bara om jobbet inte startade. Detta släpper köspärren och markerar försöket som misslyckat; inga skrivarkommandon skickas.",
       printStartUnknown: "Utskriftsstart obekräftad — kontrollera skrivaren före ett nytt försök.",
-      silent: "Tyst",
+      quiet: "Tyst",
       dryingHelp: "Torkning värmer alla spolar i denna ACE. Modell och material avgör gränserna.",
       slotHelp: "Ställ in material och färg på skrivaren. Tilldela spole länkar lagret separat.",
       rfidReadonly: "RFID-materialinställningar är skrivskyddade.",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "Kräver en inaktiv skrivare och aktuell platsstatus.",
       motionHelp: "Förflyttning och hemgång kräver en inaktiv skrivare. Håll byggområdet fritt.",
       extruderPulseHelp: "E-knappar ger en puls på 0,5 sekunder. Munstycket måste vara minst 170°C.",
-      normal: "Normal",
-      turbo: "Turbo",
+      standard: "Standard",
+      sport: "Sport",
       commandQueued: "Kommando köat; väntar på skrivarstatus.",
       configureSlot: "Konfigurera ACE-plats",
       waitingForControls: "Väntar på aktuella skrivarfunktioner",
@@ -3459,6 +3459,8 @@ errors: {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "Rotkatalog",
+    currentPageOnly: "Filtrering och sortering gäller den aktuella sidan.",
     zipStarted_one: 'Startade ZIP-nedladdning för {{count}} fil',
     zipStarted_other: 'Startade ZIP-nedladdning för {{count}} files',
     zipPartial: 'Startade ZIP-nedladdning med {{successful}} av {{total}} filer; resten kunde inte hämtas',

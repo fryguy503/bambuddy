@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
 import { api, type AMSUnit, type AnycubicDryingControl } from '../../api/client';
@@ -20,7 +20,8 @@ describe('Native ACE drying', () => {
     await user.clear(minutes); await user.type(minutes, '5');
     await user.click(screen.getByRole('button', { name: 'Start Drying' }));
     await waitFor(() => expect(api.startAnycubicDrying).toHaveBeenCalledWith(7, 1, 60, 245));
-    expect(await screen.findByRole('status')).toHaveTextContent('Command queued; waiting for printer status.');
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Command queued; waiting for printer status.')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.getByText('Drying not running')).toBeInTheDocument();
   });
   it('keeps a stale or disconnected unit read-only', async () => {
@@ -37,7 +38,8 @@ describe('Native ACE drying', () => {
     render(<AnycubicAceDrying printerId={7} name="ACE 2" unit={unit} control={control} connected />);
     await user.click(screen.getByRole('button', { name: 'ACE 2 · Drying' }));
     await user.click(screen.getByRole('button', { name: 'Stop Drying' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Connection changed');
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Connection changed')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(stop).toHaveBeenCalledWith(7, 1);
   });
   it('waits for reported status before claiming a running cycle stopped', async () => {
@@ -46,7 +48,8 @@ describe('Native ACE drying', () => {
     render(<AnycubicAceDrying printerId={7} name="ACE 2" unit={{ ...unit, anycubic_drying: { status: 1, target_temp: 55, remaining_minutes: 120 } }} control={control} connected />);
     await user.click(screen.getByRole('button', { name: 'ACE 2 · Drying' }));
     await user.click(screen.getByRole('button', { name: 'Stop Drying' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('Command queued; waiting for printer status.');
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Command queued; waiting for printer status.')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.getByText('Drying', { selector: 'span' })).toBeInTheDocument();
     expect(screen.queryByText('Drying not running')).not.toBeInTheDocument();
   });

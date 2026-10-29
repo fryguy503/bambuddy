@@ -1,11 +1,14 @@
 """Controls are protocol-only fixtures: never change a real printer setting."""
 
+import json
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from backend.app.services.anycubic import AnycubicMQTTClient
+from backend.app.services.anycubic.protocol import PREFIX
 
 
 def client(state="RUNNING", model="Kobra S1"):
@@ -101,6 +104,86 @@ def test_speed_rejects_bambu_only_fourth_mode():
     value = client()
     assert not value.set_print_speed(4)
     assert value.set_print_speed(3)
-    value._publish.assert_called_once_with(
-        "print", "update", {"taskid": "active-task", "settings": {"print_speed_mode": 3}}
+    assert [call.args for call in value._publish.call_args_list] == [
+        ("print", "update", {"taskid": "active-task", "settings": {"print_speed_mode": 3}}),
+        ("info", "query", None),
+    ]
+
+
+@pytest.mark.parametrize("mode", [1, 2, 3])
+@pytest.mark.parametrize("state", ["IDLE", "RUNNING", "PAUSE"])
+def test_native_speed_profiles_keep_wire_values_and_request_observed_readback(state, mode):
+    value = client(state)
+    value.state.speed_level = 2
+    assert value.set_print_speed(mode)
+    command = (
+        ("print", "setSpeedMode", {"speed_mode": mode})
+        if state == "IDLE"
+        else ("print", "update", {"taskid": "active-task", "settings": {"print_speed_mode": mode}})
     )
+    assert [call.args for call in value._publish.call_args_list] == [command, ("info", "query", None)]
+    assert value.state.speed_level == 2  # A queued request is not printer acknowledgement.
+
+
+def test_failed_speed_publish_does_not_claim_success_or_issue_readback():
+    value = client()
+    value._publish.return_value = False
+    assert not value.set_print_speed(1)
+    assert value._publish.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "kind,data,expected",
+    [
+        ("info", {"print_speed_mode": 1}, 1),
+        ("info", {"project": {"print_speed_mode": 3}}, 3),
+        ("info", {"print_speed_mode": 1, "project": {"print_speed_mode": 3}}, 1),
+        ("print", {"settings": {"print_speed_mode": 3}}, 3),
+        ("print", {"print_speed_mode": 2}, 2),
+    ],
+)
+def test_native_speed_reports_update_observed_profile_without_renewing_lifecycle(kind, data, expected):
+    value = client()
+    value.state.speed_level = 2
+    observed = value._last_state_time
+    assert value._control_report(kind, {"action": "update", "data": data})
+    assert value.state.speed_level == expected
+    assert value._last_state_time == observed
+    value._publish.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", [0, 4, -1, True, "1", 1.0, None])
+def test_invalid_native_speed_reports_cannot_change_profile(mode):
+    value = client()
+    value.state.speed_level = 2
+    value._control_report("print", {"data": {"settings": {"print_speed_mode": mode}}})
+    assert value.state.speed_level == 2
+
+
+def test_rejected_speed_receipt_cannot_change_profile():
+    value = client()
+    value.state.speed_level = 2
+    assert not value._control_report("print", {"code": 400, "data": {"settings": {"print_speed_mode": 3}}})
+    assert value.state.speed_level == 2
+
+
+def test_settings_only_speed_report_reaches_status_callback_without_print_lifecycle():
+    value = client()
+    value._client = MagicMock()
+    value._subscribed = True
+    value._device_id = "fixture"
+    value.on_state_change = MagicMock()
+    observed = value._last_state_time
+    message = SimpleNamespace(
+        topic=f"{PREFIX}/printer/public/20025/fixture/print/report",
+        payload=json.dumps(
+            {"type": "print", "action": "update", "code": 200, "data": {"settings": {"print_speed_mode": 3}}}
+        ).encode(),
+        retain=False,
+    )
+    value._received(value._generation, value._client, message)
+    assert value.state.speed_level == 3
+    assert value.state.state == "RUNNING"
+    assert value._last_state_time == observed
+    value.on_state_change.assert_called_once_with(value.state)
+    value._publish.assert_not_called()

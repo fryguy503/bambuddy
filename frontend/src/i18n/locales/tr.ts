@@ -300,7 +300,7 @@ export default {
       resolvePrint: "Baskının başlamadığını onayla",
       resolvePrintHelp: "Önce yazıcıyı kontrol edin. Yalnızca bu iş başlamadıysa onaylayın. Kuyruk bekletmesi kaldırılır ve deneme başarısız işaretlenir; yazıcı komutu gönderilmez.",
       printStartUnknown: "Baskı başlangıcı doğrulanmadı — yeniden denemeden önce yazıcıyı kontrol edin.",
-      silent: "Sessiz",
+      quiet: "Sessiz",
       dryingHelp: "Kurutma bu ACE’deki tüm makaraları ısıtır. Sınırlar modele ve malzemelere bağlıdır.",
       slotHelp: "Yazıcıdaki malzeme ve rengi ayarlayın. Makara atama envanteri ayrı olarak bağlar.",
       rfidReadonly: "RFID malzeme ayarları salt okunurdur.",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "Boştaki yazıcı ve güncel yuva durumu gereklidir.",
       motionHelp: "Hareket ve başlangıca dönme için yazıcı boşta olmalıdır. Baskı alanını boş tutun.",
       extruderPulseHelp: "E düğmeleri 0,5 saniyelik darbe gönderir. Nozul en az 170°C olmalıdır.",
-      normal: "Normal",
-      turbo: "Turbo",
+      standard: "Standart",
+      sport: "Spor",
       commandQueued: "Komut sıraya alındı; yazıcı durumu bekleniyor.",
       configureSlot: "ACE Yuvasını Yapılandır",
       waitingForControls: "Güncel yazıcı özellikleri bekleniyor",
@@ -3433,6 +3433,8 @@ export default {
 
   // Yazıcı Dosya Yöneticisi modali (yazıcı dahili deposu)
   printerFiles: {
+    root: "Kök",
+    currentPageOnly: "Filtreleme ve sıralama geçerli sayfaya uygulanır.",
     zipStarted_one: '{{count}} dosya için ZIP indirmesi başlatıldı',
     zipStarted_other: '{{count}} dosya için ZIP indirmesi başlatıldı',
     zipPartial: '{{total}} dosyanın {{successful}} tanesiyle ZIP indirmesi başlatıldı; kalan dosyalar alınamadı',

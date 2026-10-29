@@ -300,7 +300,7 @@ export default {
       resolvePrint: "確認列印未開始",
       resolvePrintHelp: "請先檢查印表機。僅在此工作確實未開始時確認。這將解除佇列保留並將本次嘗試標記為失敗，不會傳送印表機命令。",
       printStartUnknown: "列印啟動未確認，請檢查印表機後再重試。",
-      silent: "靜音",
+      quiet: "靜音",
       dryingHelp: "乾燥會加熱此ACE中的所有料盤。限制取決於機型和已裝材料。",
       slotHelp: "設定印表機的材料類型和顏色。指派料盤會單獨關聯庫存。",
       rfidReadonly: "RFID材料設定為唯讀。",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "需要閒置的印表機和最新料槽狀態。",
       motionHelp: "移動和歸零僅限印表機閒置時操作。請清空列印區域。",
       extruderPulseHelp: "E按鈕傳送0.5秒脈衝。噴嘴溫度必須至少為170°C。",
-      normal: "正常",
-      turbo: "極速",
+      standard: "標準",
+      sport: "運動",
       commandQueued: "命令已排入佇列，正在等待印表機狀態。",
       configureSlot: "設定ACE料槽",
       waitingForControls: "正在等待印表機的目前功能",
@@ -3417,6 +3417,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "根目錄",
+    currentPageOnly: "篩選和排序僅適用於目前頁面。",
     zipStarted_one: '已開始下載 {{count}} 個檔案的 ZIP',
     zipStarted_other: '已開始下載 {{count}} 個檔案的 ZIP',
     zipPartial: '已開始下載 ZIP，共 {{total}} 個檔案中成功取得 {{successful}} 個，其餘檔案無法取得',

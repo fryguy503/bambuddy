@@ -81,12 +81,17 @@ temperature operation for that state. Model limits and any lower reported
 firmware limits apply on both the card and API. Fans appear after the printer
 reports them; percentages are not converted to Bambu PWM. A reported fan with
 an unknown scale remains visible but cannot
-be adjusted until its scale is known. Speed offers **Silent / Normal / Turbo**,
+be adjusted until its scale is known. Speed offers **Quiet / Standard / Sport**,
 using the native idle-mode setting or current-print update. Stale or unknown
 capabilities show a waiting state instead of a permission error. Controls
 retain the existing printer-control permission and scope. These settings have
 offline payload tests; physical heater, fan and speed acceptance remains
 pending. No physical setting was changed in testing.
+
+Native command requests use Bambuddy's temporary toast notifications. A queued
+toast confirms submission, while subsequent printer telemetry updates the
+displayed state. Speed modes retain the native values 1 (Quiet), 2 (Standard)
+and 3 (Sport); the selected mode is never changed optimistically.
 
 ACE slots show the printer's `consumables_percent`, including a reported zero.
 Missing values display **Unknown**; fill is never fabricated from material or
@@ -182,6 +187,12 @@ acceptance on hardware remains pending; tests send none of these commands to
 the physical printer.
 
 ## Upload without starting a print
+
+The native browser uses the shared File Manager header, toolbar, breadcrumb,
+file icons and footer. It lists actual printer folders and retains native
+pagination. Filtering and name/size sorting apply to the current page, as
+indicated in the browser. Bambu-only shortcuts and unimplemented download,
+delete and preview actions are not offered.
 
 Open **Browse printer files**, choose `.gcode` sliced with Anycubic Slicer Next
 or OrcaSlicer for the saved printer model, and select **Upload**. Validation

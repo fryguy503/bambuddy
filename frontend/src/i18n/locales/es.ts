@@ -300,7 +300,7 @@ export default {
       resolvePrint: "Confirmar que la impresión no empezó",
       resolvePrintHelp: "Comprueba primero la impresora. Confirma solo si este trabajo no empezó. Se libera el bloqueo de la cola y el intento se marca como fallido; no se envían comandos a la impresora.",
       printStartUnknown: "Inicio sin confirmar: comprueba la impresora antes de reintentar.",
-      silent: "Silencioso",
+      quiet: "Silencioso",
       dryingHelp: "El secado calienta todas las bobinas de este ACE. Los límites dependen del modelo y los materiales.",
       slotHelp: "Configura material y color en la impresora. Asignar bobina vincula el inventario por separado.",
       rfidReadonly: "Los ajustes del material RFID son de solo lectura.",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "Requiere una impresora inactiva y datos recientes de la ranura.",
       motionHelp: "Mover y llevar al origen requieren una impresora inactiva. Mantén libre el área de impresión.",
       extruderPulseHelp: "Los botones E envían un pulso de 0,5 segundos. La boquilla debe estar al menos a 170°C.",
-      normal: "Normal",
-      turbo: "Turbo",
+      standard: "Estándar",
+      sport: "Deportivo",
       commandQueued: "Comando en cola; esperando el estado de la impresora.",
       configureSlot: "Configurar ranura ACE",
       waitingForControls: "Esperando las funciones actuales de la impresora",
@@ -3432,6 +3432,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "Raíz",
+    currentPageOnly: "El filtro y la ordenación se aplican a la página actual.",
     zipStarted_one: 'Se inició la descarga ZIP de {{count}} archivo',
     zipStarted_other: 'Se inició la descarga ZIP de {{count}} archivos',
     zipPartial: 'La descarga ZIP comenzó con {{successful}} de {{total}} archivos; no se pudieron recuperar los demás',

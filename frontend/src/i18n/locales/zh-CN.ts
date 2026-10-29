@@ -300,7 +300,7 @@ export default {
       resolvePrint: "确认打印未开始",
       resolvePrintHelp: "请先检查打印机。仅在此任务确实未开始时确认。这将解除队列保留并将本次尝试标记为失败，不会发送打印机命令。",
       printStartUnknown: "打印启动未确认，请检查打印机后再重试。",
-      silent: "静音",
+      quiet: "静音",
       dryingHelp: "干燥会加热此ACE中的所有料盘。限制取决于机型和已装材料。",
       slotHelp: "设置打印机的材料类型和颜色。分配料盘会单独关联库存。",
       rfidReadonly: "RFID材料设置为只读。",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "需要空闲的打印机和最新料槽状态。",
       motionHelp: "移动和归零仅限打印机空闲时操作。请清空打印区域。",
       extruderPulseHelp: "E按钮发送0.5秒脉冲。喷嘴温度必须至少为170°C。",
-      normal: "正常",
-      turbo: "极速",
+      standard: "标准",
+      sport: "运动",
       commandQueued: "命令已排队，正在等待打印机状态。",
       configureSlot: "配置ACE料槽",
       waitingForControls: "正在等待打印机的当前功能",
@@ -3417,6 +3417,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "根目录",
+    currentPageOnly: "筛选和排序仅适用于当前页。",
     zipStarted_one: '已开始下载 {{count}} 个文件的 ZIP',
     zipStarted_other: '已开始下载 {{count}} 个文件的 ZIP',
     zipPartial: '已开始下载 ZIP，共 {{total}} 个文件中成功获取 {{successful}} 个，其余文件无法获取',

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
 import { api, type AMSTray, type InventorySpool, type SpoolAssignment } from '../../api/client';
@@ -67,6 +67,33 @@ describe('Anycubic ACE slot menus', () => {
     await user.clear(material); await user.type(material, 'PETG');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(save).toHaveBeenCalledWith(7, 1, 2, 'PETG', expect.stringMatching(/^ff0000$/i)));
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Command queued; waiting for printer status.')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Configure ACE Slot' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+  it('uses a shared error toast while preserving unsaved slot settings for retry', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'setAnycubicSlot').mockRejectedValue(new Error('RFID settings became read-only'));
+    render(<AnycubicAceSlot printerId={7} boxId={1} slotId={2} label="ACE 2 · 3" tray={tray} control={control} connected><span>Slot 3</span></AnycubicAceSlot>);
+    await user.click(screen.getByTestId('filament-slot'));
+    await user.click(await screen.findByRole('button', { name: 'Configure' }));
+    await user.clear(screen.getByLabelText('Material'));
+    await user.type(screen.getByLabelText('Material'), 'PETG');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('RFID settings became read-only')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Configure ACE Slot' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Material')).toHaveValue('PETG');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+  it('uses the queued toast when feeding the selected physical ACE slot', async () => {
+    const user = userEvent.setup();
+    const feed = vi.spyOn(api, 'feedAnycubicSlot').mockResolvedValue({ success: true });
+    render(<AnycubicAceSlot printerId={7} boxId={1} slotId={2} label="ACE 2 · 3" tray={tray} control={control} connected><span>Slot 3</span></AnycubicAceSlot>);
+    await user.click(screen.getByTestId('filament-slot'));
+    await user.click(await screen.findByRole('button', { name: 'Load' }));
+    await waitFor(() => expect(feed).toHaveBeenCalledWith(7, 1, 2, 'load'));
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Command queued; waiting for printer status.')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
   it('shows RFID settings as read-only and never offers a Bambu K profile', async () => {
     const user = userEvent.setup();

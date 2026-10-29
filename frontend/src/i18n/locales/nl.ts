@@ -300,7 +300,7 @@ export default {
       resolvePrint: "Bevestig dat de afdruk niet is gestart",
       resolvePrintHelp: "Controleer eerst de printer. Bevestig alleen als deze taak niet is gestart. Dit heft de wachtrijblokkering op en markeert de poging als mislukt; er worden geen printeropdrachten verzonden.",
       printStartUnknown: "Afdrukstart niet bevestigd — controleer de printer vóór opnieuw proberen.",
-      silent: "Stil",
+      quiet: "Stil",
       dryingHelp: "Drogen verwarmt alle spoelen in deze ACE. Model en materialen bepalen de grenzen.",
       slotHelp: "Stel materiaal en kleur op de printer in. Spoel toewijzen koppelt je voorraad apart.",
       rfidReadonly: "RFID-materiaalinstellingen zijn alleen-lezen.",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "Vereist een inactieve printer en actuele slotstatus.",
       motionHelp: "Verplaatsen en homen vereisen een inactieve printer. Houd de printruimte vrij.",
       extruderPulseHelp: "E-knoppen sturen een puls van 0,5 seconde. De nozzle moet minstens 170°C zijn.",
-      normal: "Normaal",
-      turbo: "Turbo",
+      standard: "Standaard",
+      sport: "Sport",
       commandQueued: "Opdracht in wachtrij; wachten op printerstatus.",
       configureSlot: "ACE-slot configureren",
       waitingForControls: "Wachten op actuele printerfuncties",
@@ -3460,6 +3460,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "Hoofdmap",
+    currentPageOnly: "Filteren en sorteren gelden voor de huidige pagina.",
     zipStarted_one: 'ZIP-download gestart voor {{count}} bestand',
     zipStarted_other: 'ZIP-download gestart voor {{count}} bestanden',
     zipPartial: 'ZIP-download gestart met {{successful}} van {{total}} bestanden; de overige konden niet worden opgehaald',

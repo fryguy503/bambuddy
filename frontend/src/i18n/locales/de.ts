@@ -300,7 +300,7 @@ export default {
       resolvePrint: "Bestätigen, dass der Druck nicht gestartet wurde",
       resolvePrintHelp: "Prüfe zuerst den Drucker. Bestätige nur, wenn dieser Auftrag nicht gestartet wurde. Die Warteschlangensperre wird aufgehoben und der Versuch als fehlgeschlagen markiert; es werden keine Druckerbefehle gesendet.",
       printStartUnknown: "Druckstart unbestätigt — prüfe vor einem erneuten Versuch den Drucker.",
-      silent: "Leise",
+      quiet: "Leise",
       dryingHelp: "Trocknen erwärmt alle Spulen in diesem ACE. Modell und Materialien bestimmen die Grenzen.",
       slotHelp: "Materialtyp und Farbe am Drucker einstellen. Spule zuweisen verknüpft das Inventar separat.",
       rfidReadonly: "RFID-Materialdaten sind schreibgeschützt.",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "Erfordert einen inaktiven Drucker und aktuellen Steckplatzstatus.",
       motionHelp: "Bewegen und Referenzfahrt erfordern einen inaktiven Drucker. Bauraum freihalten.",
       extruderPulseHelp: "E-Tasten senden einen Impuls von 0,5 Sekunden. Die Düse muss mindestens 170°C haben.",
-      normal: "Normal",
-      turbo: "Turbo",
+      standard: "Standard",
+      sport: "Sport",
       commandQueued: "Befehl eingereiht; warte auf Druckerstatus.",
       configureSlot: "ACE-Steckplatz konfigurieren",
       waitingForControls: "Warte auf aktuelle Druckerfunktionen",
@@ -3430,6 +3430,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "Stammverzeichnis",
+    currentPageOnly: "Filter und Sortierung gelten für die aktuelle Seite.",
     zipStarted_one: 'ZIP-Download für {{count}} Datei gestartet',
     zipStarted_other: 'ZIP-Download für {{count}} Dateien gestartet',
     zipPartial: 'ZIP-Download mit {{successful}} von {{total}} Dateien gestartet; die übrigen konnten nicht abgerufen werden',

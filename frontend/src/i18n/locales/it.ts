@@ -300,7 +300,7 @@ export default {
       resolvePrint: "Conferma che la stampa non è iniziata",
       resolvePrintHelp: "Controlla prima la stampante. Conferma solo se questo lavoro non è iniziato. Il blocco della coda viene rimosso e il tentativo viene segnato come fallito; non vengono inviati comandi alla stampante.",
       printStartUnknown: "Avvio non confermato: controlla la stampante prima di riprovare.",
-      silent: "Silenzioso",
+      quiet: "Silenzioso",
       dryingHelp: "L’essiccazione riscalda tutte le bobine di questo ACE. I limiti dipendono da modello e materiali.",
       slotHelp: "Imposta materiale e colore sulla stampante. Assegna bobina collega separatamente l’inventario.",
       rfidReadonly: "Le impostazioni dei materiali RFID sono di sola lettura.",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "Richiede una stampante inattiva e lo stato aggiornato dello slot.",
       motionHelp: "Movimento e homing richiedono una stampante inattiva. Libera l’area di stampa.",
       extruderPulseHelp: "I pulsanti E inviano un impulso di 0,5 secondi. L’ugello deve essere ad almeno 170°C.",
-      normal: "Normale",
-      turbo: "Turbo",
+      standard: "Standard",
+      sport: "Sport",
       commandQueued: "Comando in coda; attesa dello stato della stampante.",
       configureSlot: "Configura slot ACE",
       waitingForControls: "In attesa delle funzioni attuali della stampante",
@@ -3417,6 +3417,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "Radice",
+    currentPageOnly: "Il filtro e l’ordinamento si applicano alla pagina corrente.",
     zipStarted_one: 'Download ZIP avviato per {{count}} file',
     zipStarted_other: 'Download ZIP avviato per {{count}} file',
     zipPartial: 'Download ZIP avviato con {{successful}} file su {{total}}; non è stato possibile recuperare gli altri',

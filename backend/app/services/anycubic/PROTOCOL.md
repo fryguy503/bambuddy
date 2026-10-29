@@ -1,7 +1,8 @@
-This experimental provider implements signed stock Anycubic Kobra LAN monitoring and
-pause/resume/stop. It does not establish physical printer acceptance. Camera,
-file transfer, print submission, drying, filament writes and Bambu-specific
-features remain unsupported.
+This experimental provider implements signed stock Anycubic Kobra LAN monitoring,
+native controls, camera streaming, raw G-code transfer and queued submission,
+ACE drying and writable material settings. See `docs/anycubic.md` for the current
+capabilities and validation limits. Implemented controls do not establish
+physical printer acceptance. Bambu-specific wire operations remain unsupported.
 
 Protocol evidence comes from the user's Anycubic Orca plugin 0.2.0.dev5 and
 its independently audited Anycubic Slicer Next 2.0.0.3 native serializers.
@@ -52,8 +53,10 @@ ACE reports preserve physical box IDs 0/1 and slot indices 0–3. Full getInfo
 snapshots require all four slots per reported unit, and replace inventory;
 other actions merge only into established full units. Unknown RFID data stays
 unknown. Status 4 clears stale material even when firmware repeats its type.
-The normalized `ams` objects serve Bambuddy's display only; they never authorize
-Bambu commands, automatic spool assignment or Bambu archival callbacks.
+The normalized `ams` objects never authorize Bambu commands or archival callbacks.
+Native spool matching separately requires a fresh complete material snapshot
+and an exact, unique full-material/color match in the built-in inventory; it
+links inventory locally without changing the printer or inventing an RFID UID.
 
 MQTT queue success is not device acceptance. Controls require current printer
 lifecycle telemetry, use a new message ID and are never replayed on reconnect.

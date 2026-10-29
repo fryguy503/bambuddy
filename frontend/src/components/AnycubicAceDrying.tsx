@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Flame } from 'lucide-react';
 import { api, type AMSUnit, type AnycubicDryingControl } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { Button } from './Button';
 
 export function AnycubicAceDrying({ printerId, name, unit, control, connected }: {
@@ -11,14 +12,13 @@ export function AnycubicAceDrying({ printerId, name, unit, control, connected }:
 }) {
   const { t } = useTranslation();
   const { hasPermission } = useAuth();
+  const { showToast } = useToast();
   const cache = useQueryClient();
   const [open, setOpen] = useState(false);
   const [temperature, setTemperature] = useState('45');
   const [hours, setHours] = useState('4');
   const [minutes, setMinutes] = useState('0');
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
   const status = unit.anycubic_drying;
   const active = status?.status === 1;
   const allowed = hasPermission('printers:control');
@@ -30,18 +30,18 @@ export function AnycubicAceDrying({ printerId, name, unit, control, connected }:
     if (!open) {
       setTemperature(String(status?.target_temp && status.target_temp >= (control?.temp_min ?? 40) ? Math.min(status.target_temp, control?.temp_max ?? 65) : 45));
       const total = Math.round(status?.duration_minutes || 240);
-      setHours(String(Math.floor(total / 60))); setMinutes(String(total % 60)); setError(''); setMessage('');
+      setHours(String(Math.floor(total / 60))); setMinutes(String(total % 60));
     }
     setOpen(!open);
   };
   const send = async (stop: boolean) => {
-    setPending(true); setError(''); setMessage('');
+    setPending(true);
     try {
       if (stop) await api.stopDrying(printerId, unit.id);
       else await api.startAnycubicDrying(printerId, unit.id, target, duration);
-      setMessage(t('printers.anycubic.commandQueued'));
+      showToast(t('printers.anycubic.commandQueued'), 'info');
       void cache.invalidateQueries({ queryKey: ['printerStatus', printerId] });
-    } catch (failure) { setError(failure instanceof Error ? failure.message : t('common.error')); }
+    } catch (failure) { showToast(failure instanceof Error ? failure.message : t('common.error'), 'error'); }
     finally { setPending(false); }
   };
   return <div className="mt-2 border-t border-white/10 pt-2 text-xs">
@@ -67,8 +67,6 @@ export function AnycubicAceDrying({ printerId, name, unit, control, connected }:
       {control && <p className="text-bambu-gray">{control.temp_min}–{control.temp_max}°C · {control.duration_min}–{durationMax} {t('common.minutes')}</p>}
       {!allowed && <p>{t('printers.permission.noControl')}</p>}
       {allowed && (!connected || !control?.start_ready) && <p>{t('printers.anycubic.waitingForControls')}</p>}
-      {error && <p role="alert" className="text-red-400">{error}</p>}
-      {message && <p role="status" className="text-bambu-green">{message}</p>}
       <div className="flex flex-wrap gap-1">
         <Button type="submit" size="sm" disabled={!valid || pending || !connected || !allowed || !control?.start_ready}>{active ? t('common.apply') : t('printers.drying.start')}</Button>
         <Button type="button" size="sm" variant="secondary" disabled={pending || !connected || !allowed || !control?.stop_ready} onClick={() => void send(true)}>{t('printers.drying.stop')}</Button>

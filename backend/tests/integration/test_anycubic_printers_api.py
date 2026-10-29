@@ -149,7 +149,8 @@ async def test_native_settings_routes_use_native_payloads(async_client, anycubic
         result = await async_client.post(f"/api/v1/printers/{printer.id}/{suffix}", params=params)
     assert result.status_code == 200, result.text
     assert result.json()["queued"] is True
-    client._publish.assert_called_once_with(*expected)
+    calls = [expected, ("info", "query", None)] if suffix == "print-speed" else [expected]
+    assert [call.args for call in client._publish.call_args_list] == calls
 
 
 @pytest.mark.parametrize(

@@ -300,7 +300,7 @@ export default {
       resolvePrint: "Confirmer que l’impression n’a pas démarré",
       resolvePrintHelp: "Vérifiez d’abord l’imprimante. Confirmez uniquement si ce travail n’a pas démarré. Cela libère le blocage de la file et marque la tentative en échec, sans envoyer de commande à l’imprimante.",
       printStartUnknown: "Démarrage non confirmé — vérifiez l’imprimante avant de réessayer.",
-      silent: "Silencieux",
+      quiet: "Silencieux",
       dryingHelp: "Le séchage chauffe toutes les bobines de cet ACE. Les limites dépendent du modèle et des matériaux.",
       slotHelp: "Réglez le matériau et la couleur sur l’imprimante. L’affectation de bobine lie séparément l’inventaire.",
       rfidReadonly: "Les paramètres du matériau RFID sont en lecture seule.",
@@ -308,8 +308,8 @@ export default {
       idleRequired: "Nécessite une imprimante au repos et un état récent de l’emplacement.",
       motionHelp: "Déplacement et retour à l’origine nécessitent une imprimante au repos. Dégagez la zone d’impression.",
       extruderPulseHelp: "Les boutons E envoient une impulsion de 0,5 seconde. La buse doit atteindre au moins 170°C.",
-      normal: "Normal",
-      turbo: "Turbo",
+      standard: "Standard",
+      sport: "Sport",
       commandQueued: "Commande en attente ; attente de l’état de l’imprimante.",
       configureSlot: "Configurer l’emplacement ACE",
       waitingForControls: "En attente des fonctions actuelles de l’imprimante",
@@ -3418,6 +3418,8 @@ export default {
 
   // Printer File Manager modal (printer internal storage)
   printerFiles: {
+    root: "Racine",
+    currentPageOnly: "Le filtre et le tri s’appliquent à la page actuelle.",
     zipStarted_one: 'Téléchargement ZIP de {{count}} fichier démarré',
     zipStarted_other: 'Téléchargement ZIP de {{count}} fichiers démarré',
     zipPartial: 'Le téléchargement ZIP a démarré avec {{successful}} fichiers sur {{total}} ; les autres n’ont pas pu être récupérés',
