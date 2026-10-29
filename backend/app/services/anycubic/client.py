@@ -1,9 +1,11 @@
 """Experimental Anycubic Kobra monitoring and basic controls over stock LAN mode."""
 
 import copy
+import hashlib
 import json
 import logging
 import math
+import re
 import threading
 import time
 import uuid
@@ -17,6 +19,7 @@ from backend.app.utils.paho_teardown import retire_paho_client
 
 from .drying import limits as drying_limits
 from .files import FileSession, directory, parse_catalog, upload_url
+from .printing import OPTION_FEATURES, PrintArtifact, print_data, rgba, validate_options
 from .protocol import (
     PREFIX,
     AnycubicError,
@@ -114,6 +117,10 @@ class AnycubicMQTTClient:
         self._info_event = threading.Event()
         self._file_lock = threading.Lock()
         self._file_pending = None
+        self._print_features = {}
+        self._print_features_seen = 0.0
+        self._print_pending = None
+        self._print_attempts = OrderedDict()
 
     @staticmethod
     def discover(ip_address):
@@ -331,6 +338,7 @@ class AnycubicMQTTClient:
                 control_changed = self._control_report(tail[0], envelope)
                 self._file_report(tail[0], envelope)
                 self._camera_report(tail[0], envelope)
+                self._print_report(tail[0], envelope)
                 if not self._telemetry.apply(tail[0], envelope) and not control_changed:
                     return
                 if tail[0] == "multiColorBox":
@@ -351,7 +359,7 @@ class AnycubicMQTTClient:
             self.last_connect_error = None
         self._notify()
 
-    def _publish(self, kind, action, data):
+    def _publish(self, kind, action, data, *, msgid=None):
         with self._lock:
             if self._client is None or not self._subscribed or self._stop.is_set():
                 return False
@@ -360,7 +368,7 @@ class AnycubicMQTTClient:
                 "action": action,
                 "data": data,
                 "timestamp": int(time.time() * 1000),
-                "msgid": str(uuid.uuid4()),
+                "msgid": msgid or str(uuid.uuid4()),
             }
             try:
                 result = self._client.publish(
@@ -377,6 +385,9 @@ class AnycubicMQTTClient:
         return all(self._publish(kind, action, None) for kind, action in _QUERIES)
 
     def _reset_files(self):
+        self._reset_print_request()
+        self._print_features.clear()
+        self._print_features_seen = 0.0
         self._upload_url = None
         self._info_event.set()
         if self._file_pending is not None:
@@ -478,6 +489,181 @@ class AnycubicMQTTClient:
         finally:
             self._file_lock.release()
 
+    def _reset_print_request(self):
+        pending = self._print_pending
+        if pending is not None and not pending["event"].is_set():
+            pending["result"]["status"] = "unknown"
+            pending["event"].set()
+
+    def _print_report(self, kind, envelope):
+        pending = self._print_pending
+        if (
+            pending is None
+            or kind != "print"
+            or envelope.get("action") != "start"
+            or envelope.get("msgid", envelope.get("msgId")) != pending["result"]["msgid"]
+            or pending["event"].is_set()
+        ):
+            return
+        code = envelope.get("code")
+        if type(code) is not int:
+            return
+        if code not in (0, 200):
+            pending["result"]["status"] = "rejected"
+            pending["event"].set()
+            return
+        data = envelope.get("data")
+        if not isinstance(data, dict):
+            return
+        task = data.get("taskid", data.get("task_id"))
+        if type(task) is int and 0 < task <= (1 << 63) - 1:
+            task = str(task)
+        if (
+            not isinstance(task, str)
+            or not task.strip()
+            or task != task.strip()
+            or len(task) > 128
+            or task in {"-1", "0", "null", "undefined"}
+            or re.fullmatch(r"-?\d+", task) is not None
+            and int(task) <= 0
+            or any(ord(char) < 32 or ord(char) == 127 for char in task)
+            or data.get("filename", pending["result"]["filename"]) != pending["result"]["filename"]
+        ):
+            return
+        pending["result"].update(status="accepted", task_id=task)
+        pending["event"].set()
+
+    def print_capabilities(self):
+        """Observed features and physical material sources, without session secrets."""
+        with self._lock:
+            now = time.monotonic()
+            options = [
+                name
+                for name, feature in OPTION_FEATURES.items()
+                if self._print_features.get(feature) is True
+                and self._print_features_seen
+                and now - self._print_features_seen <= self.STALE_TIMEOUT
+            ]
+            slots = []
+            inventory_fresh = bool(
+                self._fresh_connection()
+                and self._telemetry.boxes
+                and all(
+                    box_id in self._ace_seen and now - self._ace_seen[box_id] <= self.STALE_TIMEOUT
+                    for box_id in self._telemetry.boxes
+                )
+            )
+            # Native 2.0.0.3 sorts signed box IDs before deriving wire indices.
+            # A sparse identity (e.g. box 3 alone) is not multiplied by four.
+            for position, box in enumerate(sorted(self._telemetry.boxes.values(), key=lambda item: item["id"])):
+                fresh = bool(
+                    inventory_fresh
+                    and box["id"] in self._ace_seen
+                    and now - self._ace_seen[box["id"]] <= self.STALE_TIMEOUT
+                )
+                for tray in box["tray"]:
+                    material = tray.get("tray_type") or ""
+                    try:
+                        color = list(rgba(tray.get("tray_color")))
+                    except AnycubicError:
+                        color = []
+                    slots.append(
+                        {
+                            "box_id": box["id"],
+                            "slot_id": tray["id"],
+                            "ams_index": position * 4 + tray["id"],
+                            "material_type": material,
+                            "color": color,
+                            "available": bool(fresh and tray.get("state") == 3 and material and color),
+                        }
+                    )
+            return {
+                "ready": bool(self._motion_ready() and self._print_pending is None),
+                "options": options,
+                "ace_slots": slots,
+                "use_ace": any(item["available"] for item in slots),
+            }
+
+    def submit_print(self, context, artifact, options, dispatch_id, timeout=20.0, *, cancelled=None):
+        """Submit a previously uploaded file once, and wait for its own receipt.
+
+        Must run off the event loop. A missing or uncertain receipt is unknown;
+        it never authorizes automatic retry. The scheduler persists its intent
+        before calling this method so a process restart cannot replay it.
+        """
+        if (
+            not isinstance(artifact, PrintArtifact)
+            or not isinstance(dispatch_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", dispatch_id)
+        ):
+            raise AnycubicError("Invalid native print dispatch identity")
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 60:
+            raise AnycubicError("Invalid print acknowledgement timeout")
+        options = validate_options(options)
+        identity = (artifact.file.sha256, artifact.file.filename, json.dumps(options, sort_keys=True))
+        with self._lock:
+            previous = self._print_attempts.get(dispatch_id)
+            if previous is not None:
+                if previous["identity"] != identity:
+                    raise AnycubicError("This print dispatch identity has already been used")
+                return dict(previous["result"])
+        sha256, md5, size = hashlib.sha256(), hashlib.md5(usedforsecurity=False), 0
+        try:
+            with artifact.file.path.open("rb") as stream:
+                while chunk := stream.read(65536):
+                    sha256.update(chunk)
+                    md5.update(chunk)
+                    size += len(chunk)
+                    if size > artifact.file.size:
+                        raise AnycubicError("The sliced file changed after upload; inspect it before retrying")
+        except OSError:
+            raise AnycubicError("The sliced file is unavailable; inspect it before retrying") from None
+        if (size, sha256.hexdigest(), md5.hexdigest()) != (artifact.file.size, artifact.file.sha256, artifact.md5):
+            raise AnycubicError("The sliced file changed after upload; inspect it before retrying")
+        with self._lock:
+            if dispatch_id in self._print_attempts:
+                previous = self._print_attempts[dispatch_id]
+                if previous["identity"] != identity:
+                    raise AnycubicError("This print dispatch identity has already been used")
+                return dict(previous["result"])
+            capabilities = self.print_capabilities()
+            if (
+                not self.file_session_valid(context)
+                or artifact.file.model != self.model
+                or not capabilities["ready"]
+                or cancelled is not None
+                and cancelled.is_set()
+            ):
+                raise AnycubicError("The printer session changed or the printer is no longer idle")
+            data = print_data(artifact, options, capabilities["ace_slots"], capabilities["options"])
+            # Only settled attempts may be evicted. Unknown intents remain
+            # remembered for this client's lifetime, as in the durable queue.
+            if len(self._print_attempts) >= 256:
+                for key, item in list(self._print_attempts.items()):
+                    if item["result"]["status"] in {"accepted", "rejected"}:
+                        self._print_attempts.pop(key)
+                        break
+                else:
+                    raise AnycubicError("Inspect unresolved print submissions before creating another")
+            result = {
+                "status": "unknown",
+                "task_id": None,
+                "filename": artifact.file.filename,
+                "msgid": str(uuid.uuid4()),
+            }
+            pending = {"identity": identity, "result": result, "event": threading.Event()}
+            self._print_attempts[dispatch_id] = self._print_pending = pending
+            queued = self._publish("print", "start", data, msgid=result["msgid"])
+        try:
+            if queued:
+                pending["event"].wait(timeout)
+            with self._lock:
+                return dict(result)
+        finally:
+            with self._lock:
+                if self._print_pending is pending:
+                    self._print_pending = None
+
     def _control_report(self, kind, envelope):
         changed = False
         data = envelope.get("data")
@@ -485,6 +671,14 @@ class AnycubicMQTTClient:
             return False
         if kind == "info":
             self._info_observed = time.monotonic()
+            if isinstance(data.get("features"), dict):
+                self._print_features = {
+                    name: value is True or type(value) is int and value == 1
+                    for name, value in data["features"].items()
+                    if name in OPTION_FEATURES.values()
+                }
+                self._print_features_seen = self._info_observed
+                changed = True
             mode = data.get("print_speed_mode")
             if type(mode) is int and mode in (1, 2, 3):
                 self.state.speed_level = mode
@@ -554,6 +748,7 @@ class AnycubicMQTTClient:
 
     def control_capabilities(self):
         model = self._model
+        print_capabilities = self.print_capabilities()
         printing = self.state.state in {"RUNNING", "PAUSE"}
         limits = self._control_limits.get("temp_limit" if printing else "free_temp_limit", {})
         bed_max = model.bed_max if printing else (model.bed_idle_max or model.bed_max)
@@ -586,6 +781,8 @@ class AnycubicMQTTClient:
             "extruder_pulse": self._extrusion_ready(),
             "extrusion_stop": self._extrusion_stop_ready(),
             "ace_slots": self._ace_slot_capabilities(),
+            "print_options": print_capabilities["options"],
+            "print_ready": print_capabilities["ready"],
         }
 
     def _reset_manual_controls(self):
@@ -1056,6 +1253,7 @@ class AnycubicMQTTClient:
 
     def disconnect(self, timeout: float = 0):
         with self._lock:
+            self._reset_print_request()
             if self._extrusion_timer is not None:
                 self._publish("extrudeControl", "set", {"operate_type": 0})
                 self._extrusion_timer.cancel()

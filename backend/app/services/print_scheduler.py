@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 import zipfile
@@ -34,6 +35,7 @@ from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 from backend.app.services import drying_preflight, kprofile_drift, print_dispatch_context, stock_forecast
+from backend.app.services.anycubic import AnycubicMQTTClient, queue_dispatch as anycubic_queue
 from backend.app.services.bambu_ftp import (
     FtpFailureKind,
     FtpFailureReport,
@@ -1381,6 +1383,7 @@ class PrintScheduler:
         # `notify_dispatch_cancelled` from the queue routes, consumed by
         # `_preheat_sleep`, and cleared when the dispatch exits.
         self._cancelled_dispatches: set[int] = set()
+        self._native_cancel_events: dict[int, threading.Event] = {}
         # printer_id -> monotonic time it was first seen terminal while one of
         # its queue rows was still 'printing'. Reset by any non-terminal
         # observation, so it measures an unbroken run rather than a total.
@@ -1467,6 +1470,7 @@ class PrintScheduler:
                     select(PrintQueueItem)
                     .where(PrintQueueItem.status == "printing")
                     .where(PrintQueueItem.printer_id.is_not(None))
+                    .where(PrintQueueItem.anycubic_dispatch.is_(None))
                 )
                 items = list(result.scalars().all())
                 if not items:
@@ -1594,6 +1598,7 @@ class PrintScheduler:
         # Scoped to one pass: a file re-sliced between ticks must be re-read.
         self._filament_req_memo.clear()
         self._unmatched_memo.clear()
+        await anycubic_queue.reconcile(self, async_session)
         async with async_session() as db:
             # Check if shortest-job-first scheduling is enabled
             sjf_enabled = await self._get_bool_setting(db, "queue_shortest_first")
@@ -1719,6 +1724,7 @@ class PrintScheduler:
                 .where(PrintQueueItem.printer_id.is_not(None))
             )
             busy_printers: set[int] = {pid for (pid,) in busy_result.all() if pid is not None}
+            busy_printers.update(await anycubic_queue.held_printer_ids(db))
 
             # Why each printer left this pass, recorded where the decision is
             # made rather than re-derived when the summary is logged. #3018's
@@ -1764,7 +1770,7 @@ class PrintScheduler:
             # model-based branch already has its names from `_printers_for_model`.
             pinned_printer_ids = {i.printer_id for i in items if i.printer_id}
             pinned_printers: dict[int, tuple[str, str]] = {}
-            unsupported_printer_ids: set[int] = set()
+            native_printer_ids: set[int] = set()
             if pinned_printer_ids:
                 pinned_rows = await db.execute(
                     select(Printer.id, Printer.name, Printer.model, Printer.printer_type).where(
@@ -1774,7 +1780,7 @@ class PrintScheduler:
                 for pid, name, model, printer_type in pinned_rows.all():
                     pinned_printers[pid] = (name or "", model or "")
                     if printer_type == "anycubic":
-                        unsupported_printer_ids.add(pid)
+                        native_printer_ids.add(pid)
 
             def printer_label(printer_id: int) -> str:
                 """What to call this printer in a queue row."""
@@ -2077,11 +2083,14 @@ class PrintScheduler:
                         skip_reasons["printer_out_of_scope"] = skip_reasons.get("printer_out_of_scope", 0) + 1
                         continue
 
-                    if item.printer_id in unsupported_printer_ids:
-                        # Also covers persisted rows and alternate enqueue
-                        # paths. Never wake a plug for an unsupported dispatch.
-                        await self._fail_dispatch(db, item, "Print dispatch is not supported for Anycubic printers")
+                    if item.printer_id in native_printer_ids and not item.anycubic_options:
+                        # Old/alternate rows have never selected the native
+                        # codec. Refuse before a configured plug can be woken.
+                        await self._fail_dispatch(
+                            db, item, "Native Anycubic queue settings are missing; queue this job again for its printer"
+                        )
                         continue
+
                     # Held by a sensor interlock (#1148). Checked before the
                     # busy_printers test that would otherwise swallow it
                     # silently — "waiting for a printer" and "waiting for you
@@ -2238,7 +2247,11 @@ class PrintScheduler:
                     if await _edited_since_loaded(db, item):
                         continue
 
-                    unmappable = await self._ensure_ams_mapping(db, item.printer_id, item)
+                    unmappable = (
+                        await self._ensure_ams_mapping(db, item.printer_id, item)
+                        if item.printer_id not in native_printer_ids
+                        else None
+                    )
                     if unmappable:
                         await self._fail_unmappable_item(db, item, item.printer_id, unmappable)
                         continue
@@ -2247,7 +2260,7 @@ class PrintScheduler:
                     # assigned spool can't satisfy any required slot grams,
                     # promote the item to manual_start so the user must
                     # acknowledge via the ▶ button (which re-checks live).
-                    if await self._block_on_filament_deficit(db, item):
+                    if item.printer_id not in native_printer_ids and await self._block_on_filament_deficit(db, item):
                         # Now staged for the user to start by hand, and the row
                         # shows the filament-short badge instead. Cleared because
                         # a staged item never reaches this branch again.
@@ -2257,7 +2270,7 @@ class PrintScheduler:
                     # Unmatched-filament pre-dispatch check (#2799). Hold rather
                     # than let the printer pick a substitute for a slot the
                     # matcher could not resolve on this printer.
-                    if await self._block_on_unmatched_filament(db, item):
+                    if item.printer_id not in native_printer_ids and await self._block_on_unmatched_filament(db, item):
                         continue
 
                     # Hold this item back for the next pass rather than racing
@@ -5174,7 +5187,10 @@ class PrintScheduler:
         # job — even if the printer currently reports IDLE. After Auto Off cycles the
         # printer, it boots back into IDLE with no memory of the previous finish; without
         # the persisted awaiting flag we'd bypass the confirmation prompt (#961).
-        if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id):
+        client = printer_manager.get_client(printer_id)
+        if (require_plate_clear or isinstance(client, AnycubicMQTTClient)) and printer_manager.is_awaiting_plate_clear(
+            printer_id
+        ):
             logger.debug(
                 "Printer %d: not idle — awaiting plate-clear acknowledgment (state=%s)",
                 printer_id,
@@ -5182,7 +5198,10 @@ class PrintScheduler:
             )
             return False
 
-        idle = state.state in ("IDLE", "FINISH", "FAILED")
+        if isinstance(client, AnycubicMQTTClient):
+            idle = state.state == "IDLE" and bool(client.print_capabilities().get("ready"))
+        else:
+            idle = state.state in ("IDLE", "FINISH", "FAILED")
         if not idle:
             logger.debug("Printer %d: not idle — state=%s", printer_id, state.state)
             return False
@@ -5213,7 +5232,10 @@ class PrintScheduler:
         itself — somebody has to walk over to the printer — so it is worded as
         itself and allowed to notify.
         """
-        if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id):
+        client = printer_manager.get_client(printer_id)
+        if (require_plate_clear or isinstance(client, AnycubicMQTTClient)) and printer_manager.is_awaiting_plate_clear(
+            printer_id
+        ):
             return f"Waiting for plate confirmation: {printer_name}"
         return f"Busy: {printer_name}"
 
@@ -7216,6 +7238,8 @@ class PrintScheduler:
             client = printer_manager.get_client(pid)
             if client is None:
                 continue
+            if getattr(client, "printer_type", "bambu") == "anycubic":
+                continue  # Native queue settings do not opt into Bambu keep-warm automation.
             next_item = next((it for it in items if it.printer_id == pid), None)
             if next_item is None:
                 continue
@@ -7444,6 +7468,8 @@ class PrintScheduler:
         """
         if item_id in self._inflight:
             self._cancelled_dispatches.add(item_id)
+        if event := self._native_cancel_events.get(item_id):
+            event.set()
         # A print sent for it earlier that never started is not one any more.
         self._forget_unstarted_print(item_id, unless_printing=False)
 
@@ -8774,11 +8800,7 @@ class PrintScheduler:
             return
 
         if getattr(printer, "printer_type", "bambu") == "anycubic":
-            # This path uploads Bambu 3MFs over FTPS and can inject Bambu
-            # G-code. Reject before preheating, transfer, or printer commands.
-            if not await self._fail_dispatch(db, item, "Print dispatch is not supported for Anycubic printers"):
-                return
-            logger.warning("Queue item %s: %s", item.id, item.error_message)
+            await anycubic_queue.dispatch(self, db, item, printer)
             return
 
         # Check printer is connected

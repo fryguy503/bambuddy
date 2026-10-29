@@ -31,6 +31,7 @@ ANYCUBIC_OPERATIONS = frozenset(
         "get_mqtt_logs",
         "clear_mqtt_logs",
         "stop_print",
+        "clear_plate",
         "pause_print",
         "resume_print",
         "set_nozzle_temperature",

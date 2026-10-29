@@ -3161,6 +3161,11 @@ async def _run_migrations(conn):
     else:
         await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN dispatching_at TIMESTAMP")
 
+    # Native queue fields follow the legacy SQLite queue-table rebuild so
+    # upgrading an ancient database cannot drop the new nullable columns.
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN anycubic_options TEXT")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN anycubic_dispatch TEXT")
+
     # Migration: Add HA energy sensor entity columns to smart_plugs
     await _safe_execute(conn, "ALTER TABLE smart_plugs ADD COLUMN ha_power_entity VARCHAR(100)")
     await _safe_execute(conn, "ALTER TABLE smart_plugs ADD COLUMN ha_energy_today_entity VARCHAR(100)")

@@ -36,6 +36,7 @@ export function PrintOptionsPanel({
   onChange,
   defaultExpanded = false,
   showDualNozzleOptions = false,
+  supportsVibrationCalibration = true,
 }: PrintOptionsProps) {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
@@ -53,7 +54,10 @@ export function PrintOptionsPanel({
     { key: 'confirm_outcome', label: t('settings.defaultConfirmOutcome'), desc: t('settings.defaultConfirmOutcomeDesc') },
   ];
 
-  const visibleOptions = printOptionsConfig.filter(o => !o.dualNozzleOnly || showDualNozzleOptions);
+  const visibleOptions = printOptionsConfig.filter(o =>
+    (!o.dualNozzleOnly || showDualNozzleOptions)
+    && (o.key !== 'vibration_cali' || supportsVibrationCalibration),
+  );
 
   const handleToggle = (key: keyof PrintOptionsType, value: boolean) => {
     onChange({ ...options, [key]: value });

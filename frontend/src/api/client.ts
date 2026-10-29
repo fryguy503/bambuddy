@@ -558,6 +558,22 @@ export interface AnycubicControlCapabilities {
   reported_fans?: string[];
   ace_drying?: AnycubicDryingControl[]; ace_slots?: AnycubicSlotControl[];
   chamber_light?: boolean; motion?: boolean; extruder_pulse?: boolean; extrusion_stop?: boolean;
+  print_options?: string[];
+  print_ready?: boolean;
+}
+
+export interface AnycubicPrintOptions {
+  use_ace: boolean;
+  auto_leveling: boolean;
+  vibration_compensation: boolean;
+  flow_calibration: boolean;
+  timelapse: boolean;
+  filament_mapping: { tool: number; box_id: number; slot_id: number }[];
+}
+
+export interface AnycubicPrintRequirements {
+  model: string;
+  tools: { tool: number; type: string; color: string }[];
 }
 
 export interface ScheduledDrying {
@@ -2829,6 +2845,9 @@ export interface DiscoveredTasmotaDevice {
 
 // Print Queue types
 export interface PrintQueueItem {
+  anycubic_options?: AnycubicPrintOptions | null;
+  anycubic_dispatch_state?: string | null;
+  anycubic_source_library_file_id?: number | null;
   id: number;
   printer_id: number | null;  // null = unassigned
   target_model: string | null;  // Target printer model for model-based assignment
@@ -3000,6 +3019,7 @@ export interface PrintBatch {
 }
 
 export interface PrintQueueItemCreate {
+  anycubic_options?: AnycubicPrintOptions | null;
   printer_id?: number | null;  // null = unassigned
   target_model?: string | null;  // Target printer model (mutually exclusive with printer_id)
   target_location?: string | null;  // Target location filter (only used with target_model)
@@ -3096,6 +3116,7 @@ export interface PrintBatchDispatchRequest {
 }
 
 export interface PrintQueueItemUpdate {
+  anycubic_options?: AnycubicPrintOptions | null;
   printer_id?: number | null;  // null = unassign
   // A deliberate filament substitution in the mapping (#2799); see PrintModal.
   skip_filament_check?: boolean;
@@ -3107,7 +3128,7 @@ export interface PrintQueueItemUpdate {
   require_previous_success?: boolean;
   auto_off_after?: boolean;
   manual_start?: boolean;
-  ams_mapping?: number[];
+  ams_mapping?: number[] | null;
   plate_id?: number | null;  // Plate ID for multi-plate 3MF files
   // Print options
   bed_levelling?: CalibrationMode;
@@ -6808,6 +6829,9 @@ export const api = {
     const qs = opts?.skipFilamentCheck ? '?skip_filament_check=true' : '';
     return request<PrintQueueItem>(`/queue/${id}/start${qs}`, { method: 'POST' });
   },
+  resolveAnycubicQueueItem: (id: number) => request<PrintQueueItem>(`/queue/${id}/resolve-anycubic`, {
+    method: 'POST', body: JSON.stringify({ acknowledge_not_printing: true }),
+  }),
   /**
    * Clear the `require_previous_success` gate for a printer after the user
    * resolves the failure. Acknowledges any failed/aborted predecessors and
@@ -8081,6 +8105,7 @@ export const api = {
     request<VariantGroup>(`/library/variant-groups/${groupId}`),
 
   getLibraryFile: (id: number) => request<LibraryFile>(`/library/files/${id}`),
+  getAnycubicPrintRequirements: (id: number) => request<AnycubicPrintRequirements>(`/library/files/${id}/anycubic-print`),
   uploadLibraryFile: async (
     file: File,
     folderId?: number | null,

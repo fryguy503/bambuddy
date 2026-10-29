@@ -51,10 +51,12 @@ async def test_anycubic_status_only_broadcasts_normalized_monitoring():
         patch.object(main.kprofile_drift, "needs_check") as drift_check,
         patch.object(main.notify_live_activities, "observe") as live_activities,
         patch.object(main.pause_eta, "observe") as pause_eta,
+        patch("backend.app.services.anycubic.queue_dispatch.observe_status", new_callable=AsyncMock) as native_status,
     ):
         await main.on_printer_status_change(71, state)
 
     broadcast.assert_awaited_once_with(71, {"connected": True})
+    native_status.assert_awaited_once_with(71, state)
     spawn.assert_not_called()
     drift_check.assert_not_called()
     live_activities.assert_not_called()
@@ -178,7 +180,7 @@ async def test_anycubic_is_excluded_from_model_based_assignment():
 
 
 @pytest.mark.asyncio
-async def test_anycubic_dispatch_rejects_before_preheat_ftp_or_printer_commands():
+async def test_anycubic_without_native_settings_rejects_before_preheat_ftp_or_printer_commands():
     scheduler = PrintScheduler()
     db = _db(_printer())
     item = SimpleNamespace(
@@ -192,6 +194,7 @@ async def test_anycubic_dispatch_rejects_before_preheat_ftp_or_printer_commands(
         cost_center_id=None,
         status="pending",
         error_message=None,
+        anycubic_options=None,
     )
     with (
         patch(
@@ -203,10 +206,14 @@ async def test_anycubic_dispatch_rejects_before_preheat_ftp_or_printer_commands(
         patch("backend.app.services.print_scheduler.upload_file_async", new_callable=AsyncMock) as upload,
         patch("backend.app.services.print_scheduler.printer_manager.is_connected") as connected,
         patch.object(scheduler, "_power_off_if_needed", new_callable=AsyncMock) as power_off,
-        patch.object(scheduler, "_fail_dispatch", new_callable=AsyncMock, return_value=True) as fail,
+        patch(
+            "backend.app.services.anycubic.queue_dispatch._known_failure", new_callable=AsyncMock, return_value=True
+        ) as fail,
     ):
         await scheduler._start_print(db, item)
-    fail.assert_awaited_once_with(db, item, "Print dispatch is not supported for Anycubic printers")
+    fail.assert_awaited_once_with(
+        scheduler, db, item, "Native Anycubic queue settings are missing; queue this job again for its printer"
+    )
     preheat.assert_not_awaited()
     upload.assert_not_awaited()
     connected.assert_not_called()
@@ -215,8 +222,9 @@ async def test_anycubic_dispatch_rejects_before_preheat_ftp_or_printer_commands(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["create", "bulk", "update", "start"])
-async def test_anycubic_queue_routes_reject_before_mutation(operation):
+async def test_unsupported_anycubic_model_queue_routes_reject_before_mutation(operation):
     printer = _printer()
+    printer.model = "Kobra Unknown"
     db = _db(printer)
     item = SimpleNamespace(
         id=23,
@@ -248,7 +256,7 @@ async def test_anycubic_queue_routes_reject_before_mutation(operation):
         ),
         "start": lambda: print_queue.start_queue_item(23, db=db, auth_result=(None, True), printer_scope=ALL_PRINTERS),
     }
-    with pytest.raises(HTTPException, match="not supported for Anycubic"):
+    with pytest.raises(HTTPException, match="does not support native LAN"):
         await calls[operation]()
     db.commit.assert_not_awaited()
 

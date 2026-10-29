@@ -134,7 +134,7 @@ class GcodeArtifact:
     model: str
 
 
-def validate_gcode(path: Path, filename: str, model: str) -> GcodeArtifact:
+def validate_gcode(path: Path, filename: str, model: str | None) -> GcodeArtifact:
     """Require a text G-code export whose slicer metadata identifies the model."""
     basename(filename)
     if not filename.lower().endswith(".gcode"):
@@ -144,14 +144,14 @@ def validate_gcode(path: Path, filename: str, model: str) -> GcodeArtifact:
         raise AnycubicError("The G-code file is empty or exceeds 512 MiB")
     with path.open("rb") as stream:
         detected, read_size, digest = inspect_gcode(stream)
-    if detected != model or read_size != size:
+    if (model is not None and detected != model) or read_size != size:
         raise AnycubicError("Export sliced G-code with printer_model metadata matching this Anycubic printer")
     # A unique remote name avoids overwriting an existing print file.
     stem = filename[:-6]
     while len(stem.encode("utf-8")) > 190:
         stem = stem[:-1]
     remote = f"{stem}-{uuid.uuid4().hex[:12]}.gcode"
-    return GcodeArtifact(path, remote, size, digest, model)
+    return GcodeArtifact(path, remote, size, digest, detected)
 
 
 def inspect_gcode(stream):

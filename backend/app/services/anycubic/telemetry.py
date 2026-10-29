@@ -104,7 +104,10 @@ class Telemetry:
             self.state.current_print = self.state.subtask_name = name
             self.state.gcode_file = name
             changed = True
-        task = _text(data.get("taskid"), 128)
+        task = data.get("taskid", data.get("task_id"))
+        if type(task) is int and 0 < task <= (1 << 63) - 1:
+            task = str(task)
+        task = _text(task, 128)
         if task:
             self.task_id = task
             self.state.subtask_id = task

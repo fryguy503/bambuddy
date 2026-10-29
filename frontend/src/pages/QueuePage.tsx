@@ -79,6 +79,8 @@ import { Card } from '../components/Card';
 import { FilamentSwatch } from '../components/FilamentSwatch';
 import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { AnycubicDispatchHold } from '../components/AnycubicDispatchHold';
+import { hasAnycubicDispatchHold } from '../utils/anycubicPrint';
 import { PrintModal } from '../components/PrintModal';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -661,7 +663,7 @@ function SortableQueueItem({
   const { data: libraryPlatesData } = useQuery({
     queryKey: ['library-file-plates', item.library_file_id],
     queryFn: () => api.getLibraryFilePlates(item.library_file_id!),
-    enabled: isLibraryFile && !!item.library_file_id,
+    enabled: isLibraryFile && !!item.library_file_id && !item.anycubic_options,
   });
 
   // Combine plates data from either source
@@ -694,6 +696,7 @@ function SortableQueueItem({
 
   const isPrinting = item.status === 'printing';
   const isPending = item.status === 'pending';
+  const nativeHeld = hasAnycubicDispatchHold(item);
   const isHistory = ['completed', 'failed', 'skipped', 'cancelled'].includes(item.status);
 
   // This is an "if started now" estimate, not a cumulative queue forecast, so
@@ -1102,6 +1105,7 @@ function SortableQueueItem({
           )}
 
           {/* Error message */}
+          <AnycubicDispatchHold item={item} canResolve={canModify('queue', 'update', item.created_by_id)} />
           {item.error_message && (
             <p className="text-[10px] sm:text-xs text-red-700 dark:text-red-400 mt-1.5 sm:mt-2 flex items-center gap-1">
               <AlertCircle className="w-3 h-3" />
@@ -1134,7 +1138,7 @@ function SortableQueueItem({
                     variant="ghost"
                     size="sm"
                     onClick={onStart}
-                    disabled={awaitingReview || !canModify('queue', 'update', item.created_by_id)}
+                    disabled={nativeHeld || awaitingReview || !canModify('queue', 'update', item.created_by_id)}
                     title={
                       awaitingReview
                         ? t('queue.permissions.awaitingReview')
@@ -1151,7 +1155,7 @@ function SortableQueueItem({
                   variant="ghost"
                   size="sm"
                   onClick={onEdit}
-                  disabled={!canModify('queue', 'update', item.created_by_id)}
+                  disabled={nativeHeld || !canModify('queue', 'update', item.created_by_id)}
                   title={!canModify('queue', 'update', item.created_by_id) ? t('queue.permissions.noEdit') : t('common.edit')}
                   className="p-1.5 sm:p-2"
                 >
@@ -1175,7 +1179,7 @@ function SortableQueueItem({
                   variant="ghost"
                   size="sm"
                   onClick={onRequeue}
-                  disabled={!hasPermission('queue:create')}
+                  disabled={nativeHeld || !hasPermission('queue:create')}
                   title={!hasPermission('queue:create') ? t('queue.permissions.noRequeue') : t('queue.actions.requeue')}
                   className="text-bambu-green hover:text-bambu-green/80 hover:bg-bambu-green/10 p-1.5 sm:p-2"
                 >
@@ -1185,7 +1189,7 @@ function SortableQueueItem({
                   variant="ghost"
                   size="sm"
                   onClick={onRemove}
-                  disabled={!canModify('queue', 'delete', item.created_by_id)}
+                  disabled={nativeHeld || !canModify('queue', 'delete', item.created_by_id)}
                   title={!canModify('queue', 'delete', item.created_by_id) ? t('queue.permissions.noRemove') : t('common.remove')}
                   className="p-1.5 sm:p-2"
                 >
@@ -3250,8 +3254,10 @@ export function QueuePage() {
       {requeueItem && (
         <PrintModal
           mode="create"
-          archiveId={requeueItem.archive_id ?? undefined}
-          libraryFileId={requeueItem.library_file_id ?? undefined}
+          archiveId={requeueItem.anycubic_options ? undefined : requeueItem.archive_id ?? undefined}
+          libraryFileId={requeueItem.anycubic_source_library_file_id ?? requeueItem.library_file_id ?? undefined}
+          initialSelectedPrinterIds={requeueItem.anycubic_options && requeueItem.printer_id ? [requeueItem.printer_id] : undefined}
+          queueItem={requeueItem.anycubic_options ? { ...requeueItem, anycubic_options: { ...requeueItem.anycubic_options, filament_mapping: [] } } : undefined}
           archiveName={queueItemDisplayName(requeueItem, (n) => t('common.plusNMore', { count: n }))}
           preselectPlateId={requeueItem.plate_id}
           onClose={() => setRequeueItem(null)}

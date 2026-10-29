@@ -57,6 +57,12 @@ class PrintQueueItem(Base):
     # Format: "[5, -1, 2, -1]" where position = slot_id-1, value = global tray ID (-1 = unused)
     ams_mapping: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Native settings retain physical ACE box/slot IDs. The dispatch journal
+    # records intent before publishing so a restart cannot replay an uncertain
+    # print-start request. Neither field carries a session URL or credentials.
+    anycubic_options: Mapped[str | None] = mapped_column(Text, nullable=True)
+    anycubic_dispatch: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Filament overrides for model-based assignment: JSON array of override objects
     # Format: '[{"slot_id": 1, "type": "PLA", "color": "#FFFFFF"}]'
     # Only slots with overrides are included (sparse). null = use original 3MF values.

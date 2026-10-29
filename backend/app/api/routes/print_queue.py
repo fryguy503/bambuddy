@@ -39,6 +39,7 @@ from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.printer import Printer
 from backend.app.models.project import Project
 from backend.app.models.user import User
+from backend.app.schemas.anycubic_print import AnycubicPrintOptions, AnycubicQueueResolution
 from backend.app.schemas.print_queue import (
     ColorSubstitution,
     PrintBatchCreate,
@@ -59,6 +60,7 @@ from backend.app.schemas.print_queue import (
     QueueVariantCreate,
     QueueVariantSummary,
 )
+from backend.app.services.anycubic.queue_validation import validate_source as validate_anycubic_queue_source
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.filament_requirements import overrides_for_plate
 from backend.app.services.finance_budget import release_budget_reservation, validate_print_budget
@@ -74,6 +76,7 @@ from backend.app.services.print_cost_estimate import estimate_queue_source_cost
 from backend.app.services.queue_announcements import announce_queue_jobs_added
 from backend.app.services.queue_item_printer import PRINTER_RESOLVED_DEFAULTS, drop_printer_resolved
 from backend.app.services.queue_position import lock_queue_positions, max_queue_position
+from backend.app.utils.anycubic_models import get_model as anycubic_model
 from backend.app.utils.printer_models import (
     is_gcode_compatible,
 )
@@ -91,8 +94,80 @@ _AWAITING_REVIEW = "This job waits for review: someone who can manage all queue 
 
 
 def _require_queue_dispatch_support(printer: Printer) -> None:
-    if getattr(printer, "printer_type", "bambu") == "anycubic":
-        raise HTTPException(400, "Print dispatch is not supported for Anycubic printers")
+    if getattr(printer, "printer_type", "bambu") == "anycubic" and anycubic_model(printer.model) is None:
+        raise HTTPException(400, "This Anycubic model does not support native LAN queue dispatch")
+
+
+def _native_dispatch_state(item) -> str | None:
+    value = getattr(item, "anycubic_dispatch", None)
+    if not isinstance(value, str):
+        return None
+    try:
+        journal = json.loads(value)
+        if isinstance(journal, dict) and isinstance(journal.get("state"), str):
+            return journal["state"]
+    except (TypeError, ValueError):
+        pass
+    return "unknown"  # An unreadable intent cannot establish that nothing was sent.
+
+
+_NATIVE_NEUTRAL_OPTIONS = {
+    "bed_levelling": "off",
+    "flow_cali": "off",
+    "vibration_cali": False,
+    "layer_inspect": False,
+    "timelapse": False,
+    "use_ams": False,
+    "nozzle_offset_cali": "off",
+    "preheat_override": "off",
+}
+
+
+async def _validate_item_vendor(db, item, values):
+    printer_id = values.get("printer_id", item.printer_id)
+    printer = await db.get(Printer, printer_id) if printer_id is not None else None
+    library = await db.get(LibraryFile, item.library_file_id) if item.library_file_id else None
+    archive = await db.get(PrintArchive, item.archive_id) if item.archive_id else None
+    options = values.get("anycubic_options", getattr(item, "anycubic_options", None))
+    if (
+        printer_id != item.printer_id
+        and printer is not None
+        and printer.printer_type == "anycubic"
+        and "anycubic_options" not in values
+    ):
+        raise HTTPException(400, "Choose the new Anycubic printer's physical ACE mapping before moving this job")
+    effective = {
+        name: getattr(item, name, None)
+        for name in (
+            "ams_mapping",
+            "nozzle_mapping",
+            "nozzle_rack_choice",
+            "filament_overrides",
+            "gcode_injection",
+            "preheat_override",
+            "preheat_chamber_target_override",
+            "cleanup_library_after_dispatch",
+            "confirm_outcome",
+            "plate_id",
+            "cost_center_id",
+            "auto_off_after",
+        )
+    }
+    effective.update(values)
+    native = await validate_anycubic_queue_source(
+        printer,
+        library,
+        archive,
+        options,
+        target_model=values.get("target_model", item.target_model),
+        values=effective,
+    )
+    if native is not None:
+        values.update(_NATIVE_NEUTRAL_OPTIONS)
+        values["anycubic_options"] = json.dumps(native)
+    elif "anycubic_options" in values:
+        values["anycubic_options"] = None
+    return native
 
 
 def _variant_summaries(item: PrintQueueItem) -> list[QueueVariantSummary]:
@@ -238,11 +313,6 @@ def _assert_can_queue_library_file(library_file: LibraryFile, current_user: User
         owns_file = library_file.created_by_id is not None and library_file.created_by_id == current_user.id
         if not current_user.has_permission(Permission.LIBRARY_READ_ALL.value) and not owns_file:
             raise HTTPException(404, "Library file not found")
-    if library_file.filename.lower().endswith(".gcode"):
-        raise HTTPException(
-            400,
-            "Raw G-code is stored for Anycubic LAN upload. Use the printer's file uploader; it cannot be dispatched through the Bambu print queue.",
-        )
 
 
 async def _is_orders_last_source(db: AsyncSession, item: PrintQueueItem) -> bool:
@@ -342,6 +412,30 @@ async def _assert_can_dispatch_batch_sources(
         .scalars()
         .all()
     )
+    # Native dispatched rows keep their source identity in a durable journal,
+    # independent of cascading file FKs. Cloning still requires read access to
+    # that source; detaching the FK must not become an ownership bypass.
+    native_records = (
+        (
+            await db.execute(
+                select(PrintQueueItem.anycubic_dispatch).where(
+                    PrintQueueItem.batch_id == batch_id,
+                    PrintQueueItem.anycubic_options.is_not(None),
+                    PrintQueueItem.anycubic_dispatch.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for stored in native_records:
+        try:
+            assert isinstance(stored, str)
+            source_id = json.loads(stored).get("source_library_file_id")
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(400, "The native job's original file identity is unavailable") from None
+        if type(source_id) is int:
+            library_file_ids.add(source_id)
     library_file_ids |= set(
         (
             await db.execute(
@@ -436,6 +530,13 @@ async def _trusted_item_estimated_cost(
 
 def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
     """Add nested archive/printer/library_file info to response."""
+    native_options = None
+    stored_native_options = getattr(item, "anycubic_options", None)
+    if isinstance(stored_native_options, str):
+        try:
+            native_options = AnycubicPrintOptions.model_validate_json(stored_native_options)
+        except (ValueError, TypeError):
+            pass
     # Parse ams_mapping from JSON string BEFORE model_validate
     ams_mapping_parsed = None
     if item.ams_mapping:
@@ -501,6 +602,8 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
     # Create response with parsed ams_mapping
     item_dict = {
         "id": item.id,
+        "anycubic_options": native_options,
+        "anycubic_dispatch_state": _native_dispatch_state(item),
         "printer_id": item.printer_id,
         "target_model": item.target_model,
         "target_location": item.target_location,
@@ -559,6 +662,16 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "variants": _variant_summaries(item),
     }
     response = PrintQueueItemResponse(**item_dict)
+    if native_options is not None and not item.archive_id and not item.library_file_id:
+        try:
+            journal = json.loads(item.anycubic_dispatch or "{}")
+            response.library_file_name = journal.get("source_filename")
+            response.sliced_for_model = journal.get("model")
+            source_id = journal.get("source_library_file_id")
+            if type(source_id) is int:
+                response.anycubic_source_library_file_id = source_id
+        except (TypeError, ValueError, AttributeError):
+            pass
     if item.archive:
         # Soft-deleted archive: files are gone from disk but the row stays
         # (its filament/cost contribution still flows into stats per #1343).
@@ -1064,6 +1177,8 @@ async def _resolve_queue_variants(
         ):
             raise HTTPException(404, f"Library file not found: {spec.library_file_id}")
 
+        if library_file.filename.lower().endswith(".gcode"):
+            raise HTTPException(400, "Anycubic G-code requires a specific printer and cannot be a cross-model variant")
         from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
 
         try:
@@ -1217,6 +1332,7 @@ async def add_to_queue(
         # to its creator's printers, and a key may be limited to fewer of them.
         ensure_model_target_allowed(current_user, printer_scope)
 
+    printer = None
     # Validate printer exists (if assigned)
     if data.printer_id is not None:
         printer_scope.ensure(data.printer_id)
@@ -1263,6 +1379,18 @@ async def add_to_queue(
             validate_print_filename(library_file.filename)
         except InvalidFilenameError as e:
             raise HTTPException(400, str(e)) from e
+
+    native_options = await validate_anycubic_queue_source(
+        printer,
+        library_file,
+        archive,
+        data.anycubic_options,
+        target_model=target_model_norm,
+        values=data.model_dump(),
+    )
+    if native_options is not None:
+        for name, value in _NATIVE_NEUTRAL_OPTIONS.items():
+            setattr(data, name, value)
 
     # Cross-model safety gate (#2578): a G-code 3MF sliced for one model must
     # not be queued for dispatch to an incompatible model. The UI can no longer
@@ -1521,6 +1649,7 @@ async def add_to_queue(
             ams_mapping=ams_mapping_json,
             nozzle_rack_choice=nozzle_rack_choice_json,
             plate_id=plate_id,
+            anycubic_options=json.dumps(native_options) if native_options is not None else None,
             bed_levelling=data.bed_levelling,
             flow_cali=data.flow_cali,
             vibration_cali=data.vibration_cali,
@@ -1692,6 +1821,8 @@ async def bulk_update_queue_items(
                 current_user=actor,
                 exclude_queue_item_id=item.id,
             )
+
+        await _validate_item_vendor(db, item, item_update_data)
 
         # Re-check right before changing it, as the single edit does (#2615):
         # the validations above are awaited, and a scheduler worker may have
@@ -2255,8 +2386,21 @@ async def cancel_batch(
     cancelled_count = 0
     cancelled_ids: list[int] = []
     for item in pending_items:
-        item.status = "cancelled"
-        item.completed_at = datetime.now(timezone.utc)
+        if item.anycubic_options is not None or item.anycubic_dispatch is not None:
+            cancelled = await db.execute(
+                update(PrintQueueItem)
+                .where(PrintQueueItem.id == item.id, PrintQueueItem.status == "pending")
+                .values(status="cancelled", completed_at=datetime.now(timezone.utc))
+                .returning(PrintQueueItem.id)
+                .execution_options(synchronize_session=False)
+            )
+            if cancelled.scalar_one_or_none() is None:
+                # Dispatch won the race after this batch's pending snapshot.
+                # Its durable native intent must remain printing/held.
+                continue
+        else:
+            item.status = "cancelled"
+            item.completed_at = datetime.now(timezone.utc)
         await release_budget_reservation(
             db,
             source_type="print_queue",
@@ -2514,6 +2658,8 @@ async def update_queue_item(
                 f"File was sliced for {sliced_for} and cannot be dispatched to {update_data['target_model']} printers",
             )
 
+    await _validate_item_vendor(db, item, update_data)
+
     # A job that now waits for any printer of a model keeps nothing that was
     # resolved against one printer: the scheduler picks the printer and maps
     # its trays then (#3239). The edit dialog omits both fields on such a move.
@@ -2603,6 +2749,8 @@ async def _remove_queue_item(db: AsyncSession, item: PrintQueueItem) -> bool:
     and rewriting it as cancelled would falsify the order's progress.
     """
     item_id = item.id
+    if _native_dispatch_state(item) in {"submitting", "accepted", "unknown", "running"}:
+        raise HTTPException(409, "Resolve the Anycubic print outcome before removing its dispatch record")
     keep_as_cancelled = item.status != "completed" and await _is_orders_last_source(db, item)
 
     await release_budget_reservation(
@@ -2818,6 +2966,95 @@ async def resume_model_queue_after_failure(
     return {"acknowledged": acknowledged, "printers": len(printer_ids)}
 
 
+@router.post("/{item_id}/resolve-anycubic")
+async def resolve_anycubic_queue_item(
+    item_id: int,
+    data: AnycubicQueueResolution,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    auth_result: tuple[User | ApiKeyActor | None, bool] = Depends(
+        require_ownership_permission(Permission.QUEUE_UPDATE_ALL, Permission.QUEUE_UPDATE_OWN)
+    ),
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Release an uncertain job only after the operator checks its idle printer."""
+    from backend.app.services.anycubic import AnycubicMQTTClient
+    from backend.app.services.printer_manager import printer_manager
+
+    user, can_modify_all = auth_result
+    item = await db.get(PrintQueueItem, item_id)
+    if item is None or not printer_scope.allows(item.printer_id):
+        raise HTTPException(404, "Queue item not found")
+    if not can_modify_all and (user is None or item.created_by_id != user.id):
+        raise HTTPException(403, "You can only resolve your own queue items")
+    if item.dispatching_at is not None:
+        raise HTTPException(409, "Wait for the active dispatch to finish before resolving its outcome")
+    if _native_dispatch_state(item) not in {"submitting", "accepted", "unknown", "running"}:
+        raise HTTPException(409, "This job has no unresolved Anycubic dispatch")
+    if item.printer_id is None:
+        raise HTTPException(409, "The native dispatch has no assigned printer")
+    printer = await db.get(Printer, item.printer_id)
+    client = printer_manager.get_client(item.printer_id)
+    if (
+        printer is None
+        or printer.printer_type != "anycubic"
+        or not isinstance(client, AnycubicMQTTClient)
+        or client.ip_address != printer.ip_address
+        or client.serial_number != printer.serial_number
+        or client.model != printer.model
+        or client.tls_fingerprint != printer.tls_fingerprint
+        or not client.control_capabilities()["ready"]
+        or client.state.state != "IDLE"
+    ):
+        raise HTTPException(
+            409, "Connect the printer and wait for fresh idle status before confirming it is not printing"
+        )
+    original = item.anycubic_dispatch
+    assert isinstance(original, str)
+    try:
+        journal = json.loads(original)
+    except (TypeError, ValueError):
+        journal = {}
+    if not isinstance(journal, dict):
+        journal = {}
+    journal["state"] = "resolved"
+    journal["resolved_by"] = user.id if user is not None else None
+    journal["resolved_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.execute(
+        update(PrintQueueItem)
+        .where(
+            PrintQueueItem.id == item.id,
+            PrintQueueItem.anycubic_dispatch == original,
+            PrintQueueItem.dispatching_at.is_(None),
+        )
+        .values(
+            anycubic_dispatch=json.dumps(journal),
+            status="failed",
+            waiting_reason=None,
+            completed_at=datetime.now(timezone.utc),
+            error_message="Operator confirmed printer is no longer printing; the previous outcome is unknown",
+        )
+        .returning(PrintQueueItem.id)
+        .execution_options(synchronize_session=False)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(409, "The printer outcome changed; reload before resolving this job")
+    await release_budget_reservation(db, source_type="print_queue", source_id=item.id, status="released")
+    native_archive_id = journal.get("native_archive_id")
+    if type(native_archive_id) is int:
+        archive = await db.get(PrintArchive, native_archive_id)
+        if archive is not None and archive.status == "printing":
+            archive.status = "failed"
+            archive.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            archive.failure_reason = "Print outcome unknown; operator released idle printer"
+    # Idle does not establish an empty build plate after an uncertain run.
+    printer.awaiting_plate_clear = True
+    await db.commit()
+    printer_manager.set_awaiting_plate_clear(printer.id, True)
+    _notify_dispatch_cancelled([item.id])
+    await refresh_batches_after([item.id])
+    return {"success": True, "message": "Printer hold released; the uncertain print was not automatically retried"}
+
+
 @router.post("/{item_id}/cancel")
 async def cancel_queue_item(
     item_id: int,
@@ -2846,8 +3083,19 @@ async def cancel_queue_item(
     if item.status not in ("pending",):
         raise HTTPException(400, f"Cannot cancel item with status '{item.status}'")
 
-    item.status = "cancelled"
-    item.completed_at = datetime.now(timezone.utc)
+    if item.anycubic_options is not None:
+        cancelled = await db.execute(
+            update(PrintQueueItem)
+            .where(PrintQueueItem.id == item.id, PrintQueueItem.status == "pending")
+            .values(status="cancelled", completed_at=datetime.now(timezone.utc))
+            .returning(PrintQueueItem.id)
+            .execution_options(synchronize_session=False)
+        )
+        if cancelled.scalar_one_or_none() is None:
+            raise HTTPException(409, "This print has already entered dispatch; reload its current status")
+    else:
+        item.status = "cancelled"
+        item.completed_at = datetime.now(timezone.utc)
     await release_budget_reservation(
         db,
         source_type="print_queue",
@@ -2903,6 +3151,59 @@ async def stop_queue_item(
 
     if item.status != "printing":
         raise HTTPException(400, f"Can only stop items that are printing, current status: '{item.status}'")
+
+    printer = await db.get(Printer, item.printer_id) if item.printer_id is not None else None
+    if (
+        item.anycubic_options is not None
+        or item.anycubic_dispatch is not None
+        or printer is not None
+        and printer.printer_type == "anycubic"
+    ):
+        import asyncio
+
+        from backend.app.services.anycubic.queue_dispatch import _connection, _lock, _matches, journal
+
+        if printer is None or printer.printer_type != "anycubic":
+            raise HTTPException(409, "The native print's assigned printer is unavailable")
+        async with _lock(printer.id):
+            await db.refresh(item)
+            record = journal(item.anycubic_dispatch)
+            if (
+                item.status != "printing"
+                or record.get("state") != "running"
+                or record.get("observed_active") is not True
+                or not isinstance(record.get("task_id"), str)
+                or record["task_id"] in {"", "-1", "0"}
+            ):
+                raise HTTPException(
+                    409, "Check the printer and resolve its uncertain print outcome before sending a queue stop"
+                )
+            client = _connection(printer)
+            if client is None:
+                raise HTTPException(409, "Reconnect the matching printer before stopping this queued print")
+
+            def stop_matching_task():
+                # Match and publish under the same native lock: a new MQTT
+                # report cannot swap the active task between these operations.
+                with client._lock:
+                    if (
+                        _connection(printer) is not client
+                        or not _matches(record, client.state)
+                        or client._telemetry.task_id != record["task_id"]
+                    ):
+                        return False
+                    return client.stop_print()
+
+            if not await asyncio.to_thread(stop_matching_task):
+                raise HTTPException(409, "This queued task is not the printer's current stoppable print")
+            record["stop_requested"] = True
+            record["stop_requested_at"] = datetime.now(timezone.utc).isoformat()
+            item.anycubic_dispatch = json.dumps(record)
+            item.waiting_reason = "Stop requested; waiting for the Anycubic printer to confirm the outcome"
+            # A queued command is not a stopped print. Keep the durable hold
+            # until matching terminal telemetry or explicit operator resolution.
+            await db.commit()
+        return {"message": "Stop request queued; waiting for printer confirmation", "queued": True}
 
     # Capture values we need for background task
     printer_id = item.printer_id
@@ -3067,6 +3368,7 @@ async def start_queue_item(
 
     if item.printer is not None:
         _require_queue_dispatch_support(item.printer)
+    native_options = await _validate_item_vendor(db, item, {})
 
     item.estimated_cost = await _trusted_item_estimated_cost(
         db,
@@ -3087,7 +3389,7 @@ async def start_queue_item(
     # Live deficit check — re-evaluated against current spool state, so a
     # spool swap between scheduler flagging and the user clicking ▶ clears
     # the block automatically.
-    if not skip_filament_check:
+    if not skip_filament_check and native_options is None:
         deficit = await compute_deficit_for_queue_item(db, item)
         if deficit:
             raise HTTPException(

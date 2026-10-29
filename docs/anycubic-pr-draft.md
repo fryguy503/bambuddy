@@ -4,8 +4,8 @@ Bambuddy's Bambu MQTT, FTPS, camera and AMS automation cannot communicate with
 an Anycubic Kobra S1. This change adds an independent LAN provider for status,
 temperatures, progress and read-only inventory for two ACE units/eight slots,
 plus pause/resume/stop, bounded temperature/fan/speed controls, native light and
-idle jog/home controls, upload-only G-code
-transfer and shared LAN camera viewing/snapshots. ACE displays reported remaining
+idle jog/home controls, G-code upload and native queue dispatch,
+and shared LAN camera viewing/snapshots. ACE displays reported remaining
 percentages and opens the existing sensor history. Shared ACE/filament hover
 cards offer friendly names and inventory assignment, with separate native
 material/color, load/unload and per-box drying controls. A separate, optional Anycubic Cloud Profiles tab reads
@@ -17,8 +17,20 @@ printers, then populate the selected device for certificate review. Scanning
 does not pair or change printer state; Docker uses the same unicast path.
 Existing printers remain Bambu by default. Unsupported Bambu operations are
 blocked before transport or automation work; Anycubic status cannot trigger
-Bambu archives, calibration, preset writes, queued uploads or virtual-printer
+Bambu archives, calibration, preset writes, FTPS uploads or virtual-printer
 bridging.
+
+Native queued printing accepts an exact-model raw G-code library source and
+physical ACE mapping for a specific printer. The print dialog shows only
+reported native start options; ordinary Bambu sources retain the existing
+workflow. The scheduler validates/uploads the source, persists submission
+intent before publishing, and correlates actual progress and terminal reports
+by native task ID plus unique filename. Ambiguous starts hold the printer
+across restart until observed or explicitly resolved; they are never replayed.
+A raw G-code history snapshot is stored independently of Bambu archival and
+filament accounting. Native billing, automatic power-off, outcome confirmation,
+model load balancing and cross-model alternatives are not enabled. Queue tests
+use isolated fixtures; no physical print-start acceptance is claimed.
 
 The Cloud tab accepts an existing Anycubic user token or Slicer Next access
 token in the fixed Global or China region. Global slicer tokens are exchanged
@@ -36,8 +48,9 @@ revision before persisting a download. Workbench tokens are not sent to the
 website; account headers are not sent to signed storage URLs.
 
 Cloud access sends no printer commands and does not change LAN operation.
-Cloud profile writes, password/OAuth login, print submission, archival, forced
-RFID reread and Bambu K-factor operations are not included. LAN uploads obtain the current session endpoint,
+Cloud profile writes, password/OAuth login and Cloud print submission are not
+included. Forced RFID reread and Bambu K-factor operations remain unavailable.
+The upload-only LAN endpoints obtain the current session endpoint,
 validate the sliced model, use a unique filename and confirm its catalog size;
 they never start or enqueue a print. Uncertain transfers are not replayed.
 Configuration downloads currently admit only the observed Anycubic storage

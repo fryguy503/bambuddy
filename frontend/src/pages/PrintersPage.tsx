@@ -6546,7 +6546,7 @@ function PrinterCard({
                     reason to refuse -- it only means the item waits. Hiding it
                     while the drop zone accepted the same file would have left
                     the two routes into this flow disagreeing. */}
-                {!isAnycubic && <Button
+                <Button
                   size="sm"
                   onClick={() => setShowUploadForPrint(true)}
                   disabled={!hasPermission('library:upload') || !hasPermission('queue:create')}
@@ -6561,7 +6561,7 @@ function PrinterCard({
                 >
                   <PrinterIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
                   {t('common.print')}
-                </Button>}
+                </Button>
                 {isAnycubic && <Button size="sm" onClick={() => setShowFileManager(true)} disabled={!hasPermission('printers:files') || !hasPermission('printers:control')} className={footerActionButtonClass}>{t('common.upload')}</Button>}
               </div>
             </div>
@@ -6595,13 +6595,18 @@ function PrinterCard({
           onClose={() => setShowUploadForPrint(false)}
           onUploadComplete={() => {}}
           autoUpload
-          accept=".gcode,.3mf"
+          accept={isAnycubic ? '.gcode' : '.gcode,.3mf'}
           validateFile={(file) => {
+            if (isAnycubic && !file.name.toLowerCase().endsWith('.gcode')) return t('printers.anycubic.filesHelp');
             if (!mayBeSlicedFileName(file.name)) {
               return t('printers.dropNotPrintable');
             }
           }}
           onFileUploaded={(uploadedFile) => {
+            if (isAnycubic && (uploadedFile.metadata?.printer_type !== 'anycubic' || !uploadedFile.filename.toLowerCase().endsWith('.gcode'))) {
+              api.deleteLibraryFile(uploadedFile.id).catch(() => {});
+              return t('printers.anycubic.printFileUnreadable');
+            }
             if (!isSlicedLibraryFile(uploadedFile)) {
               api.deleteLibraryFile(uploadedFile.id).catch(() => {});
               return t('printers.dropNotSliced');
@@ -6627,7 +6632,7 @@ function PrinterCard({
           initialSelectedPrinterIds={[printer.id]}
           onClose={() => setPrintAfterUpload(null)}
           onSuccess={() => setPrintAfterUpload(null)}
-          cleanupLibraryAfterDispatch
+          cleanupLibraryAfterDispatch={!isAnycubic}
         />
       )}
 

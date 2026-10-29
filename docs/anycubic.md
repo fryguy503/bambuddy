@@ -32,11 +32,12 @@ being treated as an S1. Combo bundles use the underlying printer model.
 | Built-in LAN camera | Camera-only activation, HTTP-FLV decoding, shared browser MJPEG and snapshots |
 | External camera | Existing configured external camera support |
 | LAN files | Native catalog and model-matched sliced `.gcode` upload, progress and catalog confirmation; never starts printing |
-| Archive, queue dispatch and print submission | Unavailable in this provider |
+| Queue dispatch and print submission | Model-matched raw G-code, native ACE mapping and capability-gated settings; physical acceptance pending |
+| Print history | Raw G-code snapshot and matched native job outcome; no inferred Bambu filament accounting |
 | ACE drying | Per-unit temperature, hours/minutes, reported remaining time and stop |
 | ACE material controls | Native material/color edits for writable slots; load/unload/stop while idle |
 | Manual controls | Reported chamber light/fans, idle XYZ jog/home, capability-gated short E pulses |
-| RFID reread, Bambu K profiles, calibration and firmware | Unavailable in this provider |
+| RFID reread, Bambu K profiles, standalone Bambu calibration and firmware | Unavailable in this provider |
 | Anycubic Cloud Profiles / MakerOnline | Optional shared account for profile exports and model imports; see [Cloud setup](anycubic-cloud.md) |
 
 LAN monitoring and control do not require an Anycubic account. The optional
@@ -192,6 +193,57 @@ catalog. The probe rejected all non-read MQTT operations, including print
 start. The file remains on the printer. Other models need separate upload
 acceptance.
 
+## Queued LAN printing
+
+Use **Print** on a sliced `.gcode` file in the File Library. Choose the matching
+Anycubic printer. This first version targets one specific printer per queue
+request; quantities, staged/manual start, ASAP and scheduled jobs use the
+existing queue. Model load balancing and cross-model variants remain Bambu
+features. The file must identify its slicer, exact printer model, material and
+color for every used zero-based tool. The server re-reads the actual file at
+admission and dispatch rather than trusting editable library metadata.
+
+Print settings show the selected printer's reported leveling, vibration,
+flow calibration and timelapse capabilities. With ACE enabled, explicitly map
+each used tool to a physical box and slot. Loaded material labels and sliced
+material variants must agree; a missing, removed or stale mapped spool blocks
+dispatch. With ACE disabled, only a single used tool is accepted. Wire indexes
+are resolved from the current sorted native box inventory, including negative
+IDs where supported; Bambu tray IDs and K profiles are never substituted.
+
+Dispatch creates a raw G-code history copy, uploads under a unique name and
+confirms the catalog size before sending the native LAN print-start request.
+The queue uses the returned job ID and unique filename to observe actual
+printing and completion. After a matched terminal report, the next queued job
+waits for **Plate cleared**. That gate survives a Bambuddy restart.
+
+An ambiguous start, lost matching job or restart during submission keeps a
+durable printer hold. It is never automatically replayed. Check the printer
+and use **Confirm printer is not printing** only after verifying it is idle;
+the unresolved outcome is recorded as failed, without a hardware command.
+Clear and acknowledge the build plate before the next queued job can start.
+Stop is allowed only for the matching active queued job and waits for the
+printer's terminal report. Deleting source files cannot erase a submitted
+job's no-replay record. Another batch copy needs the original library file.
+
+Native print settings are stored separately from Bambu options. Bambu heat
+soak, G-code injection, nozzle/rack mappings, cost-center billing, automatic
+power-off and outcome confirmation are not offered for native jobs. Native
+filament consumption is not guessed from Bambu callbacks. Existing queue
+review, ownership and printer-scope permissions still apply.
+
+Protocol, dispatch, cancellation, restart, permission and UI tests use isolated
+fixtures. No physical print was started to validate this implementation; a
+small supervised S1 print, ACE mapping and scheduled second job still need
+operator acceptance before unattended use.
+
+A separate read-only capability check on the physical S1 reported all four
+native print options and both ACE units. The printer was already printing,
+and dispatch readiness correctly stayed false. That probe blocked every
+non-read MQTT operation; it did not start or stop a print.
+
+## LAN transport
+
 The provider uses HTTP port **18910** for the native LAN bootstrap and MQTT over
 TLS on **9883**. Discovered endpoints are bound to the entered printer IP and
 approved ports. HTTP redirects and environment proxies are not used. A changed
@@ -232,7 +284,7 @@ printer-update permission and its existing printer scope. The discovered
 identity must match the saved device.
 
 Anycubic status updates bypass Bambu calibration, spool-preset writes and archive
-automation. Queue dispatch, Bambu virtual-printer targets, built-in Bambu camera
+automation. Native queue jobs use their own identity-matched observer. Bambu virtual-printer targets, built-in Bambu camera
 requests, live K-profiles and FTPS file operations are blocked. External camera
 configuration remains available.
 
@@ -308,9 +360,10 @@ before opening a PR.
 
 Suggested issue scope: an experimental Kobra S1 LAN provider with explicit
 capabilities, read-only two-ACE inventory, reviewed TLS pairing and three basic
-controls and native settings, upload-only file browsing/transfer, and optional
-Cloud Profiles/MakerOnline access preserving Bambu defaults. Treat print start,
-archives, Cloud profile writes and ACE mutations as separate additions. The
+controls and native settings, native G-code queue dispatch, file browsing and
+transfer, and optional Cloud Profiles/MakerOnline access preserving Bambu defaults.
+Keep native queue lifecycle and settings distinct from Bambu archival and AMS
+automation. Cloud profile writes remain outside the current scope. The
 [Cloud Profiles guide](anycubic-cloud.md) covers its token-only connection,
 permissions and current storage-host limitation.
 

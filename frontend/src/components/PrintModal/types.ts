@@ -314,6 +314,7 @@ export interface PrintOptionsProps {
   /** Show the dual-nozzle-only options (nozzle offset calibration). Default false.
    *  Pass true when at least one selected printer is dual-nozzle. */
   showDualNozzleOptions?: boolean;
+  supportsVibrationCalibration?: boolean;
 }
 
 /**
@@ -328,6 +329,7 @@ export interface ScheduleOptionsProps {
   timeFormat?: 'system' | '12h' | '24h';
   /** Whether the user has permission to control printers (for auto power off) */
   canControlPrinter?: boolean;
+  showAutoOff?: boolean;
   /** Show stagger options (only when multiple printers selected in queue mode) */
   showStagger?: boolean;
   /** Number of selected printers (for stagger preview) */

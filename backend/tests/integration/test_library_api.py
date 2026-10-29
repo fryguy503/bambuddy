@@ -1795,15 +1795,9 @@ class TestPrintFileUploadValidation:
         body = response.json()
         assert body["file_type"] == "gcode"
         assert body["metadata"] == {"printer_type": "anycubic", "sliced_for_model": "Kobra S1"}
-        from fastapi import HTTPException
-
-        from backend.app.api.routes.print_queue import _assert_can_queue_library_file
-        from backend.app.models.library import LibraryFile
-
-        with pytest.raises(HTTPException) as blocked:
-            _assert_can_queue_library_file(LibraryFile(filename="S1-export.gcode"), None)
-        assert blocked.value.status_code == 400
-        assert "Anycubic" in blocked.value.detail
+        blocked = await async_client.post("/api/v1/queue/", json={"library_file_id": body["id"]})
+        assert blocked.status_code == 400
+        assert "Anycubic" in blocked.json()["detail"]
 
     @pytest.mark.asyncio
     @pytest.mark.integration

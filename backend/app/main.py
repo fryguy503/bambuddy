@@ -1896,8 +1896,14 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     """Handle printer status changes - broadcast via WebSocket."""
     client = printer_manager.get_client(printer_id)
     if getattr(client, "printer_type", "bambu") == "anycubic":
-        # Anycubic reports normalized monitoring state, but does not implement
-        # Bambu archive reconciliation, calibration, or AMS automation.
+        # Native queue correlation must see short terminal reports before
+        # firmware returns to IDLE. Keep Bambu archive/AMS automation separate.
+        from backend.app.services.anycubic.queue_dispatch import observe_status
+
+        try:
+            await observe_status(printer_id, state)
+        except Exception:
+            logging.getLogger(__name__).exception("Anycubic queue status update failed for printer %s", printer_id)
         await ws_manager.send_printer_status(
             printer_id,
             printer_state_to_dict(state, printer_id, printer_manager.get_model(printer_id)),

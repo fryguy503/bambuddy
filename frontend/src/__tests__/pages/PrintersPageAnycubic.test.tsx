@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
@@ -122,6 +122,46 @@ describe('Anycubic onboarding', () => {
 });
 
 describe('ACE monitoring', () => {
+  afterEach(() => vi.restoreAllMocks());
+  it('opens the native queue dialog from the card Print button after a library upload', async () => {
+    const user = userEvent.setup();
+    const uploaded = { id: 31, filename: 'part.gcode', file_type: 'gcode', file_size: 100, thumbnail_path: null, duplicate_of: null, metadata: { printer_type: 'anycubic', sliced_for_model: 'Kobra S1' } };
+    const upload = vi.spyOn(api, 'uploadLibraryFile').mockResolvedValue(uploaded);
+    const enqueue = vi.spyOn(api, 'addToQueue');
+    const nativeUpload = vi.spyOn(api, 'uploadAnycubicFile');
+    server.use(
+      http.get('/api/v1/printers/', () => HttpResponse.json([{ id: 1, name: 'Queue S1', printer_type: 'anycubic', model: 'Kobra S1', serial_number: 'fixture', ip_address: '192.168.1.50', is_active: true, auto_archive: false, nozzle_count: 1 }])),
+      http.get('/api/v1/printers/:id/status', () => HttpResponse.json({ connected: true, state: 'IDLE', temperatures: { nozzle: 24, bed: 24 }, vt_tray: [], ams: [] })),
+      http.get('/api/v1/library/files/:id', () => HttpResponse.json({ ...uploaded, sliced_for_model: 'Kobra S1' })),
+      http.get('/api/v1/library/files/:id/anycubic-print', () => HttpResponse.json({ model: 'Kobra S1', tools: [{ tool: 0, type: 'PLA', color: 'FF0000FF' }] })),
+    );
+    render(<PrintersPage />);
+    await user.click(await screen.findByRole('button', { name: 'Print' }));
+    expect(screen.getByText('Upload Files')).toBeInTheDocument();
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.accept).toBe('.gcode');
+    await user.upload(input, new File(['; native G-code'], 'part.gcode'));
+    expect(await screen.findByRole('heading', { name: 'Print' })).toBeInTheDocument();
+    expect(await screen.findByLabelText('Use ACE')).toBeInTheDocument();
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(nativeUpload).not.toHaveBeenCalled();
+  });
+  it('keeps the card Upload action separate from queue creation', async () => {
+    const user = userEvent.setup();
+    const library = vi.spyOn(api, 'uploadLibraryFile');
+    const enqueue = vi.spyOn(api, 'addToQueue');
+    server.use(
+      http.get('/api/v1/printers/', () => HttpResponse.json([{ id: 1, name: 'Upload S1', printer_type: 'anycubic', model: 'Kobra S1', serial_number: 'fixture', ip_address: '192.168.1.50', is_active: true, auto_archive: false, nozzle_count: 1 }])),
+      http.get('/api/v1/printers/:id/status', () => HttpResponse.json({ connected: true, state: 'IDLE', temperatures: { nozzle: 24, bed: 24 }, vt_tray: [], ams: [] })),
+    );
+    render(<PrintersPage />);
+    await user.click(await screen.findByRole('button', { name: 'Upload' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Upload .gcode sliced for this Anycubic model');
+    expect(screen.queryByText('Upload Files')).not.toBeInTheDocument();
+    expect(library).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
   it('shows and controls the reported chamber fan without a Bambu model classification', async () => {
     const user = userEvent.setup();
     const fan = vi.spyOn(api, 'setFanSpeed').mockResolvedValue({ success: true, message: 'queued' });
@@ -246,7 +286,7 @@ describe('ACE monitoring', () => {
     expect(screen.getByRole('region', { name: 'ACE 2' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Print' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Print' })).toBeEnabled();
     expect(screen.getByTitle('Browse printer files')).toBeInTheDocument();
     expect(screen.queryByTestId('speed-control')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Skip objects')).not.toBeInTheDocument();

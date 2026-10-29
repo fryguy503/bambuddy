@@ -526,7 +526,7 @@ class TestPinnedHoldReason:
 
 
 @pytest.mark.asyncio
-async def test_persisted_anycubic_job_never_wakes_its_smart_plug(ctx):
+async def test_unconfigured_persisted_anycubic_job_never_wakes_its_smart_plug(ctx):
     """Old rows and alternate writers cannot bypass dispatch admission."""
     async with ctx.session_maker() as db:
         printer = await db.get(Printer, 1)
@@ -545,4 +545,4 @@ async def test_persisted_anycubic_job_never_wakes_its_smart_plug(ctx):
     launched.assert_not_called()
     item = await _item(ctx, item_id)
     assert item.status == "failed"
-    assert "not supported for Anycubic" in item.error_message
+    assert "Native Anycubic queue settings are missing" in item.error_message
