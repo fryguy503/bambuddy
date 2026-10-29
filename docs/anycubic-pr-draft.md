@@ -30,12 +30,18 @@ physical ACE mapping for a specific printer. The print dialog shows only
 reported native start options; ordinary Bambu sources retain the existing
 workflow. The scheduler validates/uploads the source, persists submission
 intent before publishing, and correlates actual progress and terminal reports
-by native task ID plus unique filename. Ambiguous starts hold the printer
+by unique upload filename and, when available, native task ID. Stock S1 LAN
+reports with a `-1` task sentinel can confirm the exact submitted filename;
+conflicting assigned task IDs remain blocked. Ambiguous starts hold the printer
 across restart until observed or explicitly resolved; they are never replayed.
 A raw G-code history snapshot is stored independently of Bambu archival and
 filament accounting. Native billing, automatic power-off, outcome confirmation,
 model load balancing and cross-model alternatives are not enabled. Queue tests
-use isolated fixtures; no physical print-start acceptance is claimed.
+use isolated fixtures. The operator has reported a queued print running; a
+read-only S1 check observed its unique upload filename, running progress and
+`task_id: -1`. Recovery of that job with this fix and terminal completion still
+need deployment acceptance. No physical print-start command was sent by these
+checks.
 
 The Cloud tab accepts an existing Anycubic user token or Slicer Next access
 token in the fixed Global or China region. Global slicer tokens are exchanged

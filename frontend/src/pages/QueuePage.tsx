@@ -81,6 +81,7 @@ import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { AnycubicDispatchHold } from '../components/AnycubicDispatchHold';
 import { hasAnycubicDispatchHold } from '../utils/anycubicPrint';
+import { canUseQueuePrinterProgress } from '../utils/queueProgress';
 import { PrintModal } from '../components/PrintModal';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -1021,7 +1022,7 @@ function SortableQueueItem({
           </div>
 
           {/* Progress bar for printing items - TODO: integrate with WebSocket */}
-          {isPrinting && status && (() => {
+          {isPrinting && canUseQueuePrinterProgress(item) && status && (() => {
             // Gate progress/remaining/layer on printer actually running this print.
             // Between dispatch and RUNNING transition (H2D/P1 MQTT lag), status.progress
             // is stale from the previous print — showing 100% then snapping back to 0%

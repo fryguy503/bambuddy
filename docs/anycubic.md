@@ -263,9 +263,18 @@ IDs where supported; Bambu tray IDs and K profiles are never substituted.
 
 Dispatch creates a raw G-code history copy, uploads under a unique name and
 confirms the catalog size before sending the native LAN print-start request.
-The queue uses the returned job ID and unique filename to observe actual
-printing and completion. After a matched terminal report, the next queued job
-waits for **Plate cleared**. That gate survives a Bambuddy restart.
+The queue matches the exact unique upload filename to observe actual printing
+and completion. A returned job ID provides an additional identity check when
+the firmware supplies one; signed LAN job IDs are supported. Stock S1 firmware
+can report `task_id: -1` for a running LAN print. In that case, the dispatch's
+unique upload filename identifies the job, while the original library filename
+alone cannot confirm it. Conflicting assigned IDs are never ignored. A matched
+active report clears the start warning, including after Bambuddy restarts;
+completion still requires a subsequent matched terminal report. The next
+queued job waits for **Plate cleared**. That gate survives a Bambuddy restart.
+
+Unconfirmed native queue items do not borrow a printer's live progress or ETA.
+Those fields become available after the queue matches the running job.
 
 An ambiguous start, lost matching job or restart during submission keeps a
 durable printer hold. It is never automatically replayed. Check the printer

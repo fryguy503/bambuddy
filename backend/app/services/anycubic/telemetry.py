@@ -11,7 +11,7 @@ from backend.app.services.bambu_mqtt import PrinterState
 from backend.app.utils.anycubic_models import get_model
 
 from .drying import status_fields
-from .protocol import AnycubicError
+from .protocol import AnycubicError, task_id
 
 _PHASES = {
     "printing": "RUNNING",
@@ -101,16 +101,17 @@ class Telemetry:
                 changed = True
         name = _text(data.get("filename"))
         if name is not None:
+            if name != self.state.gcode_file:
+                self.task_id = "-1"
+                self.state.subtask_id = None
             self.state.current_print = self.state.subtask_name = name
             self.state.gcode_file = name
             changed = True
-        task = data.get("taskid", data.get("task_id"))
-        if type(task) is int and 0 < task <= (1 << 63) - 1:
-            task = str(task)
-        task = _text(task, 128)
-        if task:
-            self.task_id = task
+        if "taskid" in data or "task_id" in data:
+            task = task_id(data.get("taskid", data.get("task_id")))
+            self.task_id = task or "-1"
             self.state.subtask_id = task
+            changed = True
         return changed
 
     def _materials(self, data, full):
@@ -241,6 +242,7 @@ class Telemetry:
                 self.lifecycle_observed = True
                 self.state.current_print = self.state.subtask_name = self.state.gcode_file = None
                 self.state.subtask_id = None
+                self.task_id = "-1"
                 self.state.progress = self.state.remaining_time = self.state.layer_num = self.state.total_layers = 0
                 changed = True
             elif data.get("state") == "busy":

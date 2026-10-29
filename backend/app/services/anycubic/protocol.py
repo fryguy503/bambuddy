@@ -34,6 +34,26 @@ class AnycubicError(ValueError):
     """A fixed public diagnostic; never include a transport's secret-bearing error."""
 
 
+def task_id(value) -> str | None:
+    """Normalize job IDs; -1/0 are sentinels, but LAN timestamp IDs are signed."""
+    if type(value) is int:
+        if not -(1 << 63) <= value <= (1 << 63) - 1:
+            return None
+        value = str(value)
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > 128
+        or value in {"null", "undefined"}
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        return None
+    if re.fullmatch(r"-?\d+", value) and int(value) in {-1, 0}:
+        return None
+    return value
+
+
 def private_host(value: str) -> str:
     try:
         address = ipaddress.ip_address(value)

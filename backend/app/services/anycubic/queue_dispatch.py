@@ -8,6 +8,7 @@ instead of allowing the ordinary Bambu start watchdog to print a second copy.
 import asyncio
 import json
 import logging
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ from backend.app.services.printer_manager import printer_manager
 from .client import AnycubicMQTTClient
 from .files import MAX_GCODE_BYTES
 from .printing import inspect_print_file
-from .protocol import AnycubicError
+from .protocol import AnycubicError, task_id
 from .transfers import transfers
 
 logger = logging.getLogger(__name__)
@@ -365,22 +366,28 @@ async def dispatch(scheduler, db, item, printer):
 
 def _matches(record, state):
     filename = PurePosixPath((state.gcode_file or state.subtask_name or "").replace("\\", "/")).name
-    task_id = str(state.subtask_id or "")
-    if filename != record.get("filename") or task_id in {"", "-1", "0"}:
+    if not filename or filename != record.get("filename"):
         return False
-    return not record.get("task_id") or task_id == record["task_id"]
+    reported, assigned = task_id(state.subtask_id), task_id(record.get("task_id"))
+    if reported is not None:
+        return assigned is None or reported == assigned
+    # Stock S1 LAN jobs report -1 instead of an assigned task ID. The exact
+    # per-upload random filename still identifies this durable submission;
+    # the source/display filename alone must never grant that authority.
+    return bool(re.fullmatch(r".+-[0-9a-f]{12}\.gcode", filename))
 
 
 def _plate_observation(printer_id, state):
     """A print can leave a part behind even when it was started at the screen."""
     name = PurePosixPath((state.gcode_file or state.subtask_name or "").replace("\\", "/")).name
-    task_id = str(state.subtask_id or "")
-    identity = (task_id, name)
-    if state.state in ACTIVE_STATES and name and task_id not in {"", "-1", "0"}:
+    reported = task_id(state.subtask_id) or ""
+    identity = (reported, name)
+    if state.state in ACTIVE_STATES and name:
         _plate_active[printer_id] = identity
         return False
     previous = _plate_active.get(printer_id)
-    return bool(previous and (state.state == "IDLE" or state.state in {"FINISH", "FAILED"} and identity == previous))
+    matches = bool(previous and name == previous[1] and (not reported or not previous[0] or reported == previous[0]))
+    return bool(previous and (state.state == "IDLE" or state.state in {"FINISH", "FAILED"} and matches))
 
 
 async def _mark_unknown(db, item, record, message):
@@ -402,9 +409,16 @@ async def _observe(db, item, state):
     if _matches(record, state):
         if state.state in ACTIVE_STATES:
             first = not record.get("observed_active")
-            if not first and record.get("state") == "running":
+            reported = task_id(state.subtask_id)
+            if (
+                not first
+                and record.get("state") == "running"
+                and (reported is None or record.get("task_id") == reported)
+            ):
                 return False
-            record.update(state="running", observed_active=True, task_id=str(state.subtask_id))
+            record.update(state="running", observed_active=True)
+            if reported is not None:
+                record["task_id"] = reported
             changed = await db.execute(
                 update(PrintQueueItem)
                 .where(PrintQueueItem.id == item.id, PrintQueueItem.anycubic_dispatch == raw_record)
@@ -419,7 +433,8 @@ async def _observe(db, item, state):
             if archive is not None:
                 archive.status = "printing"
                 archive.started_at = item.started_at
-                archive.subtask_id = str(state.subtask_id)[:64]
+                archive_task = task_id(record.get("task_id"))
+                archive.subtask_id = archive_task[:64] if archive_task else None
             if first:
                 await _event(
                     ws_manager.send_queue_item_acked,
@@ -469,8 +484,12 @@ async def _observe(db, item, state):
             await db.execute(update(Printer).where(Printer.id == item.printer_id).values(awaiting_plate_clear=True))
             printer_manager.set_awaiting_plate_clear(item.printer_id, True)
             return True
-    # IDLE does not prove an uncertain request failed or an observed run ended.
-    if record.get("observed_active") and state.state == "IDLE" and record.get("state") != "unknown":
+    # IDLE or a different live job cannot prove how this observed run ended.
+    if (
+        record.get("observed_active")
+        and state.state in ACTIVE_STATES | {"IDLE", "FINISH", "FAILED"}
+        and record.get("state") != "unknown"
+    ):
         return await _mark_unknown(
             db,
             item,

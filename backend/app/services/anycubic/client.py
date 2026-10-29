@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from pathlib import PurePosixPath
 
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
@@ -33,6 +34,7 @@ from .protocol import (
     model_from_info,
     pair,
     private_host,
+    task_id,
 )
 from .telemetry import Telemetry
 
@@ -352,6 +354,7 @@ class AnycubicMQTTClient:
             self._last_message_monotonic = time.monotonic()
             if self._telemetry.lifecycle_observed:
                 self._last_state_time = self._last_message_monotonic
+                self._observe_print_start()
             if report_id is not None:
                 self._seen_reports[(tail[0], report_id)] = None
                 if len(self._seen_reports) > 512:
@@ -521,23 +524,34 @@ class AnycubicMQTTClient:
         data = envelope.get("data")
         if not isinstance(data, dict):
             return
-        task = data.get("taskid", data.get("task_id"))
-        if type(task) is int and 0 < task <= (1 << 63) - 1:
-            task = str(task)
-        if (
-            not isinstance(task, str)
-            or not task.strip()
-            or task != task.strip()
-            or len(task) > 128
-            or task in {"-1", "0", "null", "undefined"}
-            or re.fullmatch(r"-?\d+", task) is not None
-            and int(task) <= 0
-            or any(ord(char) < 32 or ord(char) == 127 for char in task)
-            or data.get("filename", pending["result"]["filename"]) != pending["result"]["filename"]
-        ):
+        task = task_id(data.get("taskid", data.get("task_id")))
+        if task is None or data.get("filename", pending["result"]["filename"]) != pending["result"]["filename"]:
             return
         pending["result"].update(status="accepted", task_id=task)
         pending["event"].set()
+
+    def _observe_print_start(self):
+        """Settle local receipt holds when fresh telemetry proves their unique job."""
+        if self.state.state not in {"RUNNING", "PREPARE", "PAUSE"}:
+            return
+        filename = PurePosixPath((self.state.gcode_file or "").replace("\\", "/")).name
+        reported = task_id(self.state.subtask_id)
+        for attempt in self._print_attempts.values():
+            result = attempt["result"]
+            assigned = task_id(result["task_id"])
+            if (
+                result["status"] != "unknown"
+                or not filename
+                or filename != result["filename"]
+                or reported is not None
+                and assigned is not None
+                and reported != assigned
+            ):
+                continue
+            result["status"] = "accepted"
+            if reported is not None:
+                result["task_id"] = reported
+            attempt["event"].set()
 
     def print_capabilities(self):
         """Observed features and physical material sources, without session secrets."""
