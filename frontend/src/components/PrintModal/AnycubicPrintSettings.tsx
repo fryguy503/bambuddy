@@ -16,12 +16,13 @@ const LABELS = {
   timelapse: ['settings.defaultTimelapse', 'settings.defaultTimelapseDesc'],
 } as const;
 
-export function AnycubicPrintSettings({ options, onChange, requirements, status, defaultExpanded = false }: {
+export function AnycubicPrintSettings({ options, onChange, requirements, status, defaultExpanded = false, requireAce = false }: {
   options: AnycubicPrintOptions;
   onChange: (options: AnycubicPrintOptions) => void;
   requirements: AnycubicPrintRequirements;
   status?: PrinterStatus;
   defaultExpanded?: boolean;
+  requireAce?: boolean;
 }) {
   const { t } = useTranslation();
   const panelId = useId();
@@ -29,7 +30,7 @@ export function AnycubicPrintSettings({ options, onChange, requirements, status,
   const [optionsExpanded, setOptionsExpanded] = useState(defaultExpanded);
   const supported = status?.anycubic_controls?.print_options ?? [];
   const slots = nativeSlots(status);
-  const mappingComplete = nativeMappingComplete(options, requirements, status);
+  const mappingComplete = (!requireAce || options.use_ace) && nativeMappingComplete(options, requirements, status);
   const hasColorMismatch = options.use_ace && requirements.tools.some(tool => {
     const mapping = options.filament_mapping.find(item => item.tool === tool.tool);
     const slot = mapping && slots.find(item => item.box_id === mapping.box_id && item.slot_id === mapping.slot_id);
@@ -47,7 +48,7 @@ export function AnycubicPrintSettings({ options, onChange, requirements, status,
         {mappingExpanded ? <ChevronUp className="w-4 h-4 ml-auto" /> : <ChevronDown className="w-4 h-4 ml-auto" />}
       </button>
       {mappingExpanded && <div id={`${panelId}-mapping`} className="mt-2 bg-bambu-dark rounded-lg p-3 space-y-2">
-        <PrintBooleanOption label={feederLabel} value={options.use_ace} disableOff={requirements.tools.length > 1} onChange={use_ace => onChange({ ...options, use_ace })} />
+        <PrintBooleanOption label={feederLabel} value={options.use_ace} disableOff={requireAce || requirements.tools.length > 1} onChange={use_ace => onChange({ ...options, use_ace })} />
         <p className="text-xs text-bambu-gray">{t(options.use_ace ? 'printers.anycubic.queueHelp' : 'printers.anycubic.externalPrintHelp')}</p>
         {options.use_ace && requirements.tools.map(tool => {
           const mapping = options.filament_mapping.find(item => item.tool === tool.tool);

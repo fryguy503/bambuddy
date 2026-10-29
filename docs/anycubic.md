@@ -236,6 +236,14 @@ features. The file must identify its slicer, exact printer model, material and
 color for every used zero-based tool. The server re-reads the actual file at
 admission and dispatch rather than trusting editable library metadata.
 
+Selecting several native G-code files offers **Queue files**. This queues every
+selected file in the arranged order on one matching printer; it does not create
+one job with alternative slices. All sources must validate for the same model.
+The filament panel combines their distinct full material/color requirements,
+then writes each file's original tool numbers and its own mapping to its queue
+item. Quantity applies to each file. A partial submission stops at the first
+error and keeps only the remaining files available for retry in that dialog.
+
 Print settings show the selected printer's reported leveling, vibration,
 flow calibration and timelapse capabilities. With ACE enabled, explicitly map
 each used tool to a physical box and slot. Loaded material labels and sliced

@@ -2547,6 +2547,8 @@ export function FileManagerPage() {
   // action, which files they meant.
   const printVariantFiles = useMemo(() => {
     if (!printFile) return undefined;
+    if (selectedSlicedFiles.some(file => file.filename.toLowerCase().endsWith('.gcode'))) return undefined;
+    if (printFile.filename.toLowerCase().endsWith('.gcode')) return undefined;
     if (selectedSlicedFiles.length > 1) {
       return selectedSlicedFiles.map(f => ({
         id: f.id,
@@ -2563,6 +2565,15 @@ export function FileManagerPage() {
     }
     return undefined;
   }, [printFile, selectedSlicedFiles, printFileGroup]);
+
+  // Native G-code selections are separate jobs, rather than slices of one job
+  // offered to different printer models. Do not silently drop a mixed selection:
+  // the modal validates every selected source before it queues any of them.
+  const printNativeQueueFiles = useMemo(() => {
+    if (!printFile || selectedSlicedFiles.length < 2 || !selectedSlicedFiles.some(file => file.filename.toLowerCase().endsWith('.gcode'))) return undefined;
+    return selectedSlicedFiles.map(file => ({ id: file.id, filename: file.filename, sliced_for_model: file.sliced_for_model }));
+  }, [printFile, selectedSlicedFiles]);
+  const printDialogFiles = printNativeQueueFiles ?? printVariantFiles;
 
   // The list the arrow keys walk: the one that actually holds the focused
   // file, which may be an intermediate column rather than the selected
@@ -3408,7 +3419,9 @@ export function FileManagerPage() {
                       >
                         <Printer className="w-4 h-4 sm:mr-1" />
                         <span className="hidden sm:inline">
-                          {selectedSlicedFiles.length > 1
+                          {selectedSlicedFiles.length > 1 && selectedSlicedFiles.some(file => file.filename.toLowerCase().endsWith('.gcode'))
+                            ? t('printers.anycubic.queueFilesAction', { count: selectedSlicedFiles.length })
+                            : selectedSlicedFiles.length > 1
                             ? t('fileManager.variants.printAlternatives', { count: selectedSlicedFiles.length })
                             : t('common.print')}
                         </span>
@@ -4035,16 +4048,17 @@ export function FileManagerPage() {
       {/* Held back until the variant group has loaded. The modal reads its
           candidate list once, on mount, so opening before the group arrives
           would show a single-file print for a file that has alternatives. */}
-      {printFile && (!printFile.variant_group_id || printFileGroup !== undefined) && (
+      {printFile && (printNativeQueueFiles || printFile.filename.toLowerCase().endsWith('.gcode') || !printFile.variant_group_id || printFileGroup !== undefined) && (
         <PrintModal
           mode="create"
-          libraryFileId={printVariantFiles?.[0]?.id ?? printFile.id}
+          libraryFileId={printDialogFiles?.[0]?.id ?? printFile.id}
           variantFiles={printVariantFiles}
+          nativeQueueFiles={printNativeQueueFiles}
           // Naming a cross-model job after one of its files reads as though the
           // others aren't part of it.
           archiveName={
-            printVariantFiles && printVariantFiles.length > 1
-              ? `${printVariantFiles[0].filename} ${t('common.plusNMore', { count: printVariantFiles.length - 1 })}`
+            printDialogFiles && printDialogFiles.length > 1
+              ? `${printDialogFiles[0].filename} ${t('common.plusNMore', { count: printDialogFiles.length - 1 })}`
               : printFile.print_name || printFile.filename
           }
           onClose={() => setPrintFile(null)}

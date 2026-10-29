@@ -36,6 +36,56 @@ export function nativeMappingComplete(options: AnycubicPrintOptions, requirement
   });
 }
 
+function nativeFilamentKey(tool: AnycubicPrintRequirements['tools'][number]): string | undefined {
+  const material = tool.type.trim().toLowerCase();
+  const color = tool.color.trim().replace(/^#/, '').toUpperCase();
+  if (!material || !/^(?:[A-F0-9]{6}|[A-F0-9]{8})$/.test(color)) return undefined;
+  return `${material}:${color.length === 6 ? `${color}FF` : color}`;
+}
+
+/** Shared batch choices describe filament, not a file's unrelated T indices. */
+export function combineNativeRequirements(requirements: AnycubicPrintRequirements[]): AnycubicPrintRequirements | undefined {
+  const model = requirements[0]?.model;
+  if (!model || requirements.some(file => file.model !== model || !file.tools.length)) return undefined;
+  const filaments = new Map<string, AnycubicPrintRequirements['tools'][number]>();
+  for (const file of requirements) {
+    const usedTools = new Set<number>();
+    for (const tool of file.tools) {
+      const key = nativeFilamentKey(tool);
+      if (!key || !Number.isInteger(tool.tool) || tool.tool < 0 || tool.tool > 255 || usedTools.has(tool.tool)) return undefined;
+      usedTools.add(tool.tool);
+      filaments.set(key, tool);
+    }
+  }
+  if (filaments.size > 256) return undefined;
+  return {
+    model,
+    tools: [...filaments].sort(([left], [right]) => left.localeCompare(right)).map(([, filament], tool) => ({ ...filament, tool })),
+  };
+}
+
+/** Translate shared filament picks back to exactly the tools used by this file. */
+export function nativeOptionsForFile(
+  options: AnycubicPrintOptions,
+  combined: AnycubicPrintRequirements,
+  file: AnycubicPrintRequirements,
+): AnycubicPrintOptions | undefined {
+  if (combined.model !== file.model || !file.tools.length) return undefined;
+  if (!options.use_ace) return file.tools.length === 1 ? { ...options, filament_mapping: [] } : undefined;
+  const filament_mapping: AnycubicPrintOptions['filament_mapping'] = [];
+  const usedTools = new Set<number>();
+  for (const tool of file.tools) {
+    const key = nativeFilamentKey(tool);
+    if (!key || !Number.isInteger(tool.tool) || tool.tool < 0 || tool.tool > 255 || usedTools.has(tool.tool)) return undefined;
+    usedTools.add(tool.tool);
+    const shared = combined.tools.find(candidate => nativeFilamentKey(candidate) === key);
+    const mapping = shared && options.filament_mapping.find(candidate => candidate.tool === shared.tool);
+    if (!mapping) return undefined;
+    filament_mapping.push({ ...mapping, tool: tool.tool });
+  }
+  return { ...options, filament_mapping };
+}
+
 export function hasAnycubicDispatchHold(item: PrintQueueItem): boolean {
   return ['submitting', 'unknown', 'accepted', 'running'].includes(item.anycubic_dispatch_state ?? '');
 }

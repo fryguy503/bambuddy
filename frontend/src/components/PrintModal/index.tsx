@@ -30,7 +30,7 @@ import { PlateSelector } from './PlateSelector';
 import { PrinterSelector } from './PrinterSelector';
 import { PrintOptionsPanel } from './PrintOptions';
 import { AnycubicPrintSettings } from './AnycubicPrintSettings';
-import { DEFAULT_ANYCUBIC_PRINT_OPTIONS, nativeMappingComplete, nativePrintOptions } from '../../utils/anycubicPrint';
+import { combineNativeRequirements, DEFAULT_ANYCUBIC_PRINT_OPTIONS, nativeMappingComplete, nativeOptionsForFile, nativePrintOptions } from '../../utils/anycubicPrint';
 import { ScheduleOptionsPanel } from './ScheduleOptions';
 import { VariantCandidates, type VariantCandidate } from './VariantCandidates';
 import { CostCenterSelect } from './CostCenterSelect';
@@ -100,6 +100,7 @@ export function PrintModal({
   projectId,
   cleanupLibraryAfterDispatch,
   variantFiles,
+  nativeQueueFiles,
 }: PrintModalProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -115,7 +116,8 @@ export function PrintModal({
 
   // Cross-model alternatives (#671). One candidate is not a choice, so a
   // single-entry list behaves exactly like an ordinary print.
-  const isCrossModel = mode === 'create' && (variantFiles?.length ?? 0) > 1;
+  const isNativeQueue = mode === 'create' && (nativeQueueFiles?.length ?? 0) > 0;
+  const isCrossModel = mode === 'create' && !isNativeQueue && (variantFiles?.length ?? 0) > 1;
   // Editing an already-queued cross-model item. The candidates are shown so the
   // dialog doesn't misrepresent the job as a plain "Any H2D" — which is what it
   // did before, offering a printer picker whose Save would have left a row with
@@ -131,7 +133,12 @@ export function PrintModal({
         }))
       : [];
   const hasEditingVariants = editingVariants.length > 0;
-  const [candidates, setCandidates] = useState<VariantCandidate[]>(variantFiles ?? []);
+  const [candidates, setCandidates] = useState<VariantCandidate[]>(nativeQueueFiles ?? variantFiles ?? []);
+  // Keep synthetic filament ids stable when successful files leave a partial
+  // submission. Remaining rows must retain the same physical spool choices.
+  const [initialNativeFiles] = useState<VariantCandidate[]>(nativeQueueFiles ?? []);
+  const [nativeQueuedCount, setNativeQueuedCount] = useState(0);
+  const nativeAsapInserted = useRef(0);
   const [candidatePlates, setCandidatePlates] = useState<Record<number, number | null>>({});
 
   type FilamentWarningItem = {
@@ -379,22 +386,39 @@ export function PrintModal({
   const nativeArchive = !isLibraryFile && !!archiveId && (
     archiveDetails?.filename?.toLowerCase().endsWith('.gcode') || archiveDetails?.extra_data?.printer_type === 'anycubic'
   );
-  const nativeSource = nativeArchive || !!queueItem?.anycubic_options || (isLibraryFile && (
+  const nativeSource = isNativeQueue || nativeArchive || !!queueItem?.anycubic_options || (isLibraryFile && (
     libraryFileDetails?.filename?.toLowerCase().endsWith('.gcode') || libraryFileDetails?.metadata?.printer_type === 'anycubic'
   ));
-  const nativeSourceUnavailable = nativeSource && ((!archiveId && !libraryFileId) || libraryFileDetailsFailed);
+  const nativeSourceUnavailable = nativeSource && !isNativeQueue && ((!archiveId && !libraryFileId) || libraryFileDetailsFailed);
   const billingEnabled = !nativeSource && settings?.billing_enabled === true;
-  const { data: nativeRequirements, isError: nativeRequirementsFailed } = useQuery({
+  const { data: singleNativeRequirements, isError: singleNativeRequirementsFailed } = useQuery({
     queryKey: ['anycubic-print-requirements', libraryFileId],
     queryFn: () => api.getAnycubicPrintRequirements(libraryFileId!),
-    enabled: nativeSource && isLibraryFile && !!libraryFileId,
+    enabled: nativeSource && !isNativeQueue && isLibraryFile && !!libraryFileId,
     retry: false,
   });
+  const nativeFileQueries = useQueries({
+    queries: isNativeQueue ? initialNativeFiles.map(file => ({
+      queryKey: ['anycubic-print-requirements', file.id],
+      queryFn: () => api.getAnycubicPrintRequirements(file.id),
+      retry: false,
+    })) : [],
+  });
+  const nativeRequirementsByFile = new Map(initialNativeFiles.map((file, index) => [file.id, nativeFileQueries[index]?.data]));
+  const nativePendingFile = isNativeQueue ? initialNativeFiles.find((_, index) => nativeFileQueries[index]?.isPending) : undefined;
+  const nativeFailedFile = isNativeQueue ? initialNativeFiles.find((_, index) => nativeFileQueries[index]?.isError) : undefined;
+  const nativeRequirements = isNativeQueue
+    ? nativeFileQueries.every(query => query.data) && initialNativeFiles.length > 0
+      ? combineNativeRequirements(nativeFileQueries.map(query => query.data!))
+      : undefined
+    : singleNativeRequirements;
+  const nativeModelsMismatch = isNativeQueue && !nativePendingFile && !nativeFailedFile && !nativeRequirements;
+  const nativeRequirementsFailed = isNativeQueue ? !!nativeFailedFile || nativeModelsMismatch : singleNativeRequirementsFailed;
   const slicedForModel = (nativeSource ? nativeRequirements?.model : null) || archiveDetails?.sliced_for_model || libraryFileDetails?.sliced_for_model
     || (typeof libraryFileDetails?.metadata?.sliced_for_model === 'string' ? libraryFileDetails.metadata.sliced_for_model : null);
   const sourceDetailsPending =
-    (!!archiveId && !isLibraryFile && !archiveDetails && !archiveDetailsFailed) ||
-    (isLibraryFile && !libraryFileDetails && !libraryFileDetailsFailed)
+    (!isNativeQueue && ((!!archiveId && !isLibraryFile && !archiveDetails && !archiveDetailsFailed) ||
+    (isLibraryFile && !libraryFileDetails && !libraryFileDetailsFailed)))
     || (nativeSource && isLibraryFile && !nativeRequirements && !nativeRequirementsFailed);
   const { data: allPrinters, isLoading: loadingPrinters } = useQuery({
     queryKey: ['printers'],
@@ -601,7 +625,17 @@ export function PrintModal({
     && printers?.some(printer => printer.id === effectivePrinterId) === true
     && nativeRequirements?.model === slicedForModel
     && nativeMappingComplete(anycubicOptions, nativeRequirements, printerStatus)
+    && (!isNativeQueue || (candidates.length > 0 && candidates.every(file => {
+      const requirements = nativeRequirementsByFile.get(file.id);
+      return !!requirements && !!nativeRequirements && !!nativeOptionsForFile(anycubicOptions, nativeRequirements, requirements);
+    })))
   );
+  const nativeBlockingReason = !nativeSource ? null
+    : nativePendingFile ? t('printers.anycubic.queueFilesLoading', { filename: nativePendingFile.filename })
+      : nativeFailedFile ? t('printers.anycubic.queueFilesInvalid', { filename: nativeFailedFile.filename })
+        : nativeModelsMismatch ? t('printers.anycubic.queueFilesModels')
+          : isNativeQueue && !nativeSelectionValid ? t('printers.anycubic.queueFilesMapping')
+            : null;
   const nativeQueueOptions = nativeSource ? {
     anycubic_options: nativePrintOptions(anycubicOptions, printerStatus?.anycubic_controls?.print_options ?? []),
     ams_mapping: null,
@@ -1114,6 +1148,72 @@ export function PrintModal({
 
     if (billingEnabled && selectedCostCenter == null) {
       showToast(t('printModal.noPrintableCostCenters'), 'error');
+      return;
+    }
+
+    if (isNativeQueue && nativeRequirements && effectivePrinterId) {
+      // Validate every file before creating the first queue row. Synthetic
+      // display tool ids are rebound to each file's original sparse T indices.
+      const prepared = candidates.map(file => {
+        const requirements = nativeRequirementsByFile.get(file.id);
+        return {
+          file,
+          options: requirements ? nativeOptionsForFile(
+            nativePrintOptions(anycubicOptions, printerStatus?.anycubic_controls?.print_options ?? []),
+            nativeRequirements,
+            requirements,
+          ) : undefined,
+        };
+      });
+      if (prepared.some(item => !item.options)) {
+        showToast(t('printers.anycubic.queueFilesMapping'), 'error');
+        return;
+      }
+      setIsSubmitting(true);
+      setSubmitProgress({ current: 0, total: prepared.length });
+      const completed = new Set<number>();
+      let failureMessage: string | null = null;
+      for (const { file, options: fileOptions } of prepared) {
+        try {
+          await api.addToQueue({
+            ...nativeQueueOptions,
+            anycubic_options: fileOptions,
+            library_file_id: file.id,
+            printer_id: effectivePrinterId,
+            target_model: null,
+            target_location: null,
+            project_id: projectId ?? undefined,
+            quantity: quantity > 1 ? quantity : undefined,
+            manual_start: needsReview || (scheduleOptions.scheduleType === 'queue' && scheduleOptions.requireManualStart),
+            require_previous_success: scheduleOptions.requirePreviousSuccess,
+            scheduled_time: scheduleOptions.scheduleType === 'scheduled' && scheduleOptions.scheduledTime
+              ? new Date(scheduleOptions.scheduledTime).toISOString()
+              : undefined,
+            ...(scheduleOptions.scheduleType === 'asap'
+              ? { insert_at_top: true, insert_position: nativeAsapInserted.current + 1 }
+              : {}),
+          });
+          completed.add(file.id);
+          if (scheduleOptions.scheduleType === 'asap') nativeAsapInserted.current += quantity;
+          setSubmitProgress({ current: completed.size, total: prepared.length });
+        } catch (error) {
+          failureMessage = `${file.filename}: ${error instanceof Error ? error.message : String(error)}`;
+          break;
+        }
+      }
+      if (completed.size) {
+        setNativeQueuedCount(count => count + completed.size);
+        setCandidates(files => files.filter(file => !completed.has(file.id)));
+        queryClient.invalidateQueries({ queryKey: ['queue'] });
+      }
+      setIsSubmitting(false);
+      if (failureMessage) {
+        showToast(failureMessage, 'error');
+      } else {
+        showToast(t('queue.itemsQueued', { count: completed.size }), 'success');
+        onSuccess?.();
+        onClose();
+      }
       return;
     }
 
@@ -1973,6 +2073,22 @@ export function PrintModal({
               />
             )}
 
+            {isNativeQueue && (
+              <>
+                <VariantCandidates
+                  queueAll
+                  candidates={candidates}
+                  onReorder={setCandidates}
+                  plateByFile={{}}
+                  onPlateChange={() => {}}
+                  readOnly={isSubmitting}
+                />
+                {nativeQueuedCount > 0 && <p role="status" className="mb-3 text-sm text-bambu-gray">
+                  {t('printers.anycubic.queueFilesPartial', { queued: nativeQueuedCount, total: nativeQueueFiles?.length ?? 0 })}
+                </p>}
+              </>
+            )}
+
             {hasEditingVariants && (
               <VariantCandidates
                 candidates={editingVariants}
@@ -2171,9 +2287,10 @@ export function PrintModal({
                 supportsVibrationCalibration={supportsVibrationCalibration}
               />
             )}
-            {nativeSource && nativeRequirements && <AnycubicPrintSettings options={anycubicOptions} onChange={setAnycubicOptions} requirements={nativeRequirements} status={printerStatus} defaultExpanded={!!initialSelectedPrinterIds?.length} />}
-            {nativeSource && !nativeRequirements && <p role={nativeRequirementsFailed ? 'alert' : 'status'} className="mb-4 text-sm text-bambu-gray">{t(nativeRequirementsFailed ? 'printers.anycubic.printFileUnreadable' : 'printers.anycubic.readingPrintFile')}</p>}
-            {nativeSource && !loadingPrinters && !sourceDetailsPending && !printers?.length && <p role="alert" className="mb-4 text-sm text-amber-400">{t('printers.anycubic.noMatchingPrinter', { model: slicedForModel ?? t('common.unknown') })}</p>}
+            {nativeSource && nativeRequirements && <AnycubicPrintSettings options={anycubicOptions} onChange={setAnycubicOptions} requirements={nativeRequirements} status={printerStatus} defaultExpanded={!!initialSelectedPrinterIds?.length} requireAce={isNativeQueue && nativeFileQueries.some(query => (query.data?.tools.length ?? 0) > 1)} />}
+            {nativeBlockingReason && <p role={nativePendingFile ? 'status' : 'alert'} className="mb-4 text-sm text-amber-400">{nativeBlockingReason}</p>}
+            {nativeSource && !isNativeQueue && !nativeRequirements && <p role={nativeRequirementsFailed ? 'alert' : 'status'} className="mb-4 text-sm text-bambu-gray">{t(nativeRequirementsFailed ? 'printers.anycubic.printFileUnreadable' : 'printers.anycubic.readingPrintFile')}</p>}
+            {nativeSource && (!isNativeQueue || !!nativeRequirements) && !loadingPrinters && !sourceDetailsPending && !printers?.length && <p role="alert" className="mb-4 text-sm text-amber-400">{t('printers.anycubic.noMatchingPrinter', { model: slicedForModel ?? t('common.unknown') })}</p>}
 
             {billingEnabled && printableCostCenters.length > 0 && (
               <CostCenterSelect
@@ -2297,7 +2414,11 @@ export function PrintModal({
                 ) : (
                   <>
                     <SubmitIcon className="w-4 h-4" />
-                    {modalConfig.submitText}
+                    {isNativeQueue
+                      ? nativeQueuedCount > 0
+                        ? t('printers.anycubic.queueFilesRetry')
+                        : t('printers.anycubic.queueFilesAction', { count: candidates.length })
+                      : modalConfig.submitText}
                   </>
                 )}
               </Button>

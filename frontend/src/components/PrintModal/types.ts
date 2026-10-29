@@ -58,6 +58,8 @@ export interface PrintModalProps {
    * plate preview reads from it.
    */
   variantFiles?: VariantCandidate[];
+  /** Every native file is queued in this order, rather than offered as an alternative. */
+  nativeQueueFiles?: VariantCandidate[];
 }
 
 /**
