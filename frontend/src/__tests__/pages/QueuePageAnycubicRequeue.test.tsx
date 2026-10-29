@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
@@ -39,8 +39,8 @@ describe('Requeueing completed native jobs', () => {
     await user.click(await screen.findByTitle('Re-queue'));
     const picker = await screen.findByRole('combobox', { name: 'Filament 1' });
     await waitFor(() => expect(source).toHaveBeenCalledWith(31));
-    expect(picker).toHaveValue('');
-    expect(screen.getByLabelText('Bed Levelling')).toBeChecked();
+    expect(picker).toHaveTextContent('Select an ACE slot…');
+    expect(within(screen.getByRole('group', { name: 'Bed Levelling' })).getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: /^Print$/ })).toBeDisabled();
     expect(enqueue).not.toHaveBeenCalled();
   });

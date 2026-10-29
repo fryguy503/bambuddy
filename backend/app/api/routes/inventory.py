@@ -2538,8 +2538,9 @@ async def assign_spool(
     vacated: list[tuple[int, int, int]] = []
     while True:
         async with AsyncExitStack() as locks:
-            if data.move:
-                await locks.enter_async_context(get_spool_move_lock("inventory", data.spool_id))
+            # Native RFID matching also takes this lock before the printer's
+            # lock, so an automatic link cannot race a manual assignment.
+            await locks.enter_async_context(get_spool_move_lock("inventory", data.spool_id))
             for pid in sorted(locked_printer_ids):
                 await locks.enter_async_context(get_ams_assignment_lock(pid))
             if data.move:

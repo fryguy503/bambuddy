@@ -3165,6 +3165,7 @@ async def _run_migrations(conn):
     # upgrading an ancient database cannot drop the new nullable columns.
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN anycubic_options TEXT")
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN anycubic_dispatch TEXT")
+    await _safe_execute(conn, "ALTER TABLE spool_assignment ADD COLUMN rfid_match BOOLEAN NOT NULL DEFAULT 0")
 
     # Migration: Add HA energy sensor entity columns to smart_plugs
     await _safe_execute(conn, "ALTER TABLE smart_plugs ADD COLUMN ha_power_entity VARCHAR(100)")

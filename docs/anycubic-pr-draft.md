@@ -11,6 +11,11 @@ cards offer friendly names and inventory assignment, with separate native
 material/color, load/unload and per-box drying controls. A separate, optional Anycubic Cloud Profiles tab reads
 the account's native slicer-configuration ZIP for browsing and JSON export.
 
+Native RFID slots can link to the built-in inventory by exact RGBA and full
+material/subtype only when both the active spool and reported slot are unique.
+Ambiguous or assigned-elsewhere candidates stay unassigned; manual links are
+preserved. These links never configure the printer or invent a tag UID.
+
 LAN onboarding requires explicit review of the printer's TLS fingerprint.
 The Add Printer dialog can scan a private IPv4 subnet for LAN-mode Anycubic
 printers, then populate the selected device for certificate review. Scanning

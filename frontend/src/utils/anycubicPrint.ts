@@ -22,7 +22,7 @@ export function nativePrintOptions(options: AnycubicPrintOptions, supported: str
 export function nativeSlots(status?: PrinterStatus) {
   return (status?.ams ?? []).flatMap(unit => unit.tray
     .filter(tray => tray.exists !== false && tray.state !== 9 && !!tray.tray_type)
-    .map(tray => ({ box_id: unit.id, slot_id: tray.id, type: tray.tray_type })));
+    .map(tray => ({ box_id: unit.id, slot_id: tray.id, type: tray.tray_type, color: tray.tray_color ?? undefined })));
 }
 
 export function nativeMappingComplete(options: AnycubicPrintOptions, requirements?: AnycubicPrintRequirements, status?: PrinterStatus): boolean {

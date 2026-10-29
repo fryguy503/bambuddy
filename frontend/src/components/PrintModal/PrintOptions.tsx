@@ -13,6 +13,7 @@ import {
   CALIBRATION_MODE_INACTIVE,
 } from '../../utils/calibrationMode';
 import { MAX_CHAMBER_TEMP_C } from '../../utils/printer';
+import { PrintBooleanOption } from './PrintBooleanOption';
 
 type OptionConfig = {
   key: keyof PrintOptionsType;
@@ -22,9 +23,6 @@ type OptionConfig = {
   /** Tri-state (off/on/auto) rather than a plain on/off pair. */
   tristate?: boolean;
 };
-
-// On/off options render as the same button pair, minus the "auto" choice.
-const BOOLEAN_MODES = ['off', 'on'] as const;
 
 /**
  * Print options toggle panel with collapsible UI.
@@ -94,6 +92,7 @@ export function PrintOptionsPanel({
     <div className="mb-4">
       <button
         type="button"
+        aria-expanded={isExpanded}
         onClick={() => setIsExpanded(!isExpanded)}
         className="flex items-center gap-2 text-sm text-bambu-gray hover:text-white transition-colors w-full"
       >
@@ -132,29 +131,13 @@ export function PrintOptionsPanel({
                 </div>
               </div>
             ) : (
-              <div key={key} className="flex items-center justify-between gap-3">
-                <div>
-                  <span className="text-sm text-white">{label}</span>
-                  <p className="text-xs text-bambu-gray">{desc}</p>
-                </div>
-                <div className="flex gap-1 shrink-0">
-                  {BOOLEAN_MODES.map((mode) => {
-                    const active = (options[key as 'vibration_cali'] ? 'on' : 'off') === mode;
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => handleToggle(key, mode === 'on')}
-                        className={`px-2.5 py-1 text-xs rounded transition-colors ${
-                          active ? CALIBRATION_MODE_ACTIVE[mode] : CALIBRATION_MODE_INACTIVE
-                        }`}
-                      >
-                        {t(`settings.calibrationMode_${mode}`)}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+              <PrintBooleanOption
+                key={key}
+                label={label}
+                description={desc}
+                value={Boolean(options[key])}
+                onChange={value => handleToggle(key, value)}
+              />
             ),
           )}
 

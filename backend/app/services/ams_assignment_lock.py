@@ -51,7 +51,9 @@ def get_spool_move_lock(inventory: str, spool_id: int) -> asyncio.Lock:
     them apart only where they share a printer, and on PostgreSQL a DELETE
     doesn't see the row another transaction commits after the DELETE began.
     ``inventory`` ("inventory" or "spoolman") keeps the two id spaces apart.
-    Taken before any printer lock and before the move's first write.
+    Taken before any printer lock and before the move's first write. Built-in
+    manual assignment and native RFID matching also take this lock, so an
+    automatic match cannot race a manual link or move of the same spool.
     """
     key = (inventory, spool_id)
     lock = spool_move_locks.get(key)

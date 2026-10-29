@@ -2171,7 +2171,7 @@ export function PrintModal({
                 supportsVibrationCalibration={supportsVibrationCalibration}
               />
             )}
-            {nativeSource && nativeRequirements && <AnycubicPrintSettings options={anycubicOptions} onChange={setAnycubicOptions} requirements={nativeRequirements} status={printerStatus} />}
+            {nativeSource && nativeRequirements && <AnycubicPrintSettings options={anycubicOptions} onChange={setAnycubicOptions} requirements={nativeRequirements} status={printerStatus} defaultExpanded={!!initialSelectedPrinterIds?.length} />}
             {nativeSource && !nativeRequirements && <p role={nativeRequirementsFailed ? 'alert' : 'status'} className="mb-4 text-sm text-bambu-gray">{t(nativeRequirementsFailed ? 'printers.anycubic.printFileUnreadable' : 'printers.anycubic.readingPrintFile')}</p>}
             {nativeSource && !loadingPrinters && !sourceDetailsPending && !printers?.length && <p role="alert" className="mb-4 text-sm text-amber-400">{t('printers.anycubic.noMatchingPrinter', { model: slicedForModel ?? t('common.unknown') })}</p>}
 

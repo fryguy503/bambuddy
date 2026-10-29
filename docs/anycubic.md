@@ -106,6 +106,23 @@ replaying a Bambu preset, or promising to configure it when a spool is inserted.
 printer is idle. RFID-locked material settings cannot be overwritten. Exact
 variants such as PLA Matte are retained rather than replaced with generic PLA.
 
+RFID-identified slots automatically link to the built-in inventory only when
+the exact color HEX and full material name match one active physical spool.
+Inventory material plus subtype form the full name: **PLA / Matte** matches
+**PLA Matte**, while **PLA**, **PLA Basic** and **PLA+** remain distinct. Case,
+whitespace and the optional `#` are formatting; six-digit RGB equals opaque
+eight-digit RGBA ending `FF`. There is no approximate color matching.
+
+Two matching active spools, two fresh RFID slots with the same metadata, a
+multicolor spool, or a spool already assigned elsewhere prevent automatic
+assignment. Archived spools do not count. Automatic links are rechecked when
+fresh inventory arrives and removed if the match becomes ambiguous or the
+reported spool changes. Existing manual links are preserved. Unknown, stale
+or offline reports do not remove links. This feature creates no spools,
+changes no RFID data, sends no printer commands and is inactive in Spoolman
+mode. The LAN report currently provides no unique RFID UID, so identical
+physical spools require manual assignment.
+
 Load/unload use the selected physical ACE and slot and require current idle
 telemetry. Stop also remains available during that connection's own manual
 feed operation, without interrupting a print. **Refresh** reads the latest
@@ -116,6 +133,11 @@ serial/firmware and save a friendly name; absent metadata displays as unknown.
 
 Inventory links require `inventory:update`, friendly names `printers:update`,
 and physical commands `printers:control`; existing printer scope still applies.
+
+The print dialog shares Bambu's collapsible Filament Mapping and Print Options
+sections, swatch/HEX slot picker, descriptions and Off/On controls. Only native
+options reported by the selected printer are shown; native boolean settings
+do not offer Bambu's Auto mode.
 
 ### ACE drying
 

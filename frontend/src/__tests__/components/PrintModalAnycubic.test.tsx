@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
@@ -32,7 +32,55 @@ function dialog(onClose = vi.fn()) {
   return <PrintModal mode="create" libraryFileId={31} archiveName="part.gcode" onClose={onClose} />;
 }
 
+async function setOption(user: ReturnType<typeof userEvent.setup>, label: string, value: 'On' | 'Off') {
+  if (label !== 'Use ACE' && label !== 'Built-in feeder' && !screen.queryByRole('group', { name: label })) {
+    await user.click(screen.getByRole('button', { name: 'Print Options' }));
+  }
+  await user.click(within(await screen.findByRole('group', { name: label })).getByRole('button', { name: value }));
+}
+
+async function chooseSlot(user: ReturnType<typeof userEvent.setup>, filament: string, slot: string) {
+  await user.click(await screen.findByRole('combobox', { name: filament }));
+  await user.click(await screen.findByRole('option', { name: new RegExp(`^${slot}`) }));
+}
+
 describe('Anycubic print queue dialog', () => {
+  it('uses collapsible mapping and print sections without losing settings or offering unsupported Auto', async () => {
+    const user = userEvent.setup();
+    render(dialog());
+    const mapping = await screen.findByRole('button', { name: 'Filament Mapping' });
+    const printOptions = screen.getByRole('button', { name: 'Print Options' });
+    expect(mapping).toHaveAttribute('aria-expanded', 'true');
+    expect(printOptions).toHaveAttribute('aria-expanded', 'false');
+    await chooseSlot(user, 'Filament 3', 'ACE 2 · 4 · PLA Matte');
+    await user.click(screen.getByRole('button', { name: /^Filament Mapping/ }));
+    expect(screen.queryByRole('combobox', { name: 'Filament 3' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Filament Mapping/ }));
+    expect(screen.getByRole('combobox', { name: 'Filament 3' })).toHaveTextContent('ACE 2 · 4 · PLA Matte');
+    await setOption(user, 'Bed Levelling', 'On');
+    const levelling = screen.getByRole('group', { name: 'Bed Levelling' });
+    expect(levelling).toHaveTextContent('Auto-level bed before print');
+    expect(within(levelling).getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(levelling).queryByRole('button', { name: 'Auto' })).not.toBeInTheDocument();
+    await user.click(printOptions);
+    expect(screen.queryByRole('group', { name: 'Bed Levelling' })).not.toBeInTheDocument();
+    await user.click(printOptions);
+    expect(within(screen.getByRole('group', { name: 'Bed Levelling' })).getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('shows slot HEX and swatches while excluding a different material variant from the picker', async () => {
+    const user = userEvent.setup();
+    server.use(http.get('/api/v1/printers/:id/status', () => HttpResponse.json({
+      ...status, ams: [{ id: 0, tray: [{ id: 0, tray_type: 'PLA', tray_color: 'FF0000FF', exists: true, state: 11 }] }, ...status.ams],
+    })));
+    render(dialog());
+    await user.click(await screen.findByRole('combobox', { name: 'Filament 3' }));
+    const option = await screen.findByRole('option', { name: /^ACE 2 · 4 · PLA Matte/ });
+    expect(option).toHaveTextContent('#FF0000');
+    expect(option.querySelector('[style]')).not.toBeNull();
+    expect(screen.queryByRole('option', { name: /^ACE 1 · 1 · PLA/ })).not.toBeInTheDocument();
+  });
+
   it.each([false, true])('explains native archive reprints without offering the wrong printer fleet (Anycubic fleet: %s)', async nativeFleet => {
     const plates = vi.spyOn(api, 'getArchivePlates');
     const filaments = vi.spyOn(api, 'getArchiveFilamentRequirements');
@@ -54,9 +102,10 @@ describe('Anycubic print queue dialog', () => {
     expect(await screen.findByText('KS1')).toBeInTheDocument();
     expect(screen.queryByText('Kobra 3 elsewhere')).not.toBeInTheDocument();
     expect(screen.queryByText('Bambu P1S')).not.toBeInTheDocument();
-    expect(await screen.findByLabelText('Use ACE')).toBeInTheDocument();
-    expect(await screen.findByLabelText('Bed Levelling')).toBeInTheDocument();
-    expect(screen.getByLabelText('Timelapse')).toBeInTheDocument();
+    expect(await screen.findByRole('group', { name: 'Use ACE' })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Print Options' }));
+    expect(await screen.findByRole('group', { name: 'Bed Levelling' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Timelapse' })).toBeInTheDocument();
     expect(screen.queryByText('Flow Calibration')).not.toBeInTheDocument();
     expect(screen.queryByText('Preheat & Heat Soak')).not.toBeInTheDocument();
     expect(screen.queryByText('Ask for Outcome')).not.toBeInTheDocument();
@@ -69,9 +118,8 @@ describe('Anycubic print queue dialog', () => {
     const add = vi.spyOn(api, 'addToQueue');
     const close = vi.fn();
     render(dialog(close));
-    await screen.findByRole('option', { name: 'ACE 2 · 4 · PLA Matte' });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Filament 3' }), '1:3');
-    await user.click(screen.getByLabelText('Bed Levelling'));
+    await chooseSlot(user, 'Filament 3', 'ACE 2 · 4 · PLA Matte');
+    await setOption(user, 'Bed Levelling', 'On');
     await user.click(screen.getByRole('button', { name: /^Queue$/ }));
     await user.clear(screen.getByLabelText('Quantity'));
     await user.type(screen.getByLabelText('Quantity'), '2');
@@ -89,7 +137,7 @@ describe('Anycubic print queue dialog', () => {
   it('allows the external path only for a single sliced filament', async () => {
     const user = userEvent.setup();
     render(dialog());
-    await user.click(await screen.findByLabelText('Use ACE'));
+    await setOption(user, 'Use ACE', 'Off');
     expect(screen.queryByRole('combobox', { name: 'Filament 3' })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: /^Print$/ })).toBeEnabled());
   });
@@ -117,15 +165,13 @@ describe('Anycubic print queue dialog', () => {
     );
     render(dialog());
     await user.click(await screen.findByText('KS1'));
-    await screen.findByRole('option', { name: 'ACE 2 · 4 · PLA Matte' });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Filament 3' }), '1:3');
-    await user.click(screen.getByLabelText('Bed Levelling'));
+    await chooseSlot(user, 'Filament 3', 'ACE 2 · 4 · PLA Matte');
+    await setOption(user, 'Bed Levelling', 'On');
     await user.click(screen.getByText('KS1 second'));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Filament 3' })).toHaveValue(''));
-    await waitFor(() => expect(screen.queryByLabelText('Bed Levelling')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Filament 3' })).toHaveTextContent('Select an ACE slot…'));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Bed Levelling' })).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: /^Print$/ })).toBeDisabled();
-    await screen.findByRole('option', { name: 'ACE 2 · 4 · PLA Matte' });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Filament 3' }), '1:3');
+    await chooseSlot(user, 'Filament 3', 'ACE 2 · 4 · PLA Matte');
     await user.click(screen.getByRole('button', { name: /^Print$/ }));
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
     expect(add.mock.calls[0][0]).toMatchObject({ printer_id: 9, anycubic_options: { auto_leveling: false, filament_mapping: [{ tool: 2, box_id: 1, slot_id: 3 }] } });
@@ -139,11 +185,10 @@ describe('Anycubic print queue dialog', () => {
       http.get('/api/v1/printers/:id/status', () => HttpResponse.json({ ...status, ams: [{ id: 0, tray: [{ id: 1, tray_type: 'PLA', exists: true, state: 11 }] }, ...status.ams] })),
     );
     render(dialog());
-    expect(await screen.findByLabelText('Use ACE')).toBeDisabled();
-    await screen.findAllByRole('option', { name: 'ACE 1 · 2 · PLA' });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Filament 1' }), '0:1');
+    expect(within(await screen.findByRole('group', { name: 'Use ACE' })).getByRole('button', { name: 'Off' })).toBeDisabled();
+    await chooseSlot(user, 'Filament 1', 'ACE 1 · 2 · PLA');
     expect(screen.getByRole('button', { name: /^Print$/ })).toBeDisabled();
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Filament 5' }), '1:3');
+    await chooseSlot(user, 'Filament 5', 'ACE 2 · 4 · PLA Matte');
     await user.click(screen.getByRole('button', { name: /^Print$/ }));
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
     expect(add.mock.calls[0][0]).toMatchObject({ ams_mapping: null, anycubic_options: { use_ace: true, filament_mapping: [{ tool: 0, box_id: 0, slot_id: 1 }, { tool: 4, box_id: 1, slot_id: 3 }] } });
@@ -159,10 +204,9 @@ describe('Anycubic print queue dialog', () => {
       http.get('/api/v1/printers/:id/status', () => HttpResponse.json({ ...status, ams: [{ id: -1, tray: [{ id: 2, tray_type: 'PLA', exists: true, state: 11 }] }] })),
     );
     render(dialog());
-    expect(await screen.findByLabelText('Built-in feeder')).toBeChecked();
-    await screen.findAllByRole('option', { name: 'Built-in feeder · 3 · PLA' });
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Filament 1' }), '-1:2');
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Filament 2' }), '-1:2');
+    expect(within(await screen.findByRole('group', { name: 'Built-in feeder' })).getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
+    await chooseSlot(user, 'Filament 1', 'Built-in feeder · 3 · PLA');
+    await chooseSlot(user, 'Filament 2', 'Built-in feeder · 3 · PLA');
     await user.click(screen.getByRole('button', { name: /^Print$/ }));
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
     expect(add.mock.calls[0][0]).toMatchObject({ printer_id: 10, anycubic_options: { filament_mapping: [{ tool: 0, box_id: -1, slot_id: 2 }, { tool: 1, box_id: -1, slot_id: 2 }] } });

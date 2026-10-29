@@ -1904,6 +1904,12 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
             await observe_status(printer_id, state)
         except Exception:
             logging.getLogger(__name__).exception("Anycubic queue status update failed for printer %s", printer_id)
+        from backend.app.services.anycubic.spool_matching import observe_status as match_native_spools
+
+        try:
+            await match_native_spools(printer_id)
+        except Exception:
+            logging.getLogger(__name__).exception("Anycubic RFID spool matching failed for printer %s", printer_id)
         await ws_manager.send_printer_status(
             printer_id,
             printer_state_to_dict(state, printer_id, printer_manager.get_model(printer_id)),

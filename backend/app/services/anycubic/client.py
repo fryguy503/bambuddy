@@ -107,6 +107,7 @@ class AnycubicMQTTClient:
         self._reported_fan_fields = set()
         self._ace_drying_seen = {}
         self._ace_seen = {}
+        self._ace_material_seen = {}
         self._reported_lights = {}
         self._info_observed = self._extrude_observed = 0.0
         self._extrude_operate = None
@@ -273,6 +274,7 @@ class AnycubicMQTTClient:
                     self.state.connected = False
                     self.state.state = "unknown"
                     self.state.raw_data["ams"] = []
+                    self._ace_material_seen.clear()
                     self._reset_camera()
             if client is not None:
                 retire_paho_client(client, "anycubic")
@@ -309,6 +311,7 @@ class AnycubicMQTTClient:
             self._connection_lost = True
             self._subscribed = False
             self.state.connected = False
+            self._ace_material_seen.clear()
             self._reset_files()
         self._notify()
 
@@ -790,6 +793,7 @@ class AnycubicMQTTClient:
             self._extrusion_timer.cancel()
             self._extrusion_timer = None
         self._ace_seen.clear()
+        self._ace_material_seen.clear()
         self._reported_lights.clear()
         self._info_observed = self._extrude_observed = 0.0
         self._extrude_operate = None
@@ -798,6 +802,27 @@ class AnycubicMQTTClient:
 
     def _fresh_connection(self):
         return self.state.connected and not self.is_stale and not self._stop.is_set()
+
+    def ace_material_snapshot(self) -> list[dict] | None:
+        """Return detached ACE inventory only after recent complete material reports.
+
+        A one-slot or drying-only update must not renew the other slots' material
+        authority. This read never requests status or sends a printer command.
+        """
+        with self._lock:
+            if not self._fresh_connection() or self._client is None or not self._subscribed or not self._device_id:
+                return None
+            boxes = self._telemetry.boxes
+            now = time.monotonic()
+            if not boxes or any(
+                box_id not in self._ace_material_seen
+                or not 0 <= now - self._ace_material_seen[box_id] <= self.STALE_TIMEOUT
+                or len(box.get("tray", [])) != 4
+                or {tray.get("id") for tray in box["tray"]} != {0, 1, 2, 3}
+                for box_id, box in boxes.items()
+            ):
+                return None
+            return copy.deepcopy([boxes[identity] for identity in sorted(boxes)])
 
     def _light_ready(self):
         seen = self._reported_lights.get(2)
@@ -1024,9 +1049,35 @@ class AnycubicMQTTClient:
         if envelope.get("action") == "getInfo":
             self._ace_drying_seen.clear()
             self._ace_seen.clear()
+            self._ace_material_seen.clear()
         for box in envelope.get("data", {}).get("multi_color_box", []):
             if isinstance(box.get("slots"), list):
                 self._ace_seen[box["id"]] = time.monotonic()
+                slots = box["slots"]
+                if (
+                    len(slots) == 4
+                    and {slot.get("index") for slot in slots} == {0, 1, 2, 3}
+                    and all(
+                        (type(slot.get("status")) is int and slot["status"] == 4)
+                        or slot.get("_empty") is True
+                        or (
+                            type(slot.get("status")) is int
+                            and type(slot.get("edit_status")) is int
+                            and isinstance(slot.get("type"), str)
+                            and len(slot["type"]) <= 64
+                            and not any(ord(character) < 32 for character in slot["type"])
+                            and isinstance(slot.get("color"), list)
+                            and len(slot["color"]) in (3, 4)
+                            and all(type(channel) is int and 0 <= channel <= 255 for channel in slot["color"])
+                        )
+                        for slot in slots
+                    )
+                ):
+                    self._ace_material_seen[box["id"]] = time.monotonic()
+                elif any({"type", "color", "status", "edit_status", "_empty"} & slot.keys() for slot in slots):
+                    # A new type/RFID state with an old colour (or vice versa)
+                    # is not a newly observed material tuple.
+                    self._ace_material_seen.pop(box["id"], None)
             if isinstance(box.get("drying_status"), dict) and box["drying_status"]:
                 self._ace_drying_seen[box["id"]] = time.monotonic()
 
@@ -1269,6 +1320,7 @@ class AnycubicMQTTClient:
             self.state.state = "unknown"
             self.state.raw_data["ams"] = []
             self._telemetry.boxes = {}
+            self._ace_material_seen.clear()
         if client is not None:
             retire_paho_client(client, "anycubic")
         if worker is not None and timeout > 0 and worker is not threading.current_thread():
@@ -1282,6 +1334,7 @@ class AnycubicMQTTClient:
             self.state.state = "unknown"
             self.state.raw_data["ams"] = []
             self._telemetry.boxes = {}
+            self._ace_material_seen.clear()
         self._notify()
         return True
 

@@ -52,11 +52,13 @@ async def test_anycubic_status_only_broadcasts_normalized_monitoring():
         patch.object(main.notify_live_activities, "observe") as live_activities,
         patch.object(main.pause_eta, "observe") as pause_eta,
         patch("backend.app.services.anycubic.queue_dispatch.observe_status", new_callable=AsyncMock) as native_status,
+        patch("backend.app.services.anycubic.spool_matching.observe_status", new_callable=AsyncMock) as native_matching,
     ):
         await main.on_printer_status_change(71, state)
 
     broadcast.assert_awaited_once_with(71, {"connected": True})
     native_status.assert_awaited_once_with(71, state)
+    native_matching.assert_awaited_once_with(71)
     spawn.assert_not_called()
     drift_check.assert_not_called()
     live_activities.assert_not_called()
