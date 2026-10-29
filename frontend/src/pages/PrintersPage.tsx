@@ -2429,7 +2429,11 @@ function PrinterCard({
     select: (archives) => archives.find((a) => a.printer_id === printer.id),
   });
   const isPrintingOrPaused = status?.state === 'RUNNING' || status?.state === 'PAUSE';
-  const needsPlateClear = requirePlateClear && status?.awaiting_plate_clear === true;
+  // Native queue jobs always require plate acknowledgement, independently of
+  // the optional Bambu queue setting. Keep their shared release control visible.
+  const plateClearRequired = requirePlateClear || isAnycubic;
+  const needsPlateClear = plateClearRequired && status?.awaiting_plate_clear === true;
+  const plateInUse = isPrintingOrPaused || (isAnycubic && (status?.state === 'PREPARE' || status?.state === 'BUSY'));
   // Post-print outcome confirmation on the card (#1898): while the plate-clear
   // gate is up and the just-finished print asked for a verdict, offer
   // Good/Reject right where the operator releases the plate. Releasing the
@@ -2448,7 +2452,7 @@ function PrinterCard({
   // Not gated on `connected`: the plate-clear gate is Bambuddy-side state, and with
   // Auto Power Off the printer is powered down exactly when the operator clears the
   // plate. Hiding the control there left no way to release the gate (#2864).
-  const showClearPlateButton = needsPlateClear && !isPrintingOrPaused;
+  const showClearPlateButton = needsPlateClear && !plateInUse;
   const activePrintName = status?.current_print && isPrintingOrPaused
     ? formatPrintName(status.subtask_name || status.current_print || null, status.gcode_file, t, activePlateLabel)
     : null;
@@ -2464,8 +2468,8 @@ function PrinterCard({
     // Connected-only because the pill's only render site sits inside the live-status
     // panel. For a powered-down printer the plate-clear button itself carries the
     // state — see the standalone slot below the status block (#2864).
-    if (!requirePlateClear || !status?.connected) return null;
-    if (isPrintingOrPaused) {
+    if (!plateClearRequired || !status?.connected) return null;
+    if (plateInUse) {
       return {
         label: t('printers.plateStatus.inUse'),
         className: 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400',

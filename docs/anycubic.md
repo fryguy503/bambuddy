@@ -273,6 +273,11 @@ active report clears the start warning, including after Bambuddy restarts;
 completion still requires a subsequent matched terminal report. The next
 queued job waits for **Plate cleared**. That gate survives a Bambuddy restart.
 
+After removing the finished print, open **Printers** and use **Mark plate as
+cleared** on that printer's card. This releases the next queued job and can
+start it automatically. Anycubic cards offer this action even when the global
+plate-clear setting is off, because native queues always enforce the gate.
+
 Unconfirmed native queue items do not borrow a printer's live progress or ETA.
 Those fields become available after the queue matches the running job.
 
