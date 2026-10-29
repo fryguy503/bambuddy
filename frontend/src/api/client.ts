@@ -506,7 +506,7 @@ export interface AMSTray {
   tray_sub_brands: string | null;  // Full name like "PLA Basic", "PETG HF"
   tray_id_name: string | null;  // Bambu filament ID like "A00-Y2" (can decode to color)
   tray_info_idx: string | null;  // Filament preset ID like "GFA00" - maps to cloud setting_id
-  remain: number;
+  remain: number | null;
   k: number | null;  // Pressure advance value (from tray or K-profile lookup)
   cali_idx: number | null;  // Calibration index for K-profile lookup
   tag_uid: string | null;  // RFID tag UID (any tag)
@@ -535,6 +535,29 @@ export interface AMSUnit {
   dry_target_temp: number | null; // Active-cycle target °C (Bambu does not echo)
   dry_filament: string | null;    // Active-cycle filament name we sent
   module_type: string;    // "ams", "ams_f1", "n3f", "n3s"
+  anycubic_drying?: { status: number | null; target_temp: number | null; duration_minutes: number | null; remaining_minutes: number | null } | null;
+}
+
+export interface AnycubicDryingControl {
+  id: number;
+  temp_min: number;
+  temp_max: number;
+  duration_min: number;
+  duration_max: number;
+  duration_limits: { temperature: number; max_minutes: number }[];
+  start_ready: boolean;
+  stop_ready: boolean;
+}
+
+export interface AnycubicSlotControl {
+  box_id: number; slot_id: number; configure: boolean; feed: boolean; feed_stop?: boolean; rfid_locked: boolean;
+}
+
+export interface AnycubicControlCapabilities {
+  ready: boolean; nozzle_max: number; bed_max: number; fans: string[]; speed_modes: number[];
+  reported_fans?: string[];
+  ace_drying?: AnycubicDryingControl[]; ace_slots?: AnycubicSlotControl[];
+  chamber_light?: boolean; motion?: boolean; extruder_pulse?: boolean; extrusion_stop?: boolean;
 }
 
 export interface ScheduledDrying {
@@ -642,7 +665,7 @@ export interface UsbCamera {
 }
 
 export interface PrinterStatus {
-  anycubic_controls?: { ready: boolean; nozzle_max: number; bed_max: number; fans: string[]; speed_modes: number[] } | null;
+  anycubic_controls?: AnycubicControlCapabilities | null;
   id: number;
   name: string;
   connected: boolean;
@@ -5445,6 +5468,13 @@ export const api = {
     }),
 
   // AMS Drying Control
+  startAnycubicDrying: (printerId: number, boxId: number, temperature: number, durationMinutes: number) =>
+    request<{ success: boolean; queued: boolean; message: string }>(`/printers/${printerId}/drying/start?${new URLSearchParams({ ams_id: String(boxId), temp: String(temperature), duration_minutes: String(durationMinutes) })}`, { method: 'POST' }),
+  setAnycubicSlot: (printerId: number, boxId: number, slotId: number, material: string, color: string) => request<{ success: boolean }>(`/printers/${printerId}/anycubic/slots/${boxId}/${slotId}`, { method: 'POST', body: JSON.stringify({ material, color }) }),
+  feedAnycubicSlot: (printerId: number, boxId: number, slotId: number, operation: 'load' | 'unload' | 'stop') => request<{ success: boolean }>(`/printers/${printerId}/anycubic/slots/${boxId}/${slotId}/${operation}`, { method: 'POST' }),
+  jogAnycubicAxis: (printerId: number, axis: 'x' | 'y' | 'z', distance: number) => request<{ success: boolean }>(`/printers/${printerId}/anycubic/jog?${new URLSearchParams({ axis, distance: String(distance) })}`, { method: 'POST' }),
+  pulseAnycubicExtruder: (printerId: number, direction: 0 | 1) => request<{ success: boolean }>(`/printers/${printerId}/anycubic/extruder-pulse?direction=${direction}`, { method: 'POST' }),
+  stopAnycubicExtruder: (printerId: number) => request<{ success: boolean }>(`/printers/${printerId}/anycubic/extruder-stop`, { method: 'POST' }),
   startDrying: (printerId: number, amsId: number, temp: number, duration: number, filament: string = '', rotateTray: boolean = false) =>
     request<{ status: string; ams_id: number; temp: number; duration: number }>(
       `/printers/${printerId}/drying/start?ams_id=${amsId}&temp=${temp}&duration=${duration}&filament=${encodeURIComponent(filament)}&rotate_tray=${rotateTray}`,

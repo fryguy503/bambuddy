@@ -235,7 +235,7 @@ class AMSTray(BaseModel):
     tray_sub_brands: str | None = None  # Full name like "PLA Basic", "PETG HF"
     tray_id_name: str | None = None  # Bambu filament ID like "A00-Y2" (can decode to color)
     tray_info_idx: str | None = None  # Filament preset ID like "GFA00"
-    remain: int = 0
+    remain: int | None = 0
     k: float | None = None  # Pressure advance value (from tray or K-profile lookup)
     cali_idx: int | None = None  # Calibration index for K-profile lookup
     tag_uid: str | None = None  # RFID tag UID (any tag)
@@ -249,6 +249,18 @@ class AMSTray(BaseModel):
     # True for a non-RFID spool the firmware can't identify â€” the UI shows "?" rather
     # than "Empty" (#2527). None when the bitmask was unavailable (â†’ state-based fallback).
     exists: bool | None = None
+
+
+class AnycubicDryingStatus(BaseModel):
+    status: int | None = None
+    target_temp: float | None = None
+    duration_minutes: float | None = None
+    remaining_minutes: float | None = None
+
+
+class AnycubicSlotUpdate(BaseModel):
+    material: str = Field(min_length=1, max_length=64)
+    color: str = Field(pattern=r"^[0-9a-fA-F]{6}$")
 
 
 class AMSUnit(BaseModel):
@@ -270,6 +282,7 @@ class AMSUnit(BaseModel):
     dry_target_temp: int | None = None  # Active-cycle target Â°C (Bambu doesn't echo this)
     dry_filament: str | None = None  # Active-cycle filament name we sent
     module_type: str = ""  # "ams", "ams_f1", "n3f", "n3s"
+    anycubic_drying: AnycubicDryingStatus | None = None
 
 
 class NozzleInfoResponse(BaseModel):

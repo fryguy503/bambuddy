@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
 import { api, discoveryApi, type AnycubicDiscovery, type AMSUnit, type PrinterDiagnosticResult } from '../../api/client';
@@ -122,6 +122,33 @@ describe('Anycubic onboarding', () => {
 });
 
 describe('ACE monitoring', () => {
+  it('shows and controls the reported chamber fan without a Bambu model classification', async () => {
+    const user = userEvent.setup();
+    const fan = vi.spyOn(api, 'setFanSpeed').mockResolvedValue({ success: true, message: 'queued' });
+    server.use(
+      http.get('/api/v1/printers/', () => HttpResponse.json([{ id: 1, name: 'Fan S1', printer_type: 'anycubic', model: 'Kobra S1', serial_number: 'fixture', ip_address: '192.168.1.50', is_active: true, auto_archive: false, nozzle_count: 1 }])),
+      http.get('/api/v1/printers/:id/status', () => HttpResponse.json({ connected: true, state: 'RUNNING', progress: 20, temperatures: { nozzle: 210, bed: 60 }, vt_tray: [], ams: [], big_fan2_speed: 60, anycubic_controls: { ready: true, nozzle_max: 320, bed_max: 120, fans: ['part', 'aux', 'chamber'], speed_modes: [1, 2, 3] } })),
+    );
+    render(<PrintersPage />);
+    await user.click(await screen.findByTitle('Chamber Fan'));
+    await user.click(await screen.findByRole('button', { name: '50 %' }));
+    await waitFor(() => expect(fan).toHaveBeenCalledWith(1, 'chamber', 50));
+  });
+
+  it('routes a raw G-code card drop to the Anycubic uploader instead of the Bambu library/queue flow', async () => {
+    const library = vi.spyOn(api, 'uploadLibraryFile').mockClear();
+    vi.spyOn(api, 'listAnycubicFiles').mockResolvedValue({ path: '/', files: [], page: 1, pages: 0, total: 0, pagination: 'local' });
+    server.use(
+      http.get('/api/v1/printers/', () => HttpResponse.json([{ id: 1, name: 'Drop S1', printer_type: 'anycubic', model: 'Kobra S1', serial_number: 'fixture', ip_address: '192.168.1.50', is_active: true, auto_archive: false, nozzle_count: 1 }])),
+      http.get('/api/v1/printers/:id/status', () => HttpResponse.json({ connected: true, state: 'IDLE', temperatures: { nozzle: 24, bed: 24 }, vt_tray: [], ams: [] })),
+    );
+    render(<PrintersPage />);
+    await screen.findByText('Drop S1');
+    fireEvent.drop(document.getElementById('printer-card-1')!, { dataTransfer: { files: [new File(['; G-code'], 'raw-S1.gcode')], types: ['Files'] } });
+    expect(await screen.findByRole('dialog')).toHaveTextContent('raw-S1.gcode');
+    expect(library).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Raw .gcode files can.t be printed on Bambu/)).not.toBeInTheDocument();
+  });
   it('allows reported native temperature controls while printing', async () => {
     const user = userEvent.setup();
     const setTemperature = vi.spyOn(api, 'setNozzleTemperature').mockResolvedValue({ success: true, message: 'queued' });

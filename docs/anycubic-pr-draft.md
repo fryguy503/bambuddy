@@ -3,9 +3,12 @@
 Bambuddy's Bambu MQTT, FTPS, camera and AMS automation cannot communicate with
 an Anycubic Kobra S1. This change adds an independent LAN provider for status,
 temperatures, progress and read-only inventory for two ACE units/eight slots,
-plus pause/resume/stop, bounded temperature/fan/speed controls, upload-only G-code
+plus pause/resume/stop, bounded temperature/fan/speed controls, native light and
+idle jog/home controls, upload-only G-code
 transfer and shared LAN camera viewing/snapshots. ACE displays reported remaining
-percentages and opens the existing sensor history. A separate, optional Anycubic Cloud Profiles tab reads
+percentages and opens the existing sensor history. Shared ACE/filament hover
+cards offer friendly names and inventory assignment, with separate native
+material/color, load/unload and per-box drying controls. A separate, optional Anycubic Cloud Profiles tab reads
 the account's native slicer-configuration ZIP for browsing and JSON export.
 
 LAN onboarding requires explicit review of the printer's TLS fingerprint.
@@ -33,8 +36,8 @@ revision before persisting a download. Workbench tokens are not sent to the
 website; account headers are not sent to signed storage URLs.
 
 Cloud access sends no printer commands and does not change LAN operation.
-Cloud profile writes, password/OAuth login, print submission, archival and ACE
-mutations are not included. LAN uploads obtain the current session endpoint,
+Cloud profile writes, password/OAuth login, print submission, archival, forced
+RFID reread and Bambu K-factor operations are not included. LAN uploads obtain the current session endpoint,
 validate the sliced model, use a unique filename and confirm its catalog size;
 they never start or enqueue a print. Uncertain transfers are not replayed.
 Configuration downloads currently admit only the observed Anycubic storage
@@ -63,7 +66,11 @@ support, not full feature parity or completed hardware/account acceptance.
 - An upload-only physical S1 test transferred an existing 8,530,707-byte sliced
   export and confirmed its unique filename and matching size in the catalog.
   The probe blocked every non-read MQTT operation, including print start.
-  Physical acceptance of heater/fan/speed changes and RFID remaining estimates
+  File Library uploads also admit validated native G-code with model metadata;
+  the Bambu queue and dispatcher still reject that format. The printer card's
+  direct uploader/drop path never enters the Bambu library/print flow.
+  Physical acceptance of drying, light, motion, material/feed controls,
+  heater/fan/speed changes and RFID remaining estimates
   is pending. No settings were changed by these tests.
 - A camera-only LAN probe activated the S1 camera and decoded a live JPEG.
   Multiple-viewer, snapshot and cleanup checks use isolated fixtures; the

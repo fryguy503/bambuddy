@@ -1,7 +1,7 @@
 """Admission for vendor-specific printer operations.
 
-The first Anycubic provider supports LAN observation and three print controls.
-An explicit allowlist prevents new Bambu routes from silently sending FTPS,
+Anycubic native controls are explicitly admitted alongside LAN observation.
+The allowlist prevents new Bambu routes from silently sending FTPS,
 calibration or filament commands to a different protocol.
 """
 
@@ -37,6 +37,16 @@ ANYCUBIC_OPERATIONS = frozenset(
         "set_bed_temperature",
         "set_fan_speed",
         "set_print_speed",
+        "start_drying",
+        "stop_drying",
+        "set_chamber_light",
+        "bed_jog",
+        "home_axes",
+        "jog_anycubic_axis",
+        "pulse_anycubic_extruder",
+        "stop_anycubic_extrusion",
+        "set_anycubic_slot",
+        "feed_anycubic_slot",
         "get_ams_labels",
         "save_ams_label",
         "delete_ams_label",

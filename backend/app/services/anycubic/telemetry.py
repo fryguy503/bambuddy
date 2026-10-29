@@ -10,6 +10,7 @@ import math
 from backend.app.services.bambu_mqtt import PrinterState
 from backend.app.utils.anycubic_models import get_model
 
+from .drying import status_fields
 from .protocol import AnycubicError
 
 _PHASES = {
@@ -192,6 +193,10 @@ class Telemetry:
             # The X's negative-ID feeder has no dry box or humidity sensor.
             raw_drying_status = raw.get("drying_status") if identity >= 0 else None
             dry = raw_drying_status if isinstance(raw_drying_status, dict) else {}
+            if identity >= 0 and dry:
+                box["anycubic_drying"] = status_fields(dry, None if unit_full else box.get("anycubic_drying"))
+            elif unit_full:
+                box.pop("anycubic_drying", None)
             humidity = raw.get("humidity") if identity >= 0 else None
             if humidity is None:
                 humidity = dry.get("humidity")
@@ -210,6 +215,9 @@ class Telemetry:
                 box["loaded_slot"] = raw["loaded_slot"]
             if type(raw.get("model_id")) is int:
                 box["anycubic_model_id"] = raw["model_id"]
+            for source, target in (("sn", "serial_number"), ("version", "sw_ver")):
+                if (text := _text(raw.get(source), 128)) is not None:
+                    box[target] = text
         self.boxes = updated
         self.state.raw_data["ams"] = [copy.deepcopy(updated[i]) for i in sorted(updated)]
         return True
@@ -255,6 +263,9 @@ class Telemetry:
                 return self._project(data, envelope.get("state"))
             return False
         if kind == "multiColorBox":
+            if envelope.get("action") == "setDry":
+                # A setting receipt is not an independently observed cycle.
+                return False
             return self._materials(data, envelope.get("action") == "getInfo")
         if kind == "fan":
             changed = False

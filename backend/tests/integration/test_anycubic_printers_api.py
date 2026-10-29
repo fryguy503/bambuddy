@@ -11,6 +11,109 @@ from backend.app.schemas.printer import PrinterCreate
 PIN = "ab" * 32
 
 
+def _native_manual_client(printer, state="IDLE"):
+    from backend.tests.unit.services.test_anycubic_manual_controls import manual
+
+    client = manual(state)
+    client.ip_address = printer.ip_address
+    client.serial_number = printer.serial_number
+    client._fingerprint = printer.tls_fingerprint
+    client._control_report("light", {"data": {"lights": [{"type": 2, "status": 0}]}})
+    return client
+
+
+@pytest.mark.parametrize(
+    "suffix,params,body,expected",
+    [
+        (
+            "drying/start",
+            {"ams_id": 1, "temp": 60, "duration_minutes": 245},
+            None,
+            (
+                "multiColorBox",
+                "setDry",
+                {"multi_color_box": [{"id": 1, "drying_status": {"status": 1, "target_temp": 60, "duration": 245}}]},
+            ),
+        ),
+        (
+            "drying/stop",
+            {"ams_id": 1},
+            None,
+            ("multiColorBox", "setDry", {"multi_color_box": [{"id": 1, "drying_status": {"status": 0}}]}),
+        ),
+        ("chamber-light", {"on": "true"}, None, ("light", "control", {"type": 2, "status": 1, "brightness": 100})),
+        ("home-axes", {"axes": "xy"}, None, ("axis", "move", {"axis": 4, "move_type": 2, "distance": 0})),
+        (
+            "anycubic/jog",
+            {"axis": "y", "distance": -10},
+            None,
+            ("axis", "move", {"axis": 2, "move_type": 0, "distance": 10}),
+        ),
+        (
+            "anycubic/slots/1/2",
+            {},
+            {"material": "PLA Matte", "color": "FF0000"},
+            (
+                "multiColorBox",
+                "setInfo",
+                {"multi_color_box": [{"id": 1, "slots": [{"index": 2, "type": "PLA Matte", "color": [255, 0, 0]}]}]},
+            ),
+        ),
+        (
+            "anycubic/slots/1/2/load",
+            {},
+            None,
+            (
+                "multiColorBox",
+                "feedFilament",
+                {"multi_color_box": [{"id": 1, "feed_status": {"slot_index": 2, "type": 1}}]},
+            ),
+        ),
+    ],
+)
+async def test_native_manual_routes_preserve_ace_ids_units_and_payloads(
+    async_client, anycubic_printer, suffix, params, body, expected
+):
+    client = _native_manual_client(anycubic_printer)
+    with patch("backend.app.api.routes.printers.printer_manager.get_client", return_value=client):
+        response = await async_client.post(f"/api/v1/printers/{anycubic_printer.id}/{suffix}", params=params, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["queued"] is True
+    assert client._publish.call_args_list[0].args == expected
+
+
+@pytest.mark.parametrize(
+    "suffix,params,body",
+    [
+        ("drying/start", {"ams_id": 1, "temp": 66, "duration_minutes": 245}, None),
+        ("drying/start", {"ams_id": 4, "temp": 45, "duration_minutes": 245}, None),
+        ("anycubic/jog", {"axis": "z", "distance": 51}, None),
+        ("anycubic/slots/4/2", {}, {"material": "PLA", "color": "FF0000"}),
+        ("anycubic/slots/1/2", {}, {"material": "PLA", "color": "not-rgb"}),
+    ],
+)
+async def test_invalid_native_settings_never_reach_transport(async_client, anycubic_printer, suffix, params, body):
+    client = _native_manual_client(anycubic_printer)
+    with patch("backend.app.api.routes.printers.printer_manager.get_client", return_value=client):
+        response = await async_client.post(f"/api/v1/printers/{anycubic_printer.id}/{suffix}", params=params, json=body)
+    assert response.status_code in (409, 422), response.text
+    client._publish.assert_not_called()
+
+
+async def test_rest_and_websocket_keep_native_drying_zero_and_unknown_fill(async_client, anycubic_printer):
+    from backend.app.services.printer_manager import printer_state_to_dict
+
+    client = _native_manual_client(anycubic_printer)
+    with patch("backend.app.api.routes.printers.printer_manager.get_status", return_value=client.state):
+        response = await async_client.get(f"/api/v1/printers/{anycubic_printer.id}/status")
+    assert response.status_code == 200, response.text
+    ws_units = printer_state_to_dict(client.state, model="Kobra S1")["ams"]
+    for units in (response.json()["ams"], ws_units):
+        assert units[1]["anycubic_drying"]["remaining_minutes"] == 0
+        assert units[1]["anycubic_drying"]["status"] == 0
+        assert units[1]["tray"][0]["remain"] is None
+
+
 @pytest.mark.parametrize(
     "suffix,params,expected",
     [
@@ -232,7 +335,6 @@ async def test_create_uses_anycubic_probe_and_persists_provider(async_client):
         ("get", "cover"),
         ("get", "storage"),
         ("post", "calibration"),
-        ("post", "drying/start"),
         ("post", "ams/load"),
     ],
 )

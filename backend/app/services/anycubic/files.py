@@ -142,38 +142,45 @@ def validate_gcode(path: Path, filename: str, model: str) -> GcodeArtifact:
     size = path.stat().st_size
     if not 0 < size <= MAX_GCODE_BYTES:
         raise AnycubicError("The G-code file is empty or exceeds 512 MiB")
-    digest, generated, models, commands = hashlib.sha256(), False, set(), 0
     with path.open("rb") as stream:
-        while line := stream.readline(MAX_LINE_BYTES + 1):
-            if len(line) > MAX_LINE_BYTES or b"\x00" in line:
-                raise AnycubicError("The upload is not supported text G-code")
-            digest.update(line)
-            try:
-                text = line.decode("utf-8-sig").strip()
-            except UnicodeError:
-                raise AnycubicError("The upload is not UTF-8 text G-code") from None
-            if re.search(r";.*generated (?:by|with).*(?:AnycubicSlicer|OrcaSlicer)", text, re.IGNORECASE):
-                generated = True
-            match = re.match(r";\s*(?:printer_model|machine_model)\s*[:=]\s*(.+)", text, re.IGNORECASE)
-            if match:
-                selected = get_model(match[1].strip().strip('"'))
-                if selected is None:
-                    raise AnycubicError("The G-code identifies an unsupported printer model")
-                models.add(selected.name)
-            if text and not text.startswith(";"):
-                if not re.match(r"(?:N\d+\s+)?(?:[GMT]\d+(?:\.\d+)?|[A-Z_][A-Z0-9_]+)(?:\s|;|$)", text, re.IGNORECASE):
-                    raise AnycubicError("The file contains unsupported G-code lines")
-                commands += 1
-    if not generated or models != {model} or not commands:
-        raise AnycubicError(
-            "Export sliced G-code with slicer and printer_model metadata matching this Anycubic printer"
-        )
+        detected, read_size, digest = inspect_gcode(stream)
+    if detected != model or read_size != size:
+        raise AnycubicError("Export sliced G-code with printer_model metadata matching this Anycubic printer")
     # A unique remote name avoids overwriting an existing print file.
     stem = filename[:-6]
     while len(stem.encode("utf-8")) > 190:
         stem = stem[:-1]
     remote = f"{stem}-{uuid.uuid4().hex[:12]}.gcode"
-    return GcodeArtifact(path, remote, size, digest.hexdigest(), model)
+    return GcodeArtifact(path, remote, size, digest, model)
+
+
+def inspect_gcode(stream):
+    """Identify a bounded, sliced Anycubic text export for storage or transfer."""
+    digest, generated, models, commands, size = hashlib.sha256(), False, set(), 0, 0
+    while line := stream.readline(MAX_LINE_BYTES + 1):
+        size += len(line)
+        if size > MAX_GCODE_BYTES or len(line) > MAX_LINE_BYTES or b"\x00" in line:
+            raise AnycubicError("The upload is not supported text G-code or exceeds its size limit")
+        digest.update(line)
+        try:
+            text = line.decode("utf-8-sig").strip()
+        except UnicodeError:
+            raise AnycubicError("The upload is not UTF-8 text G-code") from None
+        if re.search(r";.*generated (?:by|with).*(?:AnycubicSlicer|OrcaSlicer)", text, re.IGNORECASE):
+            generated = True
+        match = re.match(r";\s*(?:printer_model|machine_model)\s*[:=]\s*(.+)", text, re.IGNORECASE)
+        if match:
+            selected = get_model(match[1].strip().strip('"'))
+            if selected is None:
+                raise AnycubicError("The G-code identifies an unsupported printer model")
+            models.add(selected.name)
+        if text and not text.startswith(";"):
+            if not re.match(r"(?:N\d+\s+)?(?:[GMT]\d+(?:\.\d+)?|[A-Z_][A-Z0-9_]+)(?:\s|;|$)", text, re.IGNORECASE):
+                raise AnycubicError("The file contains unsupported G-code lines")
+            commands += 1
+    if not generated or len(models) != 1 or not commands:
+        raise AnycubicError("Export sliced Anycubic G-code with slicer and printer_model metadata")
+    return models.pop(), size, digest.hexdigest()
 
 
 async def upload_gcode(client, context: FileSession, artifact: GcodeArtifact, *, progress=None, cancelled=None):

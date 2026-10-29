@@ -321,7 +321,7 @@ def calculate_file_hash(file_path: Path) -> str:
     return sha256_hash.hexdigest()
 
 
-def validate_print_file_upload(filename: str, content: bytes) -> None:
+def validate_print_file_upload(filename: str, content: bytes, *, allow_anycubic_gcode: bool = False) -> str | None:
     """Reject obviously-unprintable uploads early so the printer doesn't see them (#1401).
 
     Bambu printers in network mode only parse ``.gcode.3mf`` zip containers
@@ -349,6 +349,17 @@ def validate_print_file_upload(filename: str, content: bytes) -> None:
     is_raw_gcode_upload = lower_filename.endswith(".gcode") and not lower_filename.endswith(".gcode.3mf")
 
     if is_raw_gcode_upload:
+        if allow_anycubic_gcode:
+            from io import BytesIO
+
+            from backend.app.services.anycubic.files import inspect_gcode
+            from backend.app.services.anycubic.protocol import AnycubicError
+
+            try:
+                model, _, _ = inspect_gcode(BytesIO(content))
+            except AnycubicError as exc:
+                raise HTTPException(400, str(exc)) from None
+            return model
         raise HTTPException(
             status_code=400,
             detail=(
@@ -2528,7 +2539,9 @@ async def upload_file(
         # Read upload now so the validation can sniff magic bytes; the file
         # is written to disk only after the checks. #1401.
         content = await file.read()
-        validate_print_file_upload(filename, content)
+        anycubic_model = await asyncio.to_thread(
+            validate_print_file_upload, filename, content, allow_anycubic_gcode=True
+        )
 
         # Save file
         with open(file_path, "wb") as f:
@@ -2548,7 +2561,7 @@ async def upload_file(
         duplicate_of = dup_result.scalar()
 
         # Extract metadata and thumbnail
-        metadata = {}
+        metadata = {"printer_type": "anycubic", "sliced_for_model": anycubic_model} if anycubic_model else {}
         thumbnail_path = None
         thumbnails_dir = get_library_thumbnails_dir()
 

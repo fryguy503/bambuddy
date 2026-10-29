@@ -1417,6 +1417,8 @@ def ams_units_to_dicts(
     ams_list: list,
     resolve_slot_k: Callable,
     drying_targets: dict[int, dict] | None = None,
+    *,
+    printer_type: str = "bambu",
 ) -> list[dict]:
     """The AMS units of a printer's ``raw_data["ams"]``, as the printer card reads them.
 
@@ -1468,7 +1470,7 @@ def ams_units_to_dicts(
                     "tray_sub_brands": tray.get("tray_sub_brands"),
                     "tray_id_name": tray.get("tray_id_name"),
                     "tray_info_idx": tray.get("tray_info_idx"),
-                    "remain": tray.get("remain", 0),
+                    "remain": tray.get("remain") if printer_type == "anycubic" else tray.get("remain", 0),
                     "k": k_value,
                     "cali_idx": cali_idx,
                     "tag_uid": tag_uid,
@@ -1549,6 +1551,7 @@ def ams_units_to_dicts(
                 "dry_filament": dry_filament,
                 # Module type: "ams", "n3f", "n3s" (from get_version)
                 "module_type": str(ams_data.get("module_type") or ""),
+                "anycubic_drying": ams_data.get("anycubic_drying") if printer_type == "anycubic" else None,
             }
         )
     return ams_units
@@ -1632,7 +1635,9 @@ def printer_state_to_dict(
     resolve_slot_k = build_slot_k_resolver(state)
 
     if "ams" in raw_data and isinstance(raw_data["ams"], list):
-        ams_units = ams_units_to_dicts(raw_data["ams"], resolve_slot_k, drying_targets)
+        ams_units = ams_units_to_dicts(
+            raw_data["ams"], resolve_slot_k, drying_targets, printer_type=raw_data.get("manufacturer", "bambu")
+        )
 
     # Parse virtual tray (external spool) — now a list
     if "vt_tray" in raw_data:

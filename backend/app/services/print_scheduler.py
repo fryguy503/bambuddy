@@ -8902,6 +8902,14 @@ class PrintScheduler:
             file_path = lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
             filename = library_file.filename
 
+            if filename.lower().endswith(".gcode"):
+                await self._fail_dispatch(
+                    db,
+                    item,
+                    "Raw G-code requires the Anycubic LAN file uploader; Bambu dispatch requires a sliced 3MF.",
+                )
+                return
+
             # Create archive from library file so usage tracking has access to the 3MF
             queue_item_id = item.id
             # Held separately: a cleanup dispatch clears item.library_file_id

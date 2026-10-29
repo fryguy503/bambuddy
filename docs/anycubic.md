@@ -27,13 +27,16 @@ being treated as an S1. Combo bundles use the underlying printer model.
 | --- | --- |
 | LAN pairing and connection | Signed bootstrap and explicitly reviewed TLS certificate |
 | Printer status | State, temperatures, progress, layers and remaining time |
-| ACE inventory | Model-specific physical unit IDs and four slots per unit; read-only |
+| ACE inventory | Model-specific unit/slot IDs, filament hover menus, inventory assignment and friendly unit names |
 | Print controls | Pause/resume/stop, bounded nozzle/bed targets, reported fans and three native speed modes; MQTT delivery is not printer acknowledgement |
 | Built-in LAN camera | Camera-only activation, HTTP-FLV decoding, shared browser MJPEG and snapshots |
 | External camera | Existing configured external camera support |
 | LAN files | Native catalog and model-matched sliced `.gcode` upload, progress and catalog confirmation; never starts printing |
 | Archive, queue dispatch and print submission | Unavailable in this provider |
-| ACE drying, load/unload, slot edits, calibration, firmware | Unavailable in this provider |
+| ACE drying | Per-unit temperature, hours/minutes, reported remaining time and stop |
+| ACE material controls | Native material/color edits for writable slots; load/unload/stop while idle |
+| Manual controls | Reported chamber light/fans, idle XYZ jog/home, capability-gated short E pulses |
+| RFID reread, Bambu K profiles, calibration and firmware | Unavailable in this provider |
 | Anycubic Cloud Profiles / MakerOnline | Optional shared account for profile exports and model imports; see [Cloud setup](anycubic-cloud.md) |
 
 LAN monitoring and control do not require an Anycubic account. The optional
@@ -74,9 +77,11 @@ behavior. All discovery endpoints retain the `discovery:scan` permission.
 
 With fresh idle/printing/paused status, nozzle and bed popovers send the native
 temperature operation for that state. Model limits and any lower reported
-firmware limits apply on both the card and API. Fans appear only after the
-printer reports them and their control scale; percentages are not converted
-to Bambu PWM. Speed uses Anycubic's three modes while printing. Stale or unknown
+firmware limits apply on both the card and API. Fans appear after the printer
+reports them; percentages are not converted to Bambu PWM. A reported fan with
+an unknown scale remains visible but cannot
+be adjusted until its scale is known. Speed offers **Silent / Normal / Turbo**,
+using the native idle-mode setting or current-print update. Stale or unknown
 capabilities show a waiting state instead of a permission error. Controls
 retain the existing printer-control permission and scope. These settings have
 offline payload tests; physical heater, fan and speed acceptance remains
@@ -88,7 +93,67 @@ color. Empty slots have no fill bar. Whether RFID supplies a useful estimate
 depends on the tag and firmware. An October 28 live read reported zero for the
 one occupied slot; a nearly empty RFID spool comparison is pending. Click an
 ACE humidity or temperature reading for the existing five-minute history.
-Bambu K-factor, RFID reread, load/unload, drying and slot edits are unavailable.
+Bambu K-factor values and commands are not applied to Anycubic filament.
+
+### ACE hover menus and spool assignment
+
+Hover or click a filament slot for the shared filament/inventory card. **Assign
+Spool** opens the same inventory picker as a Bambu slot. The native assignment
+links that physical box/slot to inventory without changing printer settings,
+replaying a Bambu preset, or promising to configure it when a spool is inserted.
+**Configure** separately sends the native material type and RGB color while the
+printer is idle. RFID-locked material settings cannot be overwritten. Exact
+variants such as PLA Matte are retained rather than replaced with generic PLA.
+
+Load/unload use the selected physical ACE and slot and require current idle
+telemetry. Stop also remains available during that connection's own manual
+feed operation, without interrupting a print. **Refresh** reads the latest
+material status. A force-RFID-read
+command has not been established for this LAN protocol, so **Re-read RFID** is
+shown disabled with that explanation. Hover an ACE name to view its reported
+serial/firmware and save a friendly name; absent metadata displays as unknown.
+
+Inventory links require `inventory:update`, friendly names `printers:update`,
+and physical commands `printers:control`; existing printer scope still applies.
+
+### ACE drying
+
+Open **Drying** under either ACE unit. Set temperature, hours and minutes, then
+start or apply the cycle. Each unit has its own controls and reported target,
+remaining minutes and on/off state. Stop sends only the native off operation.
+Commands report **queued** until subsequent native status arrives; a setting
+receipt does not fabricate an active cycle or restart a local countdown.
+
+The native request uses `multiColorBox/setDry`, the physical box ID and minutes.
+Durations are 5–1440 minutes. The reported accessory model identifies the base
+ceiling: [ACE Pro](https://store.anycubic.com/products/anycubic-ace-pro) is limited
+to 55°C and [ACE 2 Pro](https://store.anycubic.com/products/anycubic-ace-2-pro) to
+65°C. The recovered slicer rules further limit the whole unit for loaded
+materials, including PLA at 55°C and certain variants at eight hours when using
+65°C. Unknown accessory IDs and stale drying metadata cannot enable a heater.
+Drying heats every spool in that ACE; review the material and spool heat limits.
+
+Drying remains independent of printing and can be requested during a print.
+This does not enable queue-based auto-drying or Bambu drying automation. A
+read-only check confirmed both connected units as model 40002 with drying off;
+no physical drying cycle was started or stopped by the implementation tests.
+
+### Light, jog, home and extruder controls
+
+The chamber-light button uses the reported type-2 light. Native XYZ jog sends
+an explicit axis, direction and bounded distance up to 50 mm, with 1/10/50 mm
+buttons. Home options preserve the requested **XYZ**, **XY** or **Z** operation.
+Motion, material edits and manual filament feed are disabled while printing.
+These paths never send Bambu G-code or change endstop settings.
+
+E buttons are short native extrusion/retraction pulses, with a backend stop
+scheduled after 0.5 seconds and an explicit **Stop E** action. They require
+reported extrusion capability, an idle printer and nozzle temperature of at
+least 170°C; E movement is not presented as a measured millimetre distance.
+Stale timer callbacks cannot send to a replacement connection, and a fresh
+stopped report is required before another pulse. Heating, motion and feed
+acceptance on hardware remains pending; tests send none of these commands to
+the physical printer.
 
 ## Upload without starting a print
 
@@ -98,6 +163,12 @@ requires exact model metadata and text G-code. Projects, renamed binary files,
 missing/mismatched model headers and unexpanded templates are rejected. The
 maximum size is 512 MiB. Matching metadata is a compatibility check, not
 certification of sliced settings; review the export in your slicer.
+
+The card's **Upload** button and raw `.gcode` drag/drop open this native uploader.
+The shared File Library also accepts validated Anycubic G-code and retains its
+model metadata, instead of applying the Bambu-only raw-G-code rejection to it.
+Raw exports cannot enter the Bambu print queue or FTPS dispatcher. Uploading a
+library file does not start a print or automatically transfer it to a printer.
 
 The backend obtains a fresh upload endpoint from the current pinned LAN MQTT
 session, uploads once to that printer's HTTP port 18910 and verifies the unique

@@ -233,12 +233,16 @@ def _assert_can_queue_archive(
 def _assert_can_queue_library_file(library_file: LibraryFile, current_user: User | ApiKeyActor | None) -> None:
     """Gate turning *library_file* into a print — LIBRARY_READ_ALL or ownership."""
     # None is auth off. An API key arrives as its RequestActor, never None.
-    if current_user is None:
-        return
     # An ownerless file is no one's own, also not a caller without an id.
-    owns_file = library_file.created_by_id is not None and library_file.created_by_id == current_user.id
-    if not current_user.has_permission(Permission.LIBRARY_READ_ALL.value) and not owns_file:
-        raise HTTPException(404, "Library file not found")
+    if current_user is not None:
+        owns_file = library_file.created_by_id is not None and library_file.created_by_id == current_user.id
+        if not current_user.has_permission(Permission.LIBRARY_READ_ALL.value) and not owns_file:
+            raise HTTPException(404, "Library file not found")
+    if library_file.filename.lower().endswith(".gcode"):
+        raise HTTPException(
+            400,
+            "Raw G-code is stored for Anycubic LAN upload. Use the printer's file uploader; it cannot be dispatched through the Bambu print queue.",
+        )
 
 
 async def _is_orders_last_source(db: AsyncSession, item: PrintQueueItem) -> bool:

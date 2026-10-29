@@ -9,8 +9,8 @@ import { Button } from './Button';
 
 const active = (phase?: string) => phase === 'uploading' || phase === 'verifying';
 
-export function AnycubicFilesModal({ printerId, printerName, onClose }: {
-  printerId: number; printerName: string; onClose: () => void;
+export function AnycubicFilesModal({ printerId, printerName, onClose, initialFile = null }: {
+  printerId: number; printerName: string; onClose: () => void; initialFile?: globalThis.File | null;
 }) {
   const { t } = useTranslation();
   const { hasPermission } = useAuth();
@@ -18,7 +18,7 @@ export function AnycubicFilesModal({ printerId, printerName, onClose }: {
   const storageKey = `bambuddy.anycubic.transfer.${printerId}`;
   const [path, setPath] = useState('/');
   const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<globalThis.File | null>(null);
+  const [selected, setSelected] = useState<globalThis.File | null>(initialFile);
   const [receiving, setReceiving] = useState(false);
   const [received, setReceived] = useState(0);
   const [error, setError] = useState('');
@@ -95,6 +95,7 @@ export function AnycubicFilesModal({ printerId, printerName, onClose }: {
             <input aria-label={t('common.upload')} type="file" accept=".gcode" disabled={busy || !hasPermission('printers:control')} onChange={event => setSelected(event.target.files?.[0] ?? null)} className="min-w-0 flex-1 text-sm" />
             <Button disabled={!selected || busy || !hasPermission('printers:control')} onClick={() => void upload()} title={!hasPermission('printers:control') ? t('printers.permission.noControl') : undefined}><Upload className="h-4 w-4" />{t('common.upload')}</Button>
           </div>
+          {selected && !receiving && <p className="mt-2 truncate text-sm text-bambu-gray">{selected.name}</p>}
           {error && <p role="alert" className="mt-2 text-sm text-red-400">{error}</p>}
           {transfer.error && <p role="alert" className="mt-2 text-sm text-amber-400">{transfer.error.message}</p>}
           {(receiving || job) && <div className="mt-3 space-y-2 text-sm">

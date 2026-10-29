@@ -3,6 +3,7 @@
 import copy
 import json
 import logging
+import math
 import threading
 import time
 import uuid
@@ -14,6 +15,7 @@ from paho.mqtt.enums import CallbackAPIVersion
 from backend.app.utils.anycubic_models import get_model
 from backend.app.utils.paho_teardown import retire_paho_client
 
+from .drying import limits as drying_limits
 from .files import FileSession, directory, parse_catalog, upload_url
 from .protocol import (
     PREFIX,
@@ -38,6 +40,7 @@ _QUERIES = (
     ("fan", "query"),
     ("light", "query"),
     ("multiColorBox", "getInfo"),
+    ("extrudeControl", "getInfo"),
 )
 
 
@@ -98,6 +101,15 @@ class AnycubicMQTTClient:
         self._camera_started_at = 0.0
         self._control_limits = {}
         self._reported_fans = {}
+        self._reported_fan_fields = set()
+        self._ace_drying_seen = {}
+        self._ace_seen = {}
+        self._reported_lights = {}
+        self._info_observed = self._extrude_observed = 0.0
+        self._extrude_operate = None
+        self._extrusion_pending = False
+        self._extrusion_timer = None
+        self._manual_feed = None
         self._upload_url = None
         self._info_event = threading.Event()
         self._file_lock = threading.Lock()
@@ -153,6 +165,9 @@ class AnycubicMQTTClient:
             self._reset_files()
             self._control_limits.clear()
             self._reported_fans.clear()
+            self._reported_fan_fields.clear()
+            self._ace_drying_seen.clear()
+            self._reset_manual_controls()
             self._reset_camera()
             self._telemetry = Telemetry(self.model)
             self.state = self._telemetry.state
@@ -215,6 +230,9 @@ class AnycubicMQTTClient:
                 self.state = self._telemetry.state
                 self._control_limits.clear()
                 self._reported_fans.clear()
+                self._reported_fan_fields.clear()
+                self._ace_drying_seen.clear()
+                self._reset_manual_controls()
             client.connect(credentials.host, 9883, keepalive=15)
             del credentials
             deadline, refresh_at = time.monotonic() + 20, time.monotonic() + 10
@@ -315,6 +333,8 @@ class AnycubicMQTTClient:
                 self._camera_report(tail[0], envelope)
                 if not self._telemetry.apply(tail[0], envelope) and not control_changed:
                     return
+                if tail[0] == "multiColorBox":
+                    self._observe_ace_drying(envelope)
             except (AnycubicError, TypeError, ValueError, RecursionError):
                 return
             self._last_message_time = time.time()
@@ -464,6 +484,7 @@ class AnycubicMQTTClient:
         if envelope.get("code", 200) not in (0, 200) or not isinstance(data, dict):
             return False
         if kind == "info":
+            self._info_observed = time.monotonic()
             mode = data.get("print_speed_mode")
             if type(mode) is int and mode in (1, 2, 3):
                 self.state.speed_level = mode
@@ -486,6 +507,8 @@ class AnycubicMQTTClient:
                 value = data.get(field)
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100:
                     continue
+                self._reported_fan_fields.add(field)
+                changed = True
                 if field != "box_fan_level":
                     self._reported_fans[field] = 100
                     changed = True
@@ -501,6 +524,32 @@ class AnycubicMQTTClient:
                     if scale:
                         self.state.big_fan2_speed = round(value * 100 / scale)
                         changed = True
+                    elif value == 0:
+                        self.state.big_fan2_speed = 0
+        if kind == "light":
+            lights = data.get("lights", [data] if data.get("type") in (1, 2, 3) else [])
+            if isinstance(lights, list):
+                for light in lights:
+                    if (
+                        isinstance(light, dict)
+                        and type(light.get("type")) is int
+                        and light["type"] in (1, 2, 3)
+                        and type(light.get("status")) is int
+                        and light["status"] in (0, 1)
+                    ):
+                        self._reported_lights[light["type"]] = time.monotonic()
+                        changed = True
+        if (
+            kind == "extrudeControl"
+            and envelope.get("action") != "set"
+            and type(data.get("operate_type")) is int
+            and data["operate_type"] in (0, 1)
+        ):
+            self._extrude_observed = time.monotonic()
+            self._extrude_operate = data["operate_type"]
+            if self._extrude_operate == 0:
+                self._extrusion_pending = False
+            changed = True
         return changed
 
     def control_capabilities(self):
@@ -522,7 +571,319 @@ class AnycubicMQTTClient:
                 if field in self._reported_fans
             ],
             "speed_modes": [1, 2, 3],
+            "reported_fans": [
+                name
+                for name, field in (
+                    ("part", "fan_speed_pct"),
+                    ("aux", "aux_fan_speed_pct"),
+                    ("chamber", "box_fan_level"),
+                )
+                if field in self._reported_fan_fields or field in self._reported_fans
+            ],
+            "ace_drying": self._ace_drying_capabilities(),
+            "chamber_light": self._light_ready(),
+            "motion": self._motion_ready(),
+            "extruder_pulse": self._extrusion_ready(),
+            "extrusion_stop": self._extrusion_stop_ready(),
+            "ace_slots": self._ace_slot_capabilities(),
         }
+
+    def _reset_manual_controls(self):
+        if self._extrusion_timer is not None:
+            self._extrusion_timer.cancel()
+            self._extrusion_timer = None
+        self._ace_seen.clear()
+        self._reported_lights.clear()
+        self._info_observed = self._extrude_observed = 0.0
+        self._extrude_operate = None
+        self._extrusion_pending = False
+        self._manual_feed = None
+
+    def _fresh_connection(self):
+        return self.state.connected and not self.is_stale and not self._stop.is_set()
+
+    def _light_ready(self):
+        seen = self._reported_lights.get(2)
+        return bool(self._fresh_connection() and seen and time.monotonic() - seen <= self.STALE_TIMEOUT)
+
+    def _motion_ready(self):
+        return bool(
+            not self._extrusion_pending
+            and self._extrusion_timer is None
+            and self._extrude_operate != 1
+            and self._controls_ready()
+            and self.state.state == "IDLE"
+            and self._info_observed
+            and time.monotonic() - self._info_observed <= self.STALE_TIMEOUT
+        )
+
+    def set_chamber_light(self, on):
+        with self._lock:
+            if type(on) is not bool or not self._light_ready():
+                return False
+            return self._publish("light", "control", {"type": 2, "status": int(on), "brightness": 100 if on else 0})
+
+    def jog_axis(self, axis, distance):
+        with self._lock:
+            if (
+                not self._motion_ready()
+                or axis not in ("x", "y", "z")
+                or isinstance(distance, bool)
+                or not isinstance(distance, (int, float))
+                or not math.isfinite(distance)
+                or not 0 < abs(distance) <= 50
+            ):
+                return False
+            return self._publish(
+                "axis",
+                "move",
+                {
+                    "axis": {"x": 1, "y": 2, "z": 3}[axis],
+                    "move_type": 1 if distance > 0 else 0,
+                    "distance": abs(distance),
+                },
+            )
+
+    def home_axes(self, axes="all"):
+        with self._lock:
+            if not self._motion_ready() or axes not in ("x", "y", "z", "xy", "all"):
+                return False
+            return self._publish(
+                "axis",
+                "move",
+                {"axis": {"x": 1, "y": 2, "z": 3, "xy": 4, "all": 5}[axes], "move_type": 2, "distance": 0},
+            )
+
+    def _extrusion_ready(self):
+        temperature = self.state.temperatures.get("nozzle")
+        return bool(
+            self._motion_ready()
+            and self._extrude_observed
+            and time.monotonic() - self._extrude_observed <= self.STALE_TIMEOUT
+            and self._extrude_operate == 0
+            and self._extrusion_timer is None
+            and isinstance(temperature, (int, float))
+            and temperature >= 170
+        )
+
+    def extruder_pulse(self, direction):
+        """A bounded native pulse, not an inferred millimetre distance."""
+        with self._lock:
+            if type(direction) is not int or direction not in (0, 1) or not self._extrusion_ready():
+                return False
+            generation, connection = self._generation, self._client
+            if not self._publish("extrudeControl", "set", {"operate_type": 1, "move_type": direction}):
+                return False
+            self._extrusion_pending = True
+            self._extrude_operate = None
+
+            def finish():
+                with self._lock:
+                    if self._extrusion_timer is not timer:
+                        return
+                    if self._current(generation, connection):
+                        self._publish("extrudeControl", "set", {"operate_type": 0})
+                        self._publish("extrudeControl", "getInfo", None)
+                    self._extrusion_timer = None
+
+            timer = self._extrusion_timer = threading.Timer(0.5, finish)
+            self._extrusion_timer.daemon = True
+            self._extrusion_timer.start()
+            return True
+
+    def _extrusion_stop_ready(self):
+        return bool(
+            self._fresh_connection()
+            and (
+                self._extrusion_pending
+                or (
+                    self.state.state == "IDLE"
+                    and self._extrude_observed
+                    and time.monotonic() - self._extrude_observed <= self.STALE_TIMEOUT
+                )
+            )
+        )
+
+    def stop_extrusion(self):
+        with self._lock:
+            if not self._extrusion_stop_ready():
+                return False
+            if self._extrusion_timer is not None:
+                self._extrusion_timer.cancel()
+                self._extrusion_timer = None
+            queued = self._publish("extrudeControl", "set", {"operate_type": 0})
+            if queued:
+                self._publish("extrudeControl", "getInfo", None)
+            return queued
+
+    def _ace_slot_capabilities(self):
+        controls = []
+        for box in self._telemetry.boxes.values():
+            fresh = bool(
+                self._motion_ready()
+                and box["id"] in self._ace_seen
+                and time.monotonic() - self._ace_seen[box["id"]] <= self.STALE_TIMEOUT
+            )
+            for tray in box["tray"]:
+                editable = tray.get("anycubic_edit_status") in (1, 2, 3) and tray.get("anycubic_status") != 4
+                controls.append(
+                    {
+                        "box_id": box["id"],
+                        "slot_id": tray["id"],
+                        "configure": fresh and editable,
+                        "feed": fresh and tray.get("state") != 9,
+                        "feed_stop": bool(
+                            self._fresh_connection()
+                            and box["id"] in self._ace_seen
+                            and time.monotonic() - self._ace_seen[box["id"]] <= self.STALE_TIMEOUT
+                            and (
+                                fresh
+                                or (
+                                    self._manual_feed == (box["id"], tray["id"])
+                                    and self.state.state not in {"RUNNING", "PREPARE", "PAUSE"}
+                                )
+                            )
+                        ),
+                        "rfid_locked": tray.get("anycubic_edit_status") == 0,
+                    }
+                )
+        return controls
+
+    def set_ace_slot(self, box_id, slot_id, material, color):
+        with self._lock:
+            control = next(
+                (
+                    item
+                    for item in self._ace_slot_capabilities()
+                    if item["box_id"] == box_id and item["slot_id"] == slot_id
+                ),
+                None,
+            )
+            if (
+                type(box_id) is not int
+                or type(slot_id) is not int
+                or not control
+                or not control["configure"]
+                or not isinstance(material, str)
+                or not 1 <= len(material.strip()) <= 64
+                or any(ord(c) < 32 for c in material)
+                or not isinstance(color, str)
+                or len(color) != 6
+                or any(c not in "0123456789abcdefABCDEF" for c in color)
+            ):
+                return False
+            rgb = [int(color[i : i + 2], 16) for i in (0, 2, 4)]
+            queued = self._publish(
+                "multiColorBox",
+                "setInfo",
+                {
+                    "multi_color_box": [
+                        {"id": box_id, "slots": [{"index": slot_id, "type": material.strip(), "color": rgb}]}
+                    ]
+                },
+            )
+            if queued:
+                self._publish("multiColorBox", "getInfo", None)
+            return queued
+
+    def feed_ace_slot(self, box_id, slot_id, operation):
+        with self._lock:
+            control = next(
+                (
+                    item
+                    for item in self._ace_slot_capabilities()
+                    if item["box_id"] == box_id and item["slot_id"] == slot_id
+                ),
+                None,
+            )
+            if (
+                type(box_id) is not int
+                or type(slot_id) is not int
+                or operation not in ("load", "unload", "stop")
+                or not control
+                or not control["feed_stop" if operation == "stop" else "feed"]
+            ):
+                return False
+            queued = self._publish(
+                "multiColorBox",
+                "feedFilament",
+                {
+                    "multi_color_box": [
+                        {
+                            "id": box_id,
+                            "feed_status": {
+                                "slot_index": slot_id,
+                                "type": {"load": 1, "unload": 2, "stop": 3}[operation],
+                            },
+                        }
+                    ]
+                },
+            )
+            if queued and operation != "stop":
+                self._manual_feed = (box_id, slot_id)
+            return queued
+
+    def _observe_ace_drying(self, envelope):
+        if envelope.get("action") == "getInfo":
+            self._ace_drying_seen.clear()
+            self._ace_seen.clear()
+        for box in envelope.get("data", {}).get("multi_color_box", []):
+            if isinstance(box.get("slots"), list):
+                self._ace_seen[box["id"]] = time.monotonic()
+            if isinstance(box.get("drying_status"), dict) and box["drying_status"]:
+                self._ace_drying_seen[box["id"]] = time.monotonic()
+
+    def _ace_drying_capabilities(self):
+        controls = []
+        now = time.monotonic()
+        for box in self._telemetry.boxes.values():
+            box_id = box["id"]
+            if box_id < 0 or not (bounds := drying_limits(box)):
+                continue
+            fresh = bool(
+                self.state.connected
+                and not self.is_stale
+                and not self._stop.is_set()
+                and box_id in self._ace_drying_seen
+                and now - self._ace_drying_seen.get(box_id, 0) <= self.STALE_TIMEOUT
+                and box.get("anycubic_drying")
+            )
+            controls.append(
+                {"id": box_id, **bounds, "start_ready": fresh and self._controls_ready(), "stop_ready": fresh}
+            )
+        return controls
+
+    def set_ace_drying(self, box_id, *, temperature=None, duration_minutes=None, stop=False):
+        """Queue one native setDry, then query authoritative box status."""
+        with self._lock:
+            if type(box_id) is not int or type(stop) is not bool:
+                return False
+            control = next((item for item in self._ace_drying_capabilities() if item["id"] == box_id), None)
+            if control is None or not control["stop_ready" if stop else "start_ready"]:
+                return False
+            if stop:
+                if temperature is not None or duration_minutes is not None:
+                    return False
+                drying = {"status": 0}
+            else:
+                if (
+                    type(temperature) is not int
+                    or not control["temp_min"] <= temperature <= control["temp_max"]
+                    or type(duration_minutes) is not int
+                    or not control["duration_min"] <= duration_minutes <= control["duration_max"]
+                    or any(
+                        temperature >= bound["temperature"] and duration_minutes > bound["max_minutes"]
+                        for bound in control["duration_limits"]
+                    )
+                ):
+                    return False
+                drying = {"status": 1, "target_temp": temperature, "duration": duration_minutes}
+            queued = self._publish(
+                "multiColorBox", "setDry", {"multi_color_box": [{"id": box_id, "drying_status": drying}]}
+            )
+            if queued:
+                self._publish("multiColorBox", "getInfo", None)
+            return queued
 
     def _controls_ready(self):
         return bool(
@@ -592,6 +953,8 @@ class AnycubicMQTTClient:
         with self._lock:
             if not self._controls_ready() or type(mode) is not int or mode not in (1, 2, 3):
                 return False
+            if self.state.state == "IDLE":
+                return self._publish("print", "setSpeedMode", {"speed_mode": mode})
             return self._settings_update({"print_speed_mode": mode})
 
     def _reset_camera(self):
@@ -693,6 +1056,10 @@ class AnycubicMQTTClient:
 
     def disconnect(self, timeout: float = 0):
         with self._lock:
+            if self._extrusion_timer is not None:
+                self._publish("extrudeControl", "set", {"operate_type": 0})
+                self._extrusion_timer.cancel()
+                self._extrusion_timer = None
             self._generation += 1
             self._stop.set()
             client, worker = self._client, self._worker
@@ -755,8 +1122,8 @@ class AnycubicMQTTClient:
     clear_hms_errors = execute_hms_action = set_timelapse = set_liveview = _unsupported
     set_chamber_temperature = _unsupported
     set_fan_speed = set_part_fan = set_aux_fan = set_chamber_fan = _unsupported
-    set_left_aux_fan = set_airduct_mode = set_chamber_light = select_extruder = _unsupported
-    home_axes = move_axis = disable_motors = enable_motors = _unsupported
+    set_left_aux_fan = set_airduct_mode = select_extruder = _unsupported
+    move_axis = disable_motors = enable_motors = _unsupported
     ams_load_filament = ams_unload_filament = ams_control = ams_set_filament_setting = _unsupported
     reset_ams_slot = extrusion_cali_sel = extrusion_cali_set = set_ams_filament_backup = _unsupported
     set_kprofile = set_kprofiles_batch = delete_kprofile = register_assignment_verification = _unsupported
