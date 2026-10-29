@@ -45,6 +45,12 @@ export function rewriteMediaSrcWithToken(
         post === '&' ? pre : pre === '?' ? '' : ''
       );
       const sep = withoutToken.includes('?') ? '&' : '?';
+      // Close a live image's previous MJPEG request before replacing its URL.
+      // Token renewal updates the same img, so the detached-img cleanup does
+      // not run here. Never set an empty src: it can fire a retrying error.
+      if (el instanceof HTMLImageElement && /\/camera\/stream(?:[?#]|$)/.test(src)) {
+        el.removeAttribute('src');
+      }
       el.src = `${withoutToken}${sep}${tokenParam}`;
       updated += 1;
     });

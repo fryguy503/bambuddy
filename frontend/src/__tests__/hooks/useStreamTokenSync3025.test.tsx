@@ -14,7 +14,7 @@ import { renderHook, waitFor, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
-import { useStreamTokenSync } from '../../hooks/useCameraStreamToken';
+import { rewriteMediaSrcWithToken, useStreamTokenSync } from '../../hooks/useCameraStreamToken';
 import { getMediaToken, getStreamToken, setMediaToken, setStreamToken } from '../../api/client';
 
 const auth = {
@@ -69,6 +69,45 @@ afterEach(() => {
 });
 
 describe('useStreamTokenSync token split (#3025)', () => {
+  it('closes a live MJPEG image before renewing its token and preserves its viewer', () => {
+    const root = document.createElement('div');
+    const img = document.createElement('img');
+    img.src = '/api/v1/printers/7/camera/stream?fps=15&viewer=vone&t=42&token=old';
+    root.appendChild(img);
+    const changes: string[] = [];
+    const removeAttribute = img.removeAttribute.bind(img);
+    const setSrc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')!.set!;
+    const remove = vi.spyOn(img, 'removeAttribute').mockImplementation(name => {
+      if (name === 'src') changes.push('close');
+      removeAttribute(name);
+    });
+    vi.spyOn(img, 'src', 'set').mockImplementation(value => {
+      expect(img.hasAttribute('src')).toBe(false);
+      changes.push('open');
+      setSrc.call(img, value);
+    });
+    expect(rewriteMediaSrcWithToken(root, 'media-tok', 'new')).toBe(1);
+    expect(changes).toEqual(['close', 'open']);
+    expect(img.getAttribute('src')).toBe('/api/v1/printers/7/camera/stream?fps=15&viewer=vone&t=42&token=new');
+    // A later unrelated token publication must not reconnect this image.
+    expect(rewriteMediaSrcWithToken(root, 'next-media-tok', 'new')).toBe(0);
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear finite snapshot or media requests when replacing tokens', () => {
+    const root = document.createElement('div');
+    const snapshot = document.createElement('img');
+    snapshot.src = '/api/v1/printers/7/camera/snapshot?token=old';
+    const thumbnail = document.createElement('img');
+    thumbnail.src = '/api/v1/library/files/7/thumbnail?token=old';
+    root.append(snapshot, thumbnail);
+    const closeSnapshot = vi.spyOn(snapshot, 'removeAttribute');
+    const closeThumbnail = vi.spyOn(thumbnail, 'removeAttribute');
+    expect(rewriteMediaSrcWithToken(root, 'media-tok', 'camera-tok')).toBe(2);
+    expect(closeSnapshot).not.toHaveBeenCalled();
+    expect(closeThumbnail).not.toHaveBeenCalled();
+  });
+
   it('gives a user without camera:view a media token', async () => {
     renderHook(() => useStreamTokenSync(), { wrapper: wrapper() });
     await waitFor(() => expect(getMediaToken()).toBe('media-tok'));

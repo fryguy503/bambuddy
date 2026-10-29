@@ -137,6 +137,9 @@ Drying remains independent of printing and can be requested during a print.
 This does not enable queue-based auto-drying or Bambu drying automation. A
 read-only check confirmed both connected units as model 40002 with drying off;
 no physical drying cycle was started or stopped by the implementation tests.
+The operator subsequently confirmed that starting a drying cycle works on
+the Synology-connected S1. Changing or stopping a cycle still needs separate
+hardware acceptance.
 
 ### Light, jog, home and extruder controls
 
@@ -254,6 +257,15 @@ On October 28, 2026, a camera-only LAN probe received and decoded a live JPEG
 from the physical Kobra S1 on firmware 2.7.2.7. The operator subsequently reported
 the Synology camera working; the other models still need acceptance. External
 cameras remain available as an override.
+
+Each browser viewer keeps its ID across reconnects. A replacement connection
+ends the previous response for that same viewer and account; Stop closes only
+its matching response while other viewers retain the shared upstream. Token
+renewal closes the old live image request before opening its replacement.
+This prevents renewed camera responses from accumulating in the browser's
+HTTP connection pool. Fixture tests cover Anycubic, Bambu and external cameras;
+the reported browser freeze recovered after closing and reopening its tab.
+Acceptance of the fix on the Synology remains pending after deployment.
 
 ## Protocol provenance and the prior Orca plugin
 
