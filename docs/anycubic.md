@@ -273,6 +273,12 @@ power-off and outcome confirmation are not offered for native jobs. Native
 filament consumption is not guessed from Bambu callbacks. Existing queue
 review, ownership and printer-scope permissions still apply.
 
+The queue uses the same native connection state as the printer card. An online
+S1 does not require a smart plug. Connected, idle printers awaiting native
+readiness data show **Waiting for Anycubic print readiness**; this does not
+bypass fresh-status, active-job or plate-clear checks. Offline printers retain
+the existing offline/Auto On behavior.
+
 Protocol, dispatch, cancellation, restart, permission and UI tests use isolated
 fixtures. No physical print was started to validate this implementation; a
 small supervised S1 print, ACE mapping and scheduled second job still need

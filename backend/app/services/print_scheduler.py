@@ -626,6 +626,7 @@ def _is_tray_id(value: object) -> bool:
 # stages an item (#2799). The manual_start branch clears every other reason on
 # a staged item (#3074); this one is the reason it was staged, so it stays.
 _UNMATCHED_HOLD_PREFIX = "Needs "
+_NATIVE_READY_HOLD_PREFIX = "Waiting for Anycubic print readiness:"
 
 # How often an "any model" job held for low filament looks for another printer
 # of its model that has enough (#3137). Each look matches its filament on every
@@ -3564,14 +3565,15 @@ class PrintScheduler:
 
     @staticmethod
     def _is_busy_only(waiting_reason: str) -> bool:
-        """Check if the waiting reason only contains 'Busy' entries.
+        """Check if the waiting reason only contains transient availability holds.
 
         When all matching printers are simply busy printing, the queued job
         will start automatically once a printer finishes — no user action
         is required, so we skip the notification.
+        Waiting for native print readiness also resolves through status updates.
         """
         parts = [p.strip() for p in waiting_reason.split(" | ")]
-        return all(p.startswith("Busy:") for p in parts)
+        return all(p.startswith(("Busy:", _NATIVE_READY_HOLD_PREFIX)) for p in parts)
 
     def _get_missing_force_color_slots(
         self, printer_id: int, force_overrides: list[dict], raw_data: dict | None = None
@@ -5237,6 +5239,15 @@ class PrintScheduler:
             printer_id
         ):
             return f"Waiting for plate confirmation: {printer_name}"
+        if isinstance(client, AnycubicMQTTClient):
+            state = printer_manager.get_status(printer_id)
+            if (
+                state is not None
+                and state.connected
+                and state.state == "IDLE"
+                and not client.print_capabilities().get("ready")
+            ):
+                return f"{_NATIVE_READY_HOLD_PREFIX} {printer_name}"
         return f"Busy: {printer_name}"
 
     async def _get_setting(self, db: AsyncSession, key: str) -> str | None:

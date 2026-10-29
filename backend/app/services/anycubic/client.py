@@ -1341,17 +1341,18 @@ class AnycubicMQTTClient:
         if worker is not None and timeout > 0 and worker is not threading.current_thread():
             worker.join(timeout=timeout)
 
-    def check_staleness(self):
+    def check_staleness(self) -> bool:
+        """Clear stale status and return whether connected, as PrinterManager expects."""
         with self._lock:
             if not self.is_stale or not self.state.connected:
-                return False
+                return self.state.connected
             self.state.connected = False
             self.state.state = "unknown"
             self.state.raw_data["ams"] = []
             self._telemetry.boxes = {}
             self._ace_material_seen.clear()
         self._notify()
-        return True
+        return self.state.connected
 
     def mark_power_off(self):
         was_connected = self.state.connected

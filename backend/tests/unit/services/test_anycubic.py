@@ -494,15 +494,36 @@ class ClientTests(unittest.TestCase):
         self.receive("tempature", {"curr_nozzle_temp": 210})
         self.assertFalse(self.client.stop_print())
 
+    def test_staleness_check_returns_true_for_fresh_connected_status(self):
+        self.receive("info", {"state": "free"})
+        self.callback.reset_mock()
+        self.assertTrue(self.client.check_staleness())
+        self.assertTrue(self.client.check_staleness())
+        self.assertTrue(self.client.state.connected)
+        self.assertEqual(self.client.state.state, "IDLE")
+        self.callback.assert_not_called()
+        self.mqtt.publish.assert_not_called()
+
+    def test_staleness_check_returns_false_for_disconnected_status(self):
+        self.assertFalse(self.client.check_staleness())
+        self.assertFalse(self.client.state.connected)
+        self.callback.assert_not_called()
+        self.mqtt.publish.assert_not_called()
+
     def test_staleness_clears_material_cache_and_controls(self):
         self.receive("multiColorBox", {"multi_color_box": [box(), box(1)]}, action="getInfo")
+        self.callback.reset_mock()
         self.client._last_message_time = time.time() - 61
         self.client._last_message_monotonic = time.monotonic() - 61
-        self.assertTrue(self.client.check_staleness())
+        self.assertFalse(self.client.check_staleness())
+        self.assertFalse(self.client.check_staleness())
         self.assertFalse(self.client.state.connected)
+        self.assertEqual(self.client.state.state, "unknown")
         self.assertEqual(self.client.state.raw_data["ams"], [])
         self.assertEqual(self.client._telemetry.boxes, {})
         self.assertFalse(self.client.pause_print())
+        self.callback.assert_called_once()
+        self.mqtt.publish.assert_not_called()
 
     def test_partial_info_and_progress_do_not_renew_lifecycle_authority(self):
         self.receive("info", {"state": "busy", "project": {"state": "printing"}})

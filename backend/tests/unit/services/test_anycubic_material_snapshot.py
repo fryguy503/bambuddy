@@ -168,7 +168,7 @@ def test_staleness_drops_box_authority_and_later_partial_update_cannot_restore_i
     with patch("backend.app.services.anycubic.client.time.monotonic", return_value=100):
         receive(client, [box()])
     with patch("backend.app.services.anycubic.client.time.monotonic", return_value=161):
-        assert client.check_staleness()
+        assert not client.check_staleness()
         receive(client, [{"id": 0, "slots": [box()["slots"][0]]}], action="refresh")
     assert client.ace_material_snapshot() is None
     assert client._ace_material_seen == {}
