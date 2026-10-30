@@ -20,9 +20,15 @@ from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.models.printer import Printer
 from backend.app.models.printer_operation import PrinterOperation
-from backend.app.printers.api import PrinterConnectionAdapter, bind_printer
+from backend.app.printers.api import PrinterConnectionAdapter, bind_printer, operation_lease
 from backend.app.printers.contracts import PrinterConfig
-from backend.app.printers.registry import plugin_for
+from backend.app.printers.operation_versions import (
+    bind_operation_schema,
+    operation_connection,
+    operation_provider,
+    release_terminal_operation,
+)
+from backend.app.printers.registry import current_registry, plugin_for, provider_context
 from backend.app.printers.sdk import (
     OperationError,
     OperationReceipt,
@@ -57,10 +63,14 @@ async def _printer(db: AsyncSession, printer_id: int, *, lock: bool = False):
     return printer
 
 
-def _connection(printer_id):
-    connection = printer_manager.get_client(printer_id)
+def _connection(printer_id: int, request: Request | None = None, config: PrinterConfig | None = None):
+    connection = getattr(request.state, "printer_connection", None) if request is not None else None
+    if connection is None:
+        connection = printer_manager.get_client(printer_id)
     if connection is None:
         raise HTTPException(409, "Printer has no managed connection")
+    if isinstance(connection, PrinterConnectionAdapter) and config is not None and connection._config != config:
+        raise HTTPException(409, "Printer configuration changed; refresh the printer before retrying")
     return connection._connection if isinstance(connection, PrinterConnectionAdapter) else connection
 
 
@@ -77,17 +87,38 @@ def _receipt(row: PrinterOperation):
     return result
 
 
-@router.get("/{printer_id}/device")
+async def _connection_lease(printer_id: int, request: Request):
+    with operation_lease(printer_id):
+        client = printer_manager.get_client(printer_id)
+        if not isinstance(client, PrinterConnectionAdapter):
+            yield
+            return
+        registry = current_registry()
+        reference = "request:" + str(uuid4())
+        registry.retain_runtime(client._plugin, reference, printer_id, "request in progress")
+        try:
+            with provider_context(client._config, client._plugin):
+                request.state.printer_connection = client
+                yield
+        finally:
+            registry.release_runtime(reference)
+
+
+@router.get("/{printer_id}/device", dependencies=[Depends(_connection_lease)])
 async def describe_device(
     printer_id: int,
+    request: Request,
     _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_READ),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
     printer = await _printer(db, printer_id)
-    return validate_device(plugin_for(printer).describe_device(PrinterConfig.from_printer(printer)))
+    config = PrinterConfig.from_printer(printer)
+    if isinstance(getattr(request.state, "printer_connection", None), PrinterConnectionAdapter):
+        _connection(printer_id, request, config)
+    return validate_device(plugin_for(printer).describe_device(config))
 
 
-@router.get("/{printer_id}/device-state")
+@router.get("/{printer_id}/device-state", dependencies=[Depends(_connection_lease)])
 async def device_state(
     printer_id: int,
     request: Request,
@@ -96,10 +127,9 @@ async def device_state(
 ):
     printer = await _printer(db, printer_id)
     plugin, config = plugin_for(printer), PrinterConfig.from_printer(printer)
+    connection = _connection(printer_id, request, config)
     descriptor = validate_device(plugin.describe_device(config))
-    snapshot = validate_snapshot(descriptor, plugin.snapshot_device(config, _connection(printer_id))).model_copy(
-        deep=True
-    )
+    snapshot = validate_snapshot(descriptor, plugin.snapshot_device(config, connection)).model_copy(deep=True)
     # A plugin can protect individual telemetry properties using stronger
     # existing permissions. Unsupported permission names never become public.
     allowed = {Permission.PRINTERS_READ.value: True}
@@ -120,7 +150,7 @@ async def device_state(
     return snapshot
 
 
-@router.post("/{printer_id}/operations/{operation_id:path}")
+@router.post("/{printer_id}/operations/{operation_id:path}", dependencies=[Depends(_connection_lease)])
 async def invoke_operation(
     printer_id: int,
     operation_id: str,
@@ -131,6 +161,7 @@ async def invoke_operation(
 ):
     printer = await _printer(db, printer_id, lock=True)
     plugin, config = plugin_for(printer), PrinterConfig.from_printer(printer)
+    connection = _connection(printer_id, request, config)
     descriptor = validate_device(plugin.describe_device(config))
     invocation = OperationRequest(operation_id=operation_id, **body.model_dump())
     try:
@@ -145,7 +176,6 @@ async def invoke_operation(
     # HTTP start operation. The scheduler invokes job.start internally.
     if operation_id == "job.start" or operation.extensions.get("host_workflow") == "queue":
         raise HTTPException(409, "Submit printing jobs through the queue API")
-    connection = _connection(printer_id)
     key = invocation.idempotency_key or "request:" + hashlib.sha256(invocation.request_id.encode()).hexdigest()
     digest = hashlib.sha256(
         json.dumps(
@@ -175,7 +205,7 @@ async def invoke_operation(
             "idempotency_key": key,
             "request_digest": digest,
             "request_data": invocation.model_dump(mode="json"),
-            "operation_schema": operation.model_dump(mode="json"),
+            "operation_schema": bind_operation_schema(operation.model_dump(mode="json"), config, plugin),
             "receipt": pending.model_dump(mode="json"),
             "process_id": _PROCESS_ID,
         }
@@ -210,10 +240,12 @@ async def invoke_operation(
         row = await db.get(PrinterOperation, operation_id_local)
         if row is None:
             raise HTTPException(409, "Printer was removed before the operation started")
+        current_registry().retain_runtime(plugin, "operation:" + row.id, printer_id, "pending operation")
         try:
-            result = await asyncio.wait_for(
-                plugin.invoke(config, connection, invocation), timeout=operation.timeout_seconds
-            )
+            with provider_context(config, plugin):
+                result = await asyncio.wait_for(
+                    plugin.invoke(config, connection, invocation), timeout=operation.timeout_seconds
+                )
             result = validate_receipt(operation, invocation, result)
             row.provider_task_id = result.task_id
         except TimeoutError:
@@ -246,6 +278,7 @@ async def invoke_operation(
             )
         row.receipt = result.model_dump(mode="json")
         await db.commit()
+        release_terminal_operation(row)
         return _receipt(row)
 
 
@@ -256,7 +289,8 @@ async def _task(printer_id, task_id, request, db):
     if row is None:
         raise HTTPException(404, "Operation task not found")
     printer = await _printer(db, printer_id)
-    plugin, config = plugin_for(printer), PrinterConfig.from_printer(printer)
+    config = PrinterConfig.from_printer(printer)
+    plugin = operation_provider(row, config)
     from backend.app.printers.sdk import OperationDescriptor
 
     operation = OperationDescriptor.model_validate(row.operation_schema)
@@ -266,7 +300,7 @@ async def _task(printer_id, task_id, request, db):
     return row, plugin, config, operation
 
 
-@router.get("/{printer_id}/operation-tasks/{task_id}")
+@router.get("/{printer_id}/operation-tasks/{task_id}", dependencies=[Depends(_connection_lease)])
 async def operation_status(
     printer_id: int,
     task_id: str,
@@ -277,10 +311,11 @@ async def operation_status(
     row, plugin, config, operation = await _task(printer_id, task_id, request, db)
     if row.receipt["status"] in {"accepted", "running"}:
         if row.provider_task_id:
-            value = await asyncio.wait_for(
-                plugin.operation_status(config, _connection(printer_id), row.provider_task_id),
-                timeout=operation.timeout_seconds,
-            )
+            with provider_context(config, plugin):
+                value = await asyncio.wait_for(
+                    plugin.operation_status(config, operation_connection(printer_id, plugin), row.provider_task_id),
+                    timeout=operation.timeout_seconds,
+                )
             row.receipt = validate_receipt(
                 operation, OperationRequest.model_validate(row.request_data), value
             ).model_dump(mode="json")
@@ -294,10 +329,11 @@ async def operation_status(
                 ),
             ).model_dump(mode="json")
         await db.commit()
+    release_terminal_operation(row)
     return _receipt(row)
 
 
-@router.post("/{printer_id}/operation-tasks/{task_id}/cancel")
+@router.post("/{printer_id}/operation-tasks/{task_id}/cancel", dependencies=[Depends(_connection_lease)])
 async def cancel_operation(
     printer_id: int,
     task_id: str,
@@ -310,12 +346,14 @@ async def cancel_operation(
         return _receipt(row)
     if not operation.cancellable or not row.provider_task_id:
         raise HTTPException(409, "This operation cannot be cancelled")
-    value = await asyncio.wait_for(
-        plugin.cancel_operation(config, _connection(printer_id), row.provider_task_id),
-        timeout=operation.timeout_seconds,
-    )
+    with provider_context(config, plugin):
+        value = await asyncio.wait_for(
+            plugin.cancel_operation(config, operation_connection(printer_id, plugin), row.provider_task_id),
+            timeout=operation.timeout_seconds,
+        )
     row.receipt = validate_receipt(operation, OperationRequest.model_validate(row.request_data), value).model_dump(
         mode="json"
     )
     await db.commit()
+    release_terminal_operation(row)
     return _receipt(row)

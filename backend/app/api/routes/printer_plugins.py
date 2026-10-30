@@ -5,7 +5,7 @@ use backend.app.printers.api for the same underlying lifecycle and operations.
 """
 
 import asyncio
-import inspect
+import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.routing import APIRoute
@@ -102,92 +102,130 @@ async def _validate_saved_configuration(db: AsyncSession, plugin_id: str, versio
             ) from exc
 
 
-async def _require_idle(
-    db: AsyncSession,
-    plugin_id: str,
-    *,
-    require_unconfigured: bool = False,
-    allow_unloaded_recovery: bool = False,
-):
-    from backend.app.models.print_queue import PrintQueueItem
+async def _apply_selection(db: AsyncSession, plugin_id: str, version: str | None, *, rollback: bool = False):
+    from copy import deepcopy
+
     from backend.app.models.printer_operation import PrinterOperation
-    from backend.app.printers.contracts import PrinterConfig
-    from backend.app.printers.firmware import upload_in_progress
-    from backend.app.services.print_scheduler import scheduler as print_scheduler
+    from backend.app.printers.contracts import PrinterConfig, PrinterPluginError
+    from backend.app.printers.lifecycle import lifecycle
+    from backend.app.printers.management import printer_pin_identity
+    from backend.app.printers.rolling import rollouts
     from backend.app.services.printer_manager import printer_manager
 
-    printers = await _configured(db, plugin_id)
-    if require_unconfigured and printers:
+    async with lifecycle.change_lock(plugin_id):
+        registry = _registry()
+        manager = PluginManager()
+        target = manager.rollback_target(plugin_id, version) if rollback else version
+        if target is None:
+            raise HTTPException(400, "A printer plugin version is required")
+        await _validate_saved_configuration(db, plugin_id, target)
+        try:
+            candidate = await asyncio.to_thread(registry.prepare, plugin_id, target)
+        except Exception as exc:
+            logging.exception("Printer plugin %s candidate %s failed to load", plugin_id, target)
+            raise HTTPException(409, f"Printer plugin candidate could not be loaded ({type(exc).__name__})") from exc
+        printers = await _configured(db, plugin_id)
+        configs = [PrinterConfig.from_printer(printer) for printer in printers]
+        for config in configs:
+            try:
+                candidate.plugin.validate_config(config)
+            except (PrinterPluginError, ValueError, TypeError) as exc:
+                raise HTTPException(
+                    409, f"Saved settings for printer {config.printer_id} are incompatible with this plugin version"
+                ) from exc
+
+        # Persist the actual connection provider before changing the default.
+        # Restart/recovery must retain the same observer for an unfinished job.
+        for config in configs:
+            if config.printer_id is None:
+                continue
+            client = printer_manager.get_client(config.printer_id)
+            if client is not None:
+                plugin = getattr(client, "_plugin", None)
+                if plugin is None:
+                    plugin = registry.provider_for(config)
+                registry.pin_printer(config, plugin)
+
+        if configs:
+            by_id = {config.printer_id: config for config in configs}
+            pending = list(
+                (
+                    await db.scalars(
+                        select(PrinterOperation).where(
+                            PrinterOperation.printer_id.in_(by_id),
+                            PrinterOperation.receipt["status"].as_string().in_(("accepted", "running")),
+                        )
+                    )
+                ).all()
+            )
+            for operation in pending:
+                config = by_id[operation.printer_id]
+                schema = deepcopy(operation.operation_schema)
+                extensions = schema.setdefault("extensions", {})
+                binding = extensions.get("bambuddy:provider")
+                if binding is None:
+                    try:
+                        provider = registry.provider_for(config)
+                    except PrinterPluginError:
+                        continue  # An unavailable historical origin cannot be invented.
+                    runtime = registry.runtime_for(provider)
+                    binding = {
+                        "plugin_id": plugin_id,
+                        "version": runtime.version,
+                        "identity": printer_pin_identity(config),
+                    }
+                    extensions["bambuddy:provider"] = binding
+                    operation.operation_schema = schema
+                if (
+                    isinstance(binding, dict)
+                    and binding.get("plugin_id") == plugin_id
+                    and binding.get("identity") == printer_pin_identity(config)
+                    and isinstance(binding.get("version"), str)
+                ):
+                    runtime = registry.prepare(plugin_id, binding["version"])
+                    registry.retain_runtime(
+                        runtime.plugin,
+                        f"operation:{operation.id}",
+                        printer_id=operation.printer_id,
+                        reason="pending operation",
+                    )
+            await db.commit()
+
+        previous_plugin = registry._plugins.get(plugin_id)
+        previous = registry.runtime_for(previous_plugin) if previous_plugin is not None else None
+        checkpoint = manager.selection_checkpoint(plugin_id)
+        try:
+            started_services = await lifecycle.prepare(candidate)
+        except Exception as exc:
+            logging.exception("Printer plugin %s candidate %s services failed to start", plugin_id, target)
+            raise HTTPException(409, f"Printer plugin services could not start ({type(exc).__name__})") from exc
+        selected = False
+        try:
+            result = await asyncio.to_thread(
+                manager.select, plugin_id, target, loaded_version=previous.version if previous else None, live=True
+            )
+            selected = True
+            registry.activate(candidate)
+            await asyncio.to_thread(manager.record_load, plugin_id, target)
+            await rollouts.request(plugin_id, candidate)
+        except Exception:
+            if previous is not None:
+                registry.activate(previous)
+            else:
+                registry._plugins.pop(plugin_id, None)
+                registry.loaded_sources.pop(plugin_id, None)
+            if selected:
+                await asyncio.to_thread(manager.restore_selection, plugin_id, checkpoint, expected_version=target)
+            if started_services:
+                await lifecycle.discard(candidate)
+            raise
+        result.update(activation="rolling", restart_required=False, rollout=rollouts.describe(plugin_id))
+        return result
+
+
+async def _require_unconfigured(db: AsyncSession, plugin_id: str):
+    if await _configured(db, plugin_id):
         raise HTTPException(409, "Remove or reassign configured printers before disabling or removing their plugin")
-    ids = {printer.id for printer in printers}
-    loaded_plugin = _registry()._plugins.get(plugin_id)
-    has_connection = False
-    for printer in printers:
-        state = printer_manager.get_status(printer.id)
-        if state is not None and state.state in printer_manager.ACTIVE_PRINT_STATES:
-            raise HTTPException(409, "An affected printer has an active print; wait before changing its plugin")
-        if loaded_plugin is not None and upload_in_progress(printer.id, plugin_id=plugin_id):
-            raise HTTPException(409, "An affected printer is uploading firmware")
-        connection = printer_manager.get_client(printer.id)
-        if connection is not None:
-            has_connection = True
-        predicate = getattr(loaded_plugin, "can_deactivate", None)
-        if connection is not None and predicate is not None:
-            ready = predicate(PrinterConfig.from_printer(printer), connection)
-            if inspect.isawaitable(ready):
-                try:
-                    ready = await asyncio.wait_for(ready, timeout=5)
-                except TimeoutError as exc:
-                    raise HTTPException(409, "The printer plugin did not confirm it can deactivate") from exc
-            if ready is not True:
-                raise HTTPException(409, "The printer plugin reports an active operation")
-    if any(printer_id in ids and not task.done() for task, printer_id in print_scheduler._inflight.values()):
-        raise HTTPException(409, "An affected printer has an in-flight upload")
-    if any(print_scheduler._printer_in_dispatch_hold(printer_id) for printer_id in ids):
-        raise HTTPException(409, "An affected printer has an active dispatch")
-    if allow_unloaded_recovery and loaded_plugin is None and not has_connection:
-        # Activation selects metadata for the next restart; it does not send a
-        # command or replace a running provider. A missing/failed provider needs
-        # this recovery path to reconnect and reconcile durable jobs from the
-        # previous process. Otherwise those very jobs prevent its first load.
-        # Keep their records unchanged, and retain every live-activity check
-        # above. Updating a loaded provider and every destructive action remain
-        # subject to the persisted-job guards below.
-        return
-    if ids:
-        # Retained or filtered queue rows may not be visible on the current
-        # Queue page. Identify the records rather than asking the administrator
-        # to clear a seemingly empty queue; their persisted status still protects
-        # a dispatch whose hardware acknowledgement has not arrived.
-        active_jobs = (
-            await db.execute(
-                select(PrintQueueItem.id, PrintQueueItem.printer_id, PrintQueueItem.status)
-                .where(
-                    PrintQueueItem.printer_id.in_(ids),
-                    PrintQueueItem.status.in_(("printing", "uploading", "starting", "paused")),
-                )
-                .order_by(PrintQueueItem.printer_id, PrintQueueItem.id)
-                .limit(6)
-            )
-        ).all()
-        if active_jobs:
-            names = {printer.id: printer.name for printer in printers}
-            blockers = "; ".join(
-                f"{names[printer_id]} (printer {printer_id}), queue item {item_id} ({status})"
-                for item_id, printer_id, status in active_jobs[:5]
-                if printer_id is not None
-            )
-            remaining = "; additional queue jobs also remain" if len(active_jobs) > 5 else ""
-            raise HTTPException(409, f"An affected printer has an active queue job: {blockers}{remaining}")
-    if ids and await db.scalar(
-        select(func.count())
-        .select_from(PrinterOperation)
-        .where(
-            PrinterOperation.printer_id.in_(ids),
-            PrinterOperation.receipt["status"].as_string().in_(("accepted", "running")),
-        )
-    ):
-        raise HTTPException(409, "An affected printer has an active SDK operation")
 
 
 class PluginVersionSelection(BaseModel):
@@ -290,12 +328,7 @@ async def activate_printer_package(
     _=Depends(_plugin_administrator),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
-    registry = _registry()
-    await _require_idle(db, plugin_id, allow_unloaded_recovery=True)
-    await _validate_saved_configuration(db, plugin_id, body.version)
-    source = registry.loaded_sources.get(plugin_id, {})
-    loaded_version = "bundled" if source.get("source") == "bundled" else source.get("version")
-    return await asyncio.to_thread(PluginManager().select, plugin_id, body.version, loaded_version=loaded_version)
+    return await _apply_selection(db, plugin_id, body.version)
 
 
 @router.post("/{plugin_id}/rollback")
@@ -305,18 +338,7 @@ async def rollback_printer_package(
     _=Depends(_plugin_administrator),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
-    registry = _registry()
-    await _require_idle(db, plugin_id)
-    target = PluginManager().rollback_target(plugin_id, body.version if body else None)
-    await _validate_saved_configuration(db, plugin_id, target)
-    source = registry.loaded_sources.get(plugin_id, {})
-    loaded_version = "bundled" if source.get("source") == "bundled" else source.get("version")
-    return await asyncio.to_thread(
-        PluginManager().rollback,
-        plugin_id,
-        version=target,
-        loaded_version=loaded_version,
-    )
+    return await _apply_selection(db, plugin_id, body.version if body else None, rollback=True)
 
 
 @router.post("/{plugin_id}/enable")
@@ -339,16 +361,30 @@ async def disable_printer_plugin(
     _=Depends(_plugin_administrator),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
-    registry = _registry()
-    await _require_idle(db, plugin_id, require_unconfigured=True)
-    return await asyncio.to_thread(PluginManager().set_enabled, plugin_id, False, loaded=plugin_id in registry._plugins)
+    from backend.app.printers.lifecycle import lifecycle
+
+    async with lifecycle.change_lock(plugin_id):
+        registry = _registry()
+        await _require_unconfigured(db, plugin_id)
+        if any(item["printer_ids"] for item in registry.running_versions(plugin_id)):
+            raise HTTPException(409, "A running printer still uses this plugin")
+        return await asyncio.to_thread(
+            PluginManager().set_enabled, plugin_id, False, loaded=plugin_id in registry._plugins
+        )
 
 
 @router.delete("/{plugin_id}/versions/{version}")
 async def remove_printer_package_version(plugin_id: str, version: str, _=Depends(_plugin_administrator)):
-    registry = _registry()
-    loaded_version = registry.loaded_sources.get(plugin_id, {}).get("version")
-    return await asyncio.to_thread(PluginManager().remove_version, plugin_id, version, loaded_version=loaded_version)
+    from backend.app.printers.lifecycle import lifecycle
+
+    async with lifecycle.change_lock(plugin_id):
+        registry = _registry()
+        loaded_versions = {
+            item.get("version_key", item["version"]) for item in registry.running_versions(plugin_id)
+        } | lifecycle.protected_versions(plugin_id)
+        return await asyncio.to_thread(
+            PluginManager().remove_version, plugin_id, version, loaded_versions=loaded_versions
+        )
 
 
 @router.delete("/{plugin_id}")
@@ -357,9 +393,14 @@ async def remove_printer_plugin(
     _=Depends(_plugin_administrator),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
-    _registry()
-    await _require_idle(db, plugin_id, require_unconfigured=True)
-    return await asyncio.to_thread(PluginManager().remove_plugin, plugin_id)
+    from backend.app.printers.lifecycle import lifecycle
+
+    async with lifecycle.change_lock(plugin_id):
+        registry = _registry()
+        await _require_unconfigured(db, plugin_id)
+        if any(item["printer_ids"] for item in registry.running_versions(plugin_id)):
+            raise HTTPException(409, "A running printer still uses this plugin")
+        return await asyncio.to_thread(PluginManager().remove_plugin, plugin_id)
 
 
 @router.get("/{plugin_id}")

@@ -53,6 +53,14 @@ class HostPrinterState:
     printable_objects: dict = field(default_factory=dict)
     skipped_objects: list = field(default_factory=list)
 
+    @property
+    def _printer_provider(self) -> Any:
+        return self.__dict__.get("_provider_owner")
+
+    @_printer_provider.setter
+    def _printer_provider(self, provider: Any) -> None:
+        self.__dict__["_provider_owner"] = provider
+
     def __getattr__(self, name: str) -> Any:
         # Compatibility names still read by existing core workflows. They do
         # not describe hardware topology; unsupported accessories stay empty.
@@ -130,6 +138,7 @@ class HostPrinterState:
 def state_for_host(config, plugin, state):
     if not isinstance(state, DeviceSnapshot):
         state.plugin_id = config.plugin_id
+        state._printer_provider = plugin
         return state
     from backend.app.printers.sdk.validation import validate_snapshot
 
@@ -171,6 +180,7 @@ def state_for_host(config, plugin, state):
         plugin_id=config.plugin_id,
         device_snapshot=snapshot,
     )
+    result._printer_provider = plugin
     result.material_inventory = [item.model_dump(mode="json") for item in material_inventory(device, snapshot)]
     descriptions = {resource.id: resource for resource in device.resources}
     for resource in snapshot.resources:
@@ -225,6 +235,23 @@ class HostEventBridge:
         collection[job_id] = None
         if len(collection) > 256:
             collection.pop(next(iter(collection)))
+
+    def adopt_lifecycle(self, previous: HostEventBridge, *, exclude_job_ids: set[str] | None = None) -> None:
+        """Retain completed/start deduplication across an observer refresh.
+
+        Sequences and resource snapshots belong to each connection generation
+        and deliberately are not copied to the new provider. An outgoing
+        observer may have seen a lifecycle event whose host callback belongs
+        to another retained observer; those observations must not suppress the
+        original owner's eventual callback when it is revived by rollback.
+        """
+        excluded = exclude_job_ids or set()
+        with previous._lock:
+            started = {key: value for key, value in previous._started_jobs.items() if key not in excluded}
+            terminal = {key: value for key, value in previous._terminal_jobs.items() if key not in excluded}
+        with self._lock:
+            self._started_jobs.update(started)
+            self._terminal_jobs.update(terminal)
 
     def _notify(self, name, value):
         callback = self.callbacks.get(name)

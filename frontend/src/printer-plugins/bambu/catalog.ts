@@ -19,7 +19,7 @@ const enclosure = ['chamber_fan', 'door_sensor'];
 const airduct = [...enclosure, 'airduct'];
 
 export const BAMBU_PLUGIN: PrinterPlugin = {
-  id: 'bambu', name: 'Bambu Lab', version: '1.0.0', api_version: 1, bundled: true,
+  id: 'bambu', name: 'Bambu Lab', version: '1.0.1', api_version: 1, bundled: true,
   capabilities: ['print', 'pause', 'resume', 'stop', 'gcode', 'files', 'camera', 'discovery'],
   models: [
     model('A1', 'A1', 'a1', ['N2S', 'A11'], ['bed_slinger']),

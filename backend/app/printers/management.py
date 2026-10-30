@@ -1,4 +1,4 @@
-"""Durable printer package selection with restart activation and rollback.
+"""Durable printer package selection, retained device versions and rollback.
 
 Package uploads never execute code. Versions are immutable, and the selection
 file is replaced atomically. A failed startup candidate can fall back only to
@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import settings
+from backend.app.printers.contracts import PrinterConfig
 from backend.app.printers.packages import (
     PluginPackageError,
     inspect_package,
@@ -35,6 +37,11 @@ _lock = threading.RLock()
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def printer_pin_identity(config: PrinterConfig) -> str:
+    """Bind a saved printer ID to its provider and device, without credentials."""
+    return hashlib.sha256(f"{config.plugin_id}\0{config.serial_number}".encode()).hexdigest()
 
 
 class PluginManager:
@@ -56,11 +63,61 @@ class PluginManager:
                 raise ValueError("Invalid state shape")
             if not isinstance(state.get("trusted_keys", {}), dict):
                 raise ValueError("Invalid trust store")
+            pins = state.get("printer_pins", {})
+            if not isinstance(pins, dict):
+                raise ValueError("Invalid printer version pins")
+            for printer_id, pin in pins.items():
+                if (
+                    not isinstance(printer_id, str)
+                    or not printer_id.isdecimal()
+                    or int(printer_id) <= 0
+                    or str(int(printer_id)) != printer_id
+                    or not isinstance(pin, dict)
+                    or set(pin) != {"plugin_id", "version", "identity"}
+                    or not isinstance(pin.get("plugin_id"), str)
+                    or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", pin["plugin_id"])
+                    or not isinstance(pin.get("version"), str)
+                    or not 1 <= len(pin["version"]) <= 128
+                    or not isinstance(pin.get("identity"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", pin["identity"])
+                ):
+                    raise ValueError("Invalid saved printer version pin")
             return state
         except (OSError, ValueError, AttributeError) as exc:
             raise PluginPackageError(
                 "Printer plugin selection state cannot be read; restore its last valid backup"
             ) from exc
+
+    def get_printer_pins(self) -> dict[str, dict]:
+        return {printer_id: dict(pin) for printer_id, pin in self.read_state().get("printer_pins", {}).items()}
+
+    def set_printer_pin(self, config: PrinterConfig, version: str) -> None:
+        if config.printer_id is None:
+            return
+        if (
+            config.printer_id <= 0
+            or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", config.plugin_id)
+            or not isinstance(version, str)
+            or not 1 <= len(version) <= 128
+        ):
+            raise PluginPackageError("Invalid printer version pin")
+        with self.transaction() as state:
+            state.setdefault("printer_pins", {})[str(config.printer_id)] = {
+                "plugin_id": config.plugin_id,
+                "version": version,
+                "identity": printer_pin_identity(config),
+            }
+
+    def remove_printer_pin(self, printer_id: int, *, expected: dict | None = None) -> bool:
+        if not self.state_path.exists():
+            return False
+        with self.transaction() as state:
+            pins = state.get("printer_pins", {})
+            current = pins.get(str(printer_id))
+            if current is None or expected is not None and current != expected:
+                return False
+            del pins[str(printer_id)]
+            return True
 
     def _write_state(self, state: dict) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -307,11 +364,47 @@ class PluginManager:
             raise PluginPackageError("No previous printer plugin version is available")
         return target
 
-    def select(self, plugin_id: str, version: str, *, loaded_version: str | None = None) -> dict:
+    def selection_checkpoint(self, plugin_id: str) -> dict:
+        record = self.read_state()["plugins"].get(plugin_id, {})
+        return {
+            key: record[key]
+            for key in (
+                "desired_version",
+                "enabled",
+                "previous_version",
+                "last_known_good",
+                "loaded_version",
+                "last_error",
+                "selected_at",
+            )
+            if key in record
+        }
+
+    def restore_selection(self, plugin_id: str, checkpoint: dict, *, expected_version: str) -> None:
+        with self.transaction() as state:
+            record = state["plugins"].get(plugin_id)
+            if record is None or record.get("desired_version") != expected_version:
+                raise PluginPackageError("Plugin selection changed while activation was being restored")
+            for key in (
+                "desired_version",
+                "enabled",
+                "previous_version",
+                "last_known_good",
+                "loaded_version",
+                "last_error",
+                "selected_at",
+            ):
+                record.pop(key, None)
+            record.update(checkpoint)
+
+    def select(self, plugin_id: str, version: str, *, loaded_version: str | None = None, live: bool = False) -> dict:
         with self.transaction() as state:
             record = state["plugins"].get(plugin_id)
             if record is None:
-                raise PluginPackageError("Printer plugin is not installed")
+                if plugin_id not in BUNDLED_PUBLISHERS or version != "bundled":
+                    raise PluginPackageError("Printer plugin is not installed")
+                record = {"publisher_id": BUNDLED_PUBLISHERS[plugin_id], "name": plugin_id, "versions": {}}
+                state["plugins"][plugin_id] = record
             if version == "bundled":
                 if plugin_id not in BUNDLED_PUBLISHERS:
                     raise PluginPackageError("This printer plugin has no bundled version")
@@ -325,7 +418,11 @@ class PluginManager:
             if previous != version:
                 record["previous_version"] = previous
             record.update(desired_version=version, enabled=True, last_error=None, selected_at=_now())
-            return {"plugin_id": plugin_id, "desired_version": version, "restart_required": loaded_version != version}
+            return {
+                "plugin_id": plugin_id,
+                "desired_version": version,
+                "restart_required": not live and loaded_version != version,
+            }
 
     def rollback(self, plugin_id: str, *, version: str | None = None, loaded_version: str | None = None) -> dict:
         target = self.rollback_target(plugin_id, version)
@@ -333,6 +430,8 @@ class PluginManager:
 
     def set_enabled(self, plugin_id: str, enabled: bool, *, loaded: bool) -> dict:
         with self.transaction() as state:
+            if not enabled and any(pin["plugin_id"] == plugin_id for pin in state.get("printer_pins", {}).values()):
+                raise PluginPackageError("A retained printer still uses this plugin")
             if plugin_id not in state["plugins"]:
                 if plugin_id not in BUNDLED_PUBLISHERS:
                     raise PluginPackageError("Printer plugin is not installed")
@@ -352,17 +451,29 @@ class PluginManager:
             state["plugins"][plugin_id]["enabled"] = enabled
             return {"plugin_id": plugin_id, "enabled": enabled, "restart_required": enabled != loaded}
 
-    def remove_version(self, plugin_id: str, version: str, *, loaded_version: str | None = None) -> dict:
+    def remove_version(
+        self,
+        plugin_id: str,
+        version: str,
+        *,
+        loaded_version: str | None = None,
+        loaded_versions: set[str] | None = None,
+    ) -> dict:
         with self.transaction() as state:
             record = state["plugins"].get(plugin_id, {})
             if version not in record.get("versions", {}):
                 raise PluginPackageError("Printer plugin version is not installed")
-            if version in {
+            protected = {
                 loaded_version,
                 record.get("desired_version"),
                 record.get("last_known_good"),
                 record.get("previous_version"),
-            }:
+            }
+            protected.update(loaded_versions or ())
+            protected.update(
+                pin["version"] for pin in state.get("printer_pins", {}).values() if pin["plugin_id"] == plugin_id
+            )
+            if version in protected:
                 raise PluginPackageError("Selected, loaded and rollback versions cannot be removed")
             self._remove_tree(self.version_path(plugin_id, version))
             del record["versions"][version]
@@ -375,6 +486,8 @@ class PluginManager:
             record = state["plugins"].get(plugin_id)
             if record is None:
                 raise PluginPackageError("Printer plugin is not installed")
+            if any(pin["plugin_id"] == plugin_id for pin in state.get("printer_pins", {}).values()):
+                raise PluginPackageError("A retained printer still uses this plugin")
             record.update(enabled=False, remove_pending=True, desired_version=None)
             return {"plugin_id": plugin_id, "removed": False, "remove_pending": True, "restart_required": True}
 
@@ -386,6 +499,9 @@ class PluginManager:
         with self.transaction() as state:
             for plugin_id, record in list(state["plugins"].items()):
                 if record.get("remove_pending"):
+                    if any(pin["plugin_id"] == plugin_id for pin in state.get("printer_pins", {}).values()):
+                        record["last_error"] = "Plugin removal waits for retained printer versions to be released"
+                        continue
                     self._remove_tree(self.root / "packages" / plugin_id)
                     del state["plugins"][plugin_id]
 
@@ -425,6 +541,9 @@ class PluginManager:
         return {"key_id": key_id, "revoked": True, "restart_required": True}
 
     def describe(self, registry: Any, configured_counts: dict[str, int] | None = None) -> dict:
+        from backend.app.printers.lifecycle import lifecycle
+        from backend.app.printers.rolling import rollouts
+
         registry.load()
         state = self.read_state()
         configured_counts = configured_counts or {}
@@ -438,6 +557,19 @@ class PluginManager:
             desired = record.get("desired_version") or ("bundled" if plugin_id in BUNDLED_PUBLISHERS else None)
             enabled = record.get("enabled", True)
             effective = "bundled" if loaded.get("source") == "bundled" else loaded_version
+            running = registry.running_versions(plugin_id)
+            active_keys = {item.get("version_key", item["version"]) for item in running}
+            for service_key in lifecycle.protected_versions(plugin_id) - active_keys:
+                owner = registry.prepare(plugin_id, service_key)
+                running.append(
+                    {
+                        "version": owner.plugin.version,
+                        "version_key": owner.version,
+                        "source": owner.source["source"],
+                        "printer_ids": [],
+                        "service_owner": True,
+                    }
+                )
             versions = []
             for version, info in record.get("versions", {}).items():
                 compatibility_error = None
@@ -468,6 +600,9 @@ class PluginManager:
                     "id": plugin_id,
                     "name": plugin.name if plugin else record.get("name", plugin_id),
                     "loaded_version": loaded_version,
+                    "running_versions": running,
+                    "rollout": rollouts.describe(plugin_id),
+                    "service_error": lifecycle.errors.get(plugin_id),
                     "bundled_version": registry.bundled_versions.get(plugin_id),
                     "enabled": enabled,
                     "effective_enabled": plugin is not None,
@@ -501,7 +636,9 @@ class PluginManager:
                 for key_id, item in state.get("trusted_keys", {}).items()
             ],
             "policy": {
-                "restart_required_on_changes": True,
+                "restart_required_on_changes": False,
+                "activation": "rolling-per-printer",
+                "restart_required_on_disable_or_remove": True,
                 "trust_mode": "administrator-installed-code",
                 "automatic_dependency_installation": False,
                 "hardware_certification": False,

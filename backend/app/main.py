@@ -2002,11 +2002,12 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     # Tool topology determines cardinality; no pairwise nozzle convention is
     # part of the shared application contract.
     from backend.app.printers.api import config_for_id
-    from backend.app.printers.registry import get_plugin
+    from backend.app.printers.registry import plugin_for
+
     config = config_for_id(printer_id)
     detected_count = None
     if config is not None:
-        provider = get_plugin(config.plugin_id)
+        provider = plugin_for(config)
         if provider.api_version == 2:
             descriptor = provider.describe_device(config)
             detected_count = sum(resource.kind == "tool" for resource in descriptor.resources)
@@ -7678,7 +7679,8 @@ async def _close_out_print(printer_id: int, data: dict):
                 if queue_status == "failed" and not item.error_message:
                     reported_error = data.get("error_message")
                     item.error_message = (
-                        reported_error if isinstance(reported_error, str) and reported_error
+                        reported_error
+                        if isinstance(reported_error, str) and reported_error
                         else _format_hms_error_summary(data.get("hms_errors") or [])
                     )
 
@@ -9490,7 +9492,7 @@ async def _recover_dead_printer_sessions() -> int:
     logger = logging.getLogger(__name__)
     from backend.app.printers.api import config_for_id
     from backend.app.printers.contracts import PrinterConfig
-    from backend.app.printers.registry import get_plugin
+    from backend.app.printers.registry import plugin_for
 
     now = time.monotonic()
     recovered = 0
@@ -9510,9 +9512,7 @@ async def _recover_dead_printer_sessions() -> int:
                     access_code=getattr(client, "access_code", ""),
                     printer_id=printer_id,
                 )
-            attempted = await get_plugin(config.plugin_id).recover_connection(
-                config, client, CONNECTION_WATCHDOG_OFFLINE_GRACE
-            )
+            attempted = await plugin_for(config).recover_connection(config, client, CONNECTION_WATCHDOG_OFFLINE_GRACE)
             if attempted is not None:
                 _connection_watchdog_last_attempt[printer_id] = now
                 recovered += int(attempted)
@@ -10210,14 +10210,9 @@ async def lifespan(app: FastAPI):
     # Optional background workers are owned by enabled printer providers.
     import sys as _host_sys
 
-    from backend.app.printers.registry import list_plugins
+    from backend.app.printers.lifecycle import lifecycle as printer_plugin_lifecycle
 
-    plugin_host_services = list_plugins()
-    for plugin in plugin_host_services:
-        try:
-            await plugin.start_host_services(_host_sys.modules[__name__])
-        except Exception:
-            logging.exception("Failed to start host services for printer plugin %s", plugin.id)
+    await printer_plugin_lifecycle.start(_host_sys.modules[__name__])
 
     # Start printer sensor (nozzle / bed / chamber) history recording
     start_printer_sensor_history_recording()
@@ -10268,27 +10263,14 @@ async def lifespan(app: FastAPI):
 
     start_loop_watchdog()
 
-    # Optional slicer services are supplied by installed packages. Disabling
-    # a provider must not prevent the generic application from starting.
-    from backend.app.printers.registry import list_plugins
+    from backend.app.printers.rolling import rollouts as printer_plugin_rollouts
 
-    plugin_virtual_services = []
-    for plugin in list_plugins():
-        try:
-            service = plugin.virtual_printer_service()
-        except UnsupportedPrinterOperation:
-            continue
-        service.set_session_factory(async_session)
-        service.set_printer_manager(printer_manager)
-        try:
-            await service.sync_from_db()
-            plugin_virtual_services.append(service)
-        except Exception:
-            logging.exception("Failed to start virtual printer service for %s", plugin.id)
+    printer_plugin_rollouts.start()
 
     yield
 
     # Shutdown
+    await printer_plugin_rollouts.stop()
     print_scheduler.stop()
     smart_plug_manager.stop_scheduler()
     ha_sensor_manager.stop()
@@ -10302,11 +10284,6 @@ async def lifespan(app: FastAPI):
     library_trash_service.stop_scheduler()
     archive_purge_service.stop_scheduler()
     obico_detection_service.stop()
-    for plugin in reversed(plugin_host_services):
-        try:
-            await plugin.stop_host_services(_host_sys.modules[__name__])
-        except Exception:
-            logging.exception("Failed to stop host services for printer plugin %s", plugin.id)
     stop_printer_sensor_history_recording()
     stop_runtime_tracking()
     stop_spoolbuddy_watchdog()
@@ -10336,12 +10313,9 @@ async def lifespan(app: FastAPI):
 
     await timelapse_jobs.cancel_all()
     printer_manager.disconnect_all()
+    await printer_plugin_lifecycle.stop()
     slot_unlink_grace.reset()
     await close_spoolman_client()
-
-    # Stop all virtual printer services
-    for service in plugin_virtual_services:
-        await service.stop_all()
 
     await mqtt_smart_plug_service.disconnect(timeout=2)
 
@@ -10919,11 +10893,9 @@ app.include_router(mfa.router, prefix=app_settings.api_prefix)
 app.include_router(bug_report.router, prefix=app_settings.api_prefix)
 app.include_router(users.router, prefix=app_settings.api_prefix)
 app.include_router(groups.router, prefix=app_settings.api_prefix)
-from backend.app.printers.registry import list_plugins as _installed_printer_plugins
+from backend.app.printers.http_gateway import install_plugin_gateway
 
-for _printer_plugin in _installed_printer_plugins():
-    for _legacy_router in _printer_plugin.legacy_http_routers():
-        app.include_router(_legacy_router, prefix=app_settings.api_prefix)
+install_plugin_gateway(app)
 app.include_router(printers.router, prefix=app_settings.api_prefix)
 app.include_router(printer_assets.router, prefix=app_settings.api_prefix)
 app.include_router(printer_devices.router, prefix=app_settings.api_prefix)

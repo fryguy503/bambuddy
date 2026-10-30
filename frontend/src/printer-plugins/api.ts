@@ -42,6 +42,31 @@ export interface ManagedPlugin {
   configured_printers: number;
   source?: string | null;
   host_managed?: boolean;
+  running_versions?: Array<{ version: string; source: string; printer_ids: number[] }>;
+  rollout?: PluginRollout;
+}
+
+export interface PluginPrinterRollout {
+  printer_id: number;
+  name: string;
+  running_version: string | null;
+  desired_version: string | null;
+  /** waiting_idle is retained for older servers; live refreshes use applying. */
+  status: 'current' | 'waiting_idle' | 'applying' | 'error';
+  reason: string | null;
+  error: string | null;
+}
+
+export interface PluginRollout {
+  status: 'current' | 'rolling_out' | 'error';
+  desired_version: string | null;
+  printers: PluginPrinterRollout[];
+}
+
+export interface PluginManagementChange {
+  restart_required?: boolean;
+  rollout?: PluginRollout;
+  [key: string]: unknown;
 }
 
 export interface PluginManagementStatus {
@@ -75,10 +100,10 @@ export const pluginManagementApi = {
     if (!response.ok) throw new ApiError(typeof result.detail === 'string' ? result.detail : result.detail?.message || `HTTP ${response.status}`, response.status);
     return result;
   },
-  activate: (pluginId: string, version: string) => request(`/printer-plugins/${encodeURIComponent(pluginId)}/activate`, { method: 'POST', body: JSON.stringify({ version }) }),
-  rollback: (pluginId: string, version?: string) => request(`/printer-plugins/${encodeURIComponent(pluginId)}/rollback`, { method: 'POST', body: JSON.stringify({ version }) }),
-  enable: (pluginId: string) => request(`/printer-plugins/${encodeURIComponent(pluginId)}/enable`, { method: 'POST' }),
-  disable: (pluginId: string) => request(`/printer-plugins/${encodeURIComponent(pluginId)}/disable`, { method: 'POST' }),
-  removeVersion: (pluginId: string, version: string) => request(`/printer-plugins/${encodeURIComponent(pluginId)}/versions/${encodeURIComponent(version)}`, { method: 'DELETE' }),
-  remove: (pluginId: string) => request(`/printer-plugins/${encodeURIComponent(pluginId)}`, { method: 'DELETE' }),
+  activate: (pluginId: string, version: string) => request<PluginManagementChange>(`/printer-plugins/${encodeURIComponent(pluginId)}/activate`, { method: 'POST', body: JSON.stringify({ version }) }),
+  rollback: (pluginId: string, version?: string) => request<PluginManagementChange>(`/printer-plugins/${encodeURIComponent(pluginId)}/rollback`, { method: 'POST', body: JSON.stringify({ version }) }),
+  enable: (pluginId: string) => request<PluginManagementChange>(`/printer-plugins/${encodeURIComponent(pluginId)}/enable`, { method: 'POST' }),
+  disable: (pluginId: string) => request<PluginManagementChange>(`/printer-plugins/${encodeURIComponent(pluginId)}/disable`, { method: 'POST' }),
+  removeVersion: (pluginId: string, version: string) => request<PluginManagementChange>(`/printer-plugins/${encodeURIComponent(pluginId)}/versions/${encodeURIComponent(version)}`, { method: 'DELETE' }),
+  remove: (pluginId: string) => request<PluginManagementChange>(`/printer-plugins/${encodeURIComponent(pluginId)}`, { method: 'DELETE' }),
 };

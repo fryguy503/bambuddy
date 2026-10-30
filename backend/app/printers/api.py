@@ -6,10 +6,13 @@ printer scopes and permissions as the rest of Bambuddy before calling it.
 
 from __future__ import annotations
 
+import inspect
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
-from backend.app.printers.contracts import PrinterConfig, PrinterPluginError, UnsupportedPrinterOperation
-from backend.app.printers.registry import get_plugin, list_plugins
+from backend.app.printers.contracts import PrinterConfig, PrinterPlugin, PrinterPluginError, UnsupportedPrinterOperation
+from backend.app.printers.registry import get_plugin, list_plugins, plugin_for
 
 if TYPE_CHECKING:
     from backend.app.printers.sdk.host import HostEventBridge
@@ -63,7 +66,68 @@ def config_for_ip(
 
 def plugin_for_ip(ip_address: str, *, plugin_id: str | None = None, printer_id: int | None = None):
     config = config_for_ip(ip_address, plugin_id=plugin_id, printer_id=printer_id)
-    return get_plugin(plugin_id or (config.plugin_id if config else "bambu"))
+    return plugin_for(config) if config is not None else get_plugin(plugin_id or "bambu")
+
+
+def _provider(config: PrinterConfig, connection: Any = None):
+    return connection._plugin if isinstance(connection, PrinterConnectionAdapter) else plugin_for(config)
+
+
+def operation_lease(printer_id: int | None, *, dispatch: bool = False):
+    if printer_id is None:
+        return nullcontext()
+    from backend.app.printers.rolling import PrinterUpdateInProgress, operation_lease as provider_lease, rollouts
+
+    if dispatch and rollouts.dispatch_blocked(printer_id):
+        raise PrinterUpdateInProgress("Printer support is updating before its next job")
+    return provider_lease(printer_id)
+
+
+def leased_call(config: PrinterConfig, callback, *args, dispatch: bool = False, **kwargs):
+    """Keep a version leased through both synchronous and asynchronous I/O."""
+    from backend.app.printers.registry import provider_context, registry
+
+    lease = operation_lease(config.printer_id, dispatch=dispatch)
+    lease.__enter__()
+    reference = None
+    try:
+        owner = getattr(callback, "__self__", None)
+        if isinstance(owner, PrinterPlugin) and owner is not plugin_for(config):
+            raise PrinterPluginError("Printer support changed; obtain its current connection before retrying")
+        if isinstance(owner, PrinterPlugin):
+            reference = "call:" + uuid4().hex
+            registry.retain_runtime(owner, reference, config.printer_id, "request in progress")
+        with (
+            provider_context(config, owner)
+            if isinstance(owner, PrinterPlugin) and config.printer_id is not None
+            else nullcontext()
+        ):
+            result = callback(*args, **kwargs)
+    except BaseException:
+        if reference is not None:
+            registry.release_runtime(reference)
+        lease.__exit__(None, None, None)
+        raise
+    if inspect.isawaitable(result):
+
+        async def finish():
+            try:
+                with (
+                    provider_context(config, owner)
+                    if isinstance(owner, PrinterPlugin) and config.printer_id is not None
+                    else nullcontext()
+                ):
+                    return await result
+            finally:
+                if reference is not None:
+                    registry.release_runtime(reference)
+                lease.__exit__(None, None, None)
+
+        return finish()
+    if reference is not None:
+        registry.release_runtime(reference)
+    lease.__exit__(None, None, None)
+    return result
 
 
 class PrinterAPI:
@@ -74,7 +138,7 @@ class PrinterAPI:
         from backend.app.printers.sdk import validate_device
 
         config = PrinterConfig.from_printer(printer)
-        return validate_device(get_plugin(config.plugin_id).describe_device(config))
+        return validate_device(plugin_for(config).describe_device(config))
 
     def snapshot_device(self, printer: Any, connection: Any):
         from backend.app.printers.sdk import validate_snapshot
@@ -86,47 +150,55 @@ class PrinterAPI:
                 return validate_snapshot(self.describe_device(config), snapshot)
         raw = connection._connection if isinstance(connection, PrinterConnectionAdapter) else connection
         return validate_snapshot(
-            self.describe_device(config), get_plugin(config.plugin_id).snapshot_device(config, raw)
+            self.describe_device(config), _provider(config, connection).snapshot_device(config, raw)
         )
 
     async def invoke(self, printer: Any, connection: Any, request):
         import asyncio
         import inspect
 
+        from backend.app.printers.registry import provider_context
         from backend.app.printers.sdk import OperationRequest, validate_invocation, validate_receipt
 
         config = PrinterConfig.from_printer(printer)
         request = request if isinstance(request, OperationRequest) else OperationRequest.model_validate(request)
-        descriptor = self.describe_device(config)
-        operation = validate_invocation(descriptor, request)
-        raw = connection._connection if isinstance(connection, PrinterConnectionAdapter) else connection
-        plugin = get_plugin(config.plugin_id)
+        with operation_lease(config.printer_id, dispatch=request.operation_id == "job.start"):
+            plugin = _provider(config, connection)
+            if isinstance(connection, PrinterConnectionAdapter) and plugin is not plugin_for(config):
+                raise PrinterPluginError("Printer support changed; obtain its current connection before retrying")
+            descriptor = plugin.describe_device(config)
+            operation = validate_invocation(descriptor, request)
+            raw = connection._connection if isinstance(connection, PrinterConnectionAdapter) else connection
 
-        async def perform():
-            if inspect.iscoroutinefunction(plugin.invoke):
-                return await plugin.invoke(config, raw, request)
-            result = await asyncio.to_thread(plugin.invoke, config, raw, request)
-            return await result if inspect.isawaitable(result) else result
+            async def perform():
+                with provider_context(config, plugin):
+                    if inspect.iscoroutinefunction(plugin.invoke):
+                        return await plugin.invoke(config, raw, request)
+                    result = await asyncio.to_thread(plugin.invoke, config, raw, request)
+                    return await result if inspect.isawaitable(result) else result
 
-        receipt = await asyncio.wait_for(perform(), timeout=operation.timeout_seconds)
-        return validate_receipt(operation, request, receipt)
+            receipt = await asyncio.wait_for(perform(), timeout=operation.timeout_seconds)
+            receipt = validate_receipt(operation, request, receipt)
+            if isinstance(connection, PrinterConnectionAdapter):
+                connection.track_operation(operation, request, receipt)
+            return receipt
 
-    def create_connection(self, printer: Any, **callbacks: Any):
+    def create_connection(self, printer: Any, *, provider: Any = None, **callbacks: Any):
         config = PrinterConfig.from_printer(printer)
-        plugin = get_plugin(config.plugin_id)
+        plugin = provider if provider is not None else plugin_for(config)
         plugin.validate_config(config)
         from backend.app.printers.sdk.host import adapt_callbacks
 
         adapted = adapt_callbacks(config, plugin, callbacks)
         connection = plugin.create_connection(config, **adapted)
         bind_printer(config)
-        adapter = wrap_connection(config, connection)
+        adapter = wrap_connection(config, connection, provider=plugin)
         adapter._event_bridge = adapted.event_bridge
         return adapter
 
     def capabilities(self, printer: Any) -> dict:
         config = PrinterConfig.from_printer(printer)
-        plugin = get_plugin(config.plugin_id)
+        plugin = plugin_for(config)
         model = plugin.model(config.model)
         return {
             "plugin_id": plugin.id,
@@ -138,15 +210,23 @@ class PrinterAPI:
     def execute(self, printer: Any, connection: Any, operation: str, args: dict | None = None):
         config = PrinterConfig.from_printer(printer)
         raw = connection._connection if isinstance(connection, PrinterConnectionAdapter) else connection
-        return get_plugin(config.plugin_id).execute(config, raw, operation, args or {})
+        return leased_call(
+            config,
+            _provider(config, connection).execute,
+            config,
+            raw,
+            operation,
+            args or {},
+            dispatch=operation == "start_print",
+        )
 
     def files(self, printer: Any, operation: str, *args: Any, **kwargs: Any):
         config = PrinterConfig.from_printer(printer)
-        return get_plugin(config.plugin_id).file_operation_for(config, operation, *args, **kwargs)
+        return leased_call(config, plugin_for(config).file_operation_for, config, operation, *args, **kwargs)
 
     def camera(self, printer: Any, operation: str, *args: Any, **kwargs: Any):
         config = PrinterConfig.from_printer(printer)
-        return get_plugin(config.plugin_id).camera_operation_for(config, operation, *args, **kwargs)
+        return leased_call(config, plugin_for(config).camera_operation_for, config, operation, *args, **kwargs)
 
     def serialize_state(self, printer: Any, state: Any, drying_targets: dict | None = None) -> dict:
         from backend.app.printers.serialization import printer_state_to_dict
@@ -165,11 +245,11 @@ class PrinterAPI:
 
     def firmware(self, printer: Any, operation: str, *args: Any, **kwargs: Any):
         config = PrinterConfig.from_printer(printer)
-        return get_plugin(config.plugin_id).firmware_operation(operation, *args, **kwargs)
+        return plugin_for(config).firmware_operation(operation, *args, **kwargs)
 
     def diagnostic(self, printer: Any, operation: str, *args: Any, **kwargs: Any):
         config = PrinterConfig.from_printer(printer)
-        return get_plugin(config.plugin_id).diagnostic_operation(operation, *args, **kwargs)
+        return plugin_for(config).diagnostic_operation(operation, *args, **kwargs)
 
     def cloud(self, plugin_id: str, operation: str, *args: Any, **kwargs: Any):
         return get_plugin(plugin_id).cloud_operation(operation, *args, **kwargs)
@@ -187,11 +267,45 @@ class PrinterConnectionAdapter:
     existing diagnostics, while undeclared methods cannot bypass the contract.
     """
 
-    def __init__(self, config: PrinterConfig, connection: Any):
+    def __init__(self, config: PrinterConfig, connection: Any, *, provider: Any = None):
         self._config = config
         self._connection = connection
-        self._plugin = get_plugin(config.plugin_id)
+        self._plugin = provider if provider is not None else plugin_for(config)
         self._event_bridge: HostEventBridge | None = None
+        self._active_tasks: dict[str, tuple[Any, Any]] = {}
+
+    def track_operation(self, operation, request, receipt) -> None:
+        if receipt.task_id and receipt.status in {"accepted", "running"}:
+            from backend.app.printers.registry import registry
+
+            self._active_tasks[receipt.task_id] = (operation, request)
+            registry.retain_runtime(
+                self._plugin,
+                f"adapter-task:{id(self)}:{receipt.task_id}",
+                self._config.printer_id,
+                "pending operation",
+            )
+
+    async def poll_pending_operations(self) -> bool:
+        """Observe accepted work on its original provider; never resubmit it."""
+        import asyncio
+
+        from backend.app.printers.registry import registry
+        from backend.app.printers.sdk import validate_receipt
+
+        for task_id, (operation, request) in tuple(self._active_tasks.items()):
+            try:
+                result = await asyncio.wait_for(
+                    self._plugin.operation_status(self._config, self._connection, task_id),
+                    timeout=min(operation.timeout_seconds, 5),
+                )
+                receipt = validate_receipt(operation, request, result)
+            except Exception:
+                continue
+            if receipt.status in {"succeeded", "failed", "cancelled"}:
+                self._active_tasks.pop(task_id, None)
+                registry.release_runtime(f"adapter-task:{id(self)}:{task_id}")
+        return not self._active_tasks
 
     @property
     def state(self) -> Any:
@@ -243,7 +357,7 @@ class PrinterConnectionAdapter:
 
         return await printer_api.invoke(
             self._config,
-            self._connection,
+            self,
             OperationRequest(operation_id=operation_id, resource_id=resource_id, parameters=parameters or {}),
         )
 
@@ -256,7 +370,16 @@ class PrinterConnectionAdapter:
         import inspect
 
         if name in self._plugin.operations:
-            result = self._plugin.execute(self._config, self._connection, name, kwargs, positional=args)
+            result = leased_call(
+                self._config,
+                self._plugin.execute,
+                self._config,
+                self._connection,
+                name,
+                kwargs,
+                positional=args,
+                dispatch=name == "start_print",
+            )
             return await result if inspect.isawaitable(result) else result
         operation = {
             "start_print": "job.start",
@@ -286,12 +409,15 @@ class PrinterConnectionAdapter:
         if name in self._plugin.operations:
 
             def command(*args: Any, **kwargs: Any):
-                return self._plugin.execute(
+                return leased_call(
+                    self._config,
+                    self._plugin.execute,
                     self._config,
                     self._connection,
                     name,
                     kwargs,
                     positional=args,
+                    dispatch=name == "start_print",
                 )
 
             return command
@@ -313,10 +439,10 @@ class PrinterConnectionAdapter:
         raise AttributeError(name)
 
 
-def wrap_connection(printer: Any, connection: Any) -> PrinterConnectionAdapter:
+def wrap_connection(printer: Any, connection: Any, *, provider: Any = None) -> PrinterConnectionAdapter:
     if isinstance(connection, PrinterConnectionAdapter):
         return connection
-    return PrinterConnectionAdapter(PrinterConfig.from_printer(printer), connection)
+    return PrinterConnectionAdapter(PrinterConfig.from_printer(printer), connection, provider=provider)
 
 
 async def execute_host_command(connection: Any, name: str, *args: Any, **kwargs: Any) -> Any:

@@ -81,7 +81,6 @@ router = APIRouter(prefix="/printers", tags=["printers"])
 HMS_ACTION_ACK_WAIT_SECONDS = 2.5
 
 
-
 async def _caller_can_view_printer_secrets(user: User | None, db: AsyncSession) -> bool:
     """Whether the caller is trusted enough to see ``access_code`` on a printer
     response. Fail-CLOSED: anything that isn't an authenticated user holding
@@ -1416,11 +1415,11 @@ async def clear_plate(
 
     from backend.app.printers.api import printer_api
     from backend.app.printers.contracts import UnknownPrinterPlugin
-    from backend.app.printers.registry import get_plugin
+    from backend.app.printers.registry import plugin_for
     from backend.app.printers.sdk import OperationRequest
 
     try:
-        provider = get_plugin(printer.plugin_id)
+        provider = plugin_for(printer)
     except UnknownPrinterPlugin:
         provider = None  # An unavailable driver cannot dispatch a new job.
     if provider is not None and provider.api_version == 2:
@@ -1502,8 +1501,6 @@ async def resume_print(
         raise HTTPException(500, "Failed to resume print")
 
     return {"success": True, "message": "Print resume command sent"}
-
-
 
 
 def __getattr__(name):

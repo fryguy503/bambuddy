@@ -10,13 +10,13 @@ but with qos=1 they respond instantly.
 import asyncio
 import json
 import logging
-import os
 import ssl
 import threading
 import time
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import paho.mqtt.client as mqtt
 
@@ -979,9 +979,6 @@ class BambuMQTTClient:
     # extra reconnect for it.
     _request_topic_probe_failures: dict[str, int] = {}
     _REQUEST_TOPIC_PROBE_LIMIT: int = 2
-    # Counter for generating unique MQTT client IDs across instances.
-    _client_instance_counter: int = 0
-
     # #2582: how long to wait for the AMS telemetry to echo back an assignment
     # before declaring it un-confirmed. The printer re-broadcasts tray state
     # every few seconds (and register_assignment_verification nudges a fresh
@@ -5858,8 +5855,10 @@ class BambuMQTTClient:
                   If not provided, will try to get the running loop.
         """
         self._loop = loop
-        BambuMQTTClient._client_instance_counter += 1
-        client_id = f"bambuddy_{self.serial_number}_{os.getpid()}_{BambuMQTTClient._client_instance_counter}"
+        # Observers from isolated plugin versions can overlap during refresh.
+        # A module-local counter repeats across versions and evicts the other
+        # broker session. Every newly created paho session needs its own ID.
+        client_id = f"bambuddy_{self.serial_number}_{uuid4().hex}"
         self._client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,

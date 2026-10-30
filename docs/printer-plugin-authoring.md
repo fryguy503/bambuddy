@@ -59,7 +59,7 @@ bundled version. Existing printer records retain `plugin_id="bambu"`. Updating
 printer support therefore does not require a new Bambuddy release.
 
 See [plugin package management](printer-plugins.md) for staging, activation,
-restart requirements, disabling, removal and rollback behavior.
+live connection refresh, retained work, disabling, removal and rollback behavior.
 
 ## Implementing a plugin
 
@@ -96,19 +96,29 @@ model descriptors. Supply the methods below:
 | `operation_status(config, connection, task_id)` | Return current receipt for a plugin-managed asynchronous task, if used |
 | `cancel_operation(config, connection, task_id)` | Return a cancellation receipt when the operation advertises cancellation |
 | `validate_config(config)` | Validate ownership and the options schema; override to check protocol-specific requirements |
-| `can_deactivate(config, connection)` | Refuse replacement while a provider-specific operation makes it unsafe |
+| `can_deactivate(config, connection)` | Keep an older provider retained while it owns hardware work; this does not block refreshing its display connection |
 | `loaded_materials(state)` | Optional normalized inventory override; default reads stable source/tool IDs from the SDK host projection |
 | `status_fingerprint(state)` | Optional protocol state that should trigger a host status broadcast |
 | `archive_filament_metadata(data, mapping=None)` | Optional normalized archive material fields when an artifact is unavailable |
 | `derive_failure_reason(status, data)` | Optional provider policy for a stable failure code; default accepts normalized `failure_reason` |
 | `cleanup_after_print(printer_id, data, archive_id, logger)` | Optional asynchronous provider cleanup; default performs no device file operations |
-| `start_host_services(host)`, `stop_host_services(host)` | Optional asynchronous provider-owned background services tied to application startup/shutdown |
+| `start_host_services(host)`, `stop_host_services(host)` | Optional asynchronous global services with one owner per provider; old owners remain until their existing work is released |
 
 A connection provides `connect()`, `disconnect(timeout=0)` and
 `check_staleness()`. Core retains the connection; a UI command should not open
 another protocol session. Reconnection and transport error handling belong to
 the plugin. Secrets live in `config.access_code` or `config.options`, not in a
 device descriptor, state snapshot, image URL or operation result.
+
+Live updates connect a replacement observer immediately, including during a
+print. Old and new package versions can therefore have connections to the same
+printer at once. Use unique transport session identifiers for every connection;
+do not reuse a process-local counter across isolated package versions. Connecting,
+reconnecting and reading snapshots must never start, pause, stop or replay work.
+The host retains the original provider context for accepted operations and the
+current print's callbacks until they finish, while new requests use the refreshed
+provider. Preserve stable job IDs so the host can suppress duplicate lifecycle
+events across observers.
 
 ## Typed device events
 
