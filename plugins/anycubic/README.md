@@ -15,8 +15,8 @@ The release artifact is
 [`packages/anycubic/anycubic-0.1.0.bbp`](../../packages/anycubic/anycubic-0.1.0.bbp).
 Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
-1. In **Settings → General → Printer plugins**, upload the `.bbp` file and
-   optionally paste its expected SHA-256 digest.
+1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
+   `.bbp` file and optionally paste its expected SHA-256 digest.
 2. Review the validation result, then activate version `0.1.0`.
 3. Restart Bambuddy to load the selected package. Staging alone does not load
    or enable its code.
