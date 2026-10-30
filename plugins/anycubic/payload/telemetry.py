@@ -6,6 +6,7 @@ never sent on a Bambu wire protocol or used to trigger Bambu archive/spool hooks
 
 import copy
 import math
+import time
 
 from .drying import status_fields
 from .models import get_model
@@ -61,6 +62,7 @@ class Telemetry:
         self.state = PrinterState()
         self.state.raw_data = {"manufacturer": "anycubic", "device_model": selected_model.name, "ams": []}
         self.boxes = {}
+        self.drying_status_observed_at: dict[int, float] = {}
         self.task_id = "-1"  # Firmware's documented current-job command sentinel.
         self.phase = None
         self.lifecycle_observed = False
@@ -76,6 +78,16 @@ class Telemetry:
 
     def _project(self, data, phase=None):
         changed = False
+        name = _text(data.get("filename"))
+        has_task = "taskid" in data or "task_id" in data
+        task = task_id(data.get("taskid", data.get("task_id"))) if has_task else None
+        if (name is not None and name != self.state.gcode_file) or (
+            task is not None and self.state.subtask_id is not None and task != self.state.subtask_id
+        ):
+            # A new native job must not inherit the previous job's metrics, even
+            # when firmware reuses the same filename for another task.
+            self.state.progress = self.state.remaining_time = self.state.layer_num = self.state.total_layers = 0
+            self.state.job_metrics.clear()
         phase = data.get("state", phase)
         if isinstance(phase, str) and phase.lower() in _PHASES:
             self.phase = phase.lower()
@@ -97,8 +109,8 @@ class Telemetry:
             value = number(data.get(source), 0, maximum)
             if value is not None:
                 setattr(self.state, attr, value if attr == "progress" else int(value))
+                self.state.job_metrics.add(attr)
                 changed = True
-        name = _text(data.get("filename"))
         if name is not None:
             if name != self.state.gcode_file:
                 self.task_id = "-1"
@@ -106,8 +118,7 @@ class Telemetry:
             self.state.current_print = self.state.subtask_name = name
             self.state.gcode_file = name
             changed = True
-        if "taskid" in data or "task_id" in data:
-            task = task_id(data.get("taskid", data.get("task_id")))
+        if has_task:
             self.task_id = task or "-1"
             self.state.subtask_id = task
             changed = True
@@ -118,6 +129,7 @@ class Telemetry:
         if not isinstance(raw_boxes, list) or len(raw_boxes) > len(self._ace_ids):
             return False
         updated = {} if full else copy.deepcopy(self.boxes)
+        drying_observed = {} if full else dict(self.drying_status_observed_at)
         seen = set()
         for raw in raw_boxes:
             if not isinstance(raw, dict) or type(raw.get("id")) is not int or raw["id"] not in self._ace_ids:
@@ -198,8 +210,13 @@ class Telemetry:
             dry = raw_drying_status if isinstance(raw_drying_status, dict) else {}
             if identity >= 0 and dry:
                 box["anycubic_drying"] = status_fields(dry, None if unit_full else box.get("anycubic_drying"))
+                if type(dry.get("status")) is int and dry["status"] in (0, 1):
+                    drying_observed[identity] = time.monotonic()
+                elif "status" in dry:
+                    drying_observed.pop(identity, None)
             elif unit_full:
                 box.pop("anycubic_drying", None)
+                drying_observed.pop(identity, None)
             humidity = raw.get("humidity") if identity >= 0 else None
             if humidity is None:
                 humidity = dry.get("humidity")
@@ -222,6 +239,7 @@ class Telemetry:
                 if (text := _text(raw.get(source), 128)) is not None:
                     box[target] = text
         self.boxes = updated
+        self.drying_status_observed_at = drying_observed
         self.state.raw_data["ams"] = [copy.deepcopy(updated[i]) for i in sorted(updated)]
         return True
 
@@ -243,6 +261,7 @@ class Telemetry:
                 self.state.subtask_id = None
                 self.task_id = "-1"
                 self.state.progress = self.state.remaining_time = self.state.layer_num = self.state.total_layers = 0
+                self.state.job_metrics.clear()
                 changed = True
             elif data.get("state") == "busy":
                 if isinstance(data.get("project"), dict):

@@ -2,11 +2,14 @@
 
 import hashlib
 import json
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import PurePosixPath
 
 from backend.app.printers.sdk import (
     DeviceDescriptor,
     DeviceSnapshot,
+    JobProgress,
     JobRequest,
     OperationDescriptor,
     ResourceDescriptor,
@@ -16,7 +19,7 @@ from backend.app.printers.sdk import (
 )
 
 from .models import get_model
-from .protocol import AnycubicError
+from .protocol import AnycubicError, task_id
 
 
 def device_id(config):
@@ -416,6 +419,88 @@ def describe(plugin, config, native=None):
     )
 
 
+def observed_job(native, owned: JobProgress | None = None) -> JobProgress | None:
+    """Project current native telemetry without acquiring ownership of a print.
+
+    A printer/slicer-started print has no Bambuddy dispatch identity. It is a
+    snapshot observation only: no journal, lifecycle callback or inventory
+    accounting is created by this function.
+    """
+    state = native.state
+    if (
+        not state.connected
+        or native.is_stale
+        or not native._last_state_time
+        or not 0 <= time.monotonic() - native._last_state_time <= native.STALE_TIMEOUT
+    ):
+        return None
+    phase = {
+        "RUNNING": "printing",
+        "PAUSE": "paused",
+        "PREPARE": "preparing",
+        "FINISH": "completed",
+        "FAILED": "cancelled" if native._telemetry.phase in {"stoped", "stopped"} else "failed",
+    }.get(state.state)
+    if phase is None:
+        return None
+    identity = task_id(state.subtask_id)
+    filename = PurePosixPath((state.gcode_file or "").replace("\\", "/")).name or None
+    metrics = state.job_metrics
+    native_phase = native._telemetry.phase
+    detail = (
+        native_phase.replace("_", " ").capitalize()
+        if native_phase
+        in {
+            "preheating",
+            "auto_leveling",
+            "vibrating",
+            "flow_calibrating",
+            "downloading",
+            "checking",
+            "pausing",
+            "resuming",
+            "stopping",
+        }
+        else None
+    )
+    observation = JobProgress(
+        job_id=identity,
+        state=phase,
+        phase=detail,
+        name=state.current_print or filename,
+        fraction=max(0, min(1, state.progress / 100)) if "progress" in metrics else None,
+        remaining_seconds=max(0, state.remaining_time) * 60 if "remaining_time" in metrics else None,
+        layer=max(0, state.layer_num) if "layer_num" in metrics else None,
+        total_layers=max(0, state.total_layers) if "total_layers" in metrics else None,
+        active_tool_ids=["tool:primary"],
+        extensions={
+            "origin": "printer",
+            "owned_by_bambuddy": False,
+            "native_job_id": identity,
+            "native_filename": filename,
+        },
+    )
+    expected = task_id(owned.extensions.get("native_job_id")) if owned else None
+    expected_filename = owned.extensions.get("native_filename") if owned else None
+    if owned is not None and (
+        expected is not None
+        and identity == expected
+        and (not expected_filename or not filename or expected_filename == filename)
+    ):
+        return owned.model_copy(
+            update={
+                "state": observation.state,
+                "phase": observation.phase,
+                "fraction": observation.fraction,
+                "remaining_seconds": observation.remaining_seconds,
+                "layer": observation.layer,
+                "total_layers": observation.total_layers,
+                "extensions": {**owned.extensions, "origin": "bambuddy", "owned_by_bambuddy": True},
+            }
+        )
+    return observation
+
+
 def snapshot(plugin, config, native, sequence=0, job=None, links=None, names=None) -> DeviceSnapshot:
     links = links or {}
     names = names or {}
@@ -423,11 +508,14 @@ def snapshot(plugin, config, native, sequence=0, job=None, links=None, names=Non
     state = native.state
     now = datetime.now(timezone.utc)
     stale = not state.connected or native.is_stale
+    job = observed_job(native, job)
     quality = "stale" if stale else "known"
     values = []
     for resource in descriptor.resources:
         data = {}
         available = state.connected
+        resource_status = None
+        drying_fresh = False
         if resource.id.startswith("heater:"):
             kind = "nozzle" if resource.id.endswith("nozzle") else "bed"
             data = {"temperature": state.temperatures.get(kind), "target": state.temperatures.get(kind + "_target")}
@@ -442,14 +530,24 @@ def snapshot(plugin, config, native, sequence=0, job=None, links=None, names=Non
             key = {"part": "cooling_fan_speed", "aux": "big_fan1_speed", "chamber": "big_fan2_speed"}[fan]
             data = {"percent": getattr(state, key, None)}
         elif resource.kind == "feeder":
-            box = native._telemetry.boxes.get(resource.metadata["native_box_id"])
+            box_id = resource.metadata["native_box_id"]
+            box = native._telemetry.boxes.get(box_id)
             available = bool(state.connected and box is not None)
+            resource_status = "unknown"
             if box is not None:
                 data = {
                     "temperature": box.get("temp"),
                     "humidity": box.get("humidity_raw"),
                     "drying": box.get("anycubic_drying"),
                 }
+                observed = native._telemetry.drying_status_observed_at.get(box_id)
+                drying_fresh = (
+                    not stale and observed is not None and 0 <= time.monotonic() - observed <= native.STALE_TIMEOUT
+                )
+                if drying_fresh:
+                    resource_status = {0: "idle", 1: "drying"}.get(
+                        box.get("anycubic_drying", {}).get("status"), "unknown"
+                    )
         elif resource.kind == "material_source" and resource.id != "material:external":
             box_id, slot = native_slot(resource.id)
             box = native._telemetry.boxes.get(box_id, {})
@@ -469,7 +567,9 @@ def snapshot(plugin, config, native, sequence=0, job=None, links=None, names=Non
         properties = {
             key: TelemetryValue(
                 value=value,
-                quality=quality if value is not None else "unknown",
+                quality=("stale" if key == "drying" and not drying_fresh else quality)
+                if value is not None
+                else "unknown",
                 unit=resource.properties[key].unit,
                 observed_at=now,
                 valid_until=now + timedelta(seconds=60),
@@ -477,7 +577,9 @@ def snapshot(plugin, config, native, sequence=0, job=None, links=None, names=Non
             for key, value in data.items()
             if key in resource.properties
         }
-        values.append(ResourceState(resource_id=resource.id, available=available, properties=properties))
+        values.append(
+            ResourceState(resource_id=resource.id, available=available, status=resource_status, properties=properties)
+        )
     return DeviceSnapshot(
         device_id=descriptor.device_id,
         descriptor_revision=descriptor.revision,

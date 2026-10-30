@@ -186,8 +186,11 @@ class AnycubicConnection:
             job_id = record["job_id"]
             if filename != record.get("native_filename"):
                 continue
-            expected = record.get("native_job_id")
-            if expected and task and expected != task:
+            expected = native_task_id(record.get("native_job_id"))
+            if expected is None or task != expected:
+                # A filename alone cannot attribute a printer-started job to
+                # this durable dispatch. The native receipt must establish its
+                # real identity first; a later report can then acquire it.
                 continue
             active = state.state in {"RUNNING", "PAUSE", "PREPARE"}
             terminal = {"FINISH": "completed", "FAILED": "failed"}.get(state.state)
@@ -203,7 +206,7 @@ class AnycubicConnection:
                 name=record.get("uri"),
                 artifact_uri=record.get("uri"),
                 fraction=max(0, min(1, state.progress / 100)),
-                remaining_seconds=max(0, state.remaining_time),
+                remaining_seconds=max(0, state.remaining_time) * 60,
                 layer=max(0, state.layer_num),
                 total_layers=max(0, state.total_layers),
                 active_tool_ids=["tool:primary"],

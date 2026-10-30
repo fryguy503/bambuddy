@@ -16,6 +16,9 @@ class NativeState:
     remaining_time: int = 0
     layer_num: int = 0
     total_layers: int = 0
+    # Native remain_time is minutes; the SDK projection converts it to seconds.
+    # Only explicitly observed metrics may become known values in that snapshot.
+    job_metrics: set[str] = field(default_factory=set)
     speed_level: int | None = None
     chamber_light: bool | None = None
     big_fan2_speed: int | None = None

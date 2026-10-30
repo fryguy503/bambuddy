@@ -11,7 +11,7 @@ from backend.app.printers.contracts import (
     PrinterPluginError,
     UnsupportedPrinterOperation,
 )
-from backend.app.printers.sdk import DeviceSnapshot
+from backend.app.printers.sdk import DeviceSnapshot, PluginManifest
 
 from .models import MODELS, get_model
 from .protocol import fingerprint, private_host
@@ -39,7 +39,7 @@ _CAPABILITIES = frozenset(
 class AnycubicPrinterPlugin(PrinterPlugin):
     id = "anycubic"
     name = "Anycubic signed LAN"
-    version = "0.1.0"
+    version = "0.1.1"
     api_version = 2
     publisher_id = "fryguy503"
     capabilities = _CAPABILITIES
@@ -83,6 +83,14 @@ class AnycubicPrinterPlugin(PrinterPlugin):
 
     def __init__(self):
         self.connections: dict[str, AnycubicConnection] = {}
+
+    def sdk_manifest(self) -> PluginManifest:
+        manifest = super().sdk_manifest()
+        if self._installed_manifest is not None:
+            return manifest
+        # Anonymous printer-origin snapshot jobs require SDK 2.1. Existing
+        # 2.0 hosts must reject this version from static metadata before import.
+        return manifest.model_copy(update={"requires_api": ">=2.1.0,<3.0.0"})
 
     def connection_fields(self):
         return {

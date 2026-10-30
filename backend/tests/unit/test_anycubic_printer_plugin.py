@@ -47,7 +47,7 @@ def config_for(model="Kobra S1"):
 
 @pytest.fixture(scope="module")
 def release(tmp_path_factory):
-    output = tmp_path_factory.mktemp("anycubic-release") / "anycubic-0.1.0.bbp"
+    output = tmp_path_factory.mktemp("anycubic-release") / "anycubic-0.1.1.bbp"
     manifest = build(SOURCE, output)
     return manifest, output
 
@@ -67,7 +67,7 @@ def installed(release, tmp_path, tmp_path_factory, monkeypatch):
     manager = PluginManager()
     manifest, output = release
     staged = manager.stage(output.read_bytes())
-    assert (staged["plugin_id"], staged["version"], staged["activation"]) == ("anycubic", "0.1.0", "staged")
+    assert (staged["plugin_id"], staged["version"], staged["activation"]) == ("anycubic", "0.1.1", "staged")
     with pytest.raises(UnknownPrinterPlugin):
         before.get("anycubic")
     manager.select("anycubic", manifest.version)
@@ -86,7 +86,7 @@ def test_release_inventory_images_and_identity_are_installable(release):
     inspected = inspect_package(output.read_bytes())
     assert (manifest.plugin_id, manifest.version, manifest.publisher_id, manifest.api_version) == (
         "anycubic",
-        "0.1.0",
+        "0.1.1",
         "fryguy503",
         2,
     )
@@ -97,6 +97,7 @@ def test_release_inventory_images_and_identity_are_installable(release):
     assert output.stat().st_size < min(MAX_PACKAGE_BYTES, 100 * 1024 * 1024)
     assert inspected.manifest == manifest
     assert len([name for name in manifest.files if name.startswith("assets/printers/")]) == 7
+    assert manifest.requires_api == ">=2.1.0,<3.0.0"
     expected = hashlib.sha256(output.read_bytes()).hexdigest()
     assert output.with_suffix(".bbp.sha256").read_text(encoding="utf-8") == f"{expected}  {output.name}\n"
     with zipfile.ZipFile(output) as archive:
@@ -113,11 +114,41 @@ def test_release_inventory_images_and_identity_are_installable(release):
 
 def test_committed_release_matches_current_payload(release):
     _manifest, rebuilt = release
-    committed = SOURCE.parents[2] / "packages" / "anycubic" / "anycubic-0.1.0.bbp"
+    committed = SOURCE.parents[2] / "packages" / "anycubic" / "anycubic-0.1.1.bbp"
     assert committed.is_file(), "Run python plugins/anycubic/build.py before publishing this release"
     assert committed.read_bytes() == rebuilt.read_bytes(), "Rebuild the release after changing its payload"
     expected = hashlib.sha256(committed.read_bytes()).hexdigest()
     assert committed.with_suffix(".bbp.sha256").read_text(encoding="utf-8") == f"{expected}  {committed.name}\n"
+
+
+def test_published_010_upgrades_to_011_only_after_registry_restart(release, tmp_path, monkeypatch):
+    from backend.app.printers import registry as registry_module
+
+    monkeypatch.setattr(settings, "printer_plugin_dir", tmp_path / "plugins")
+    monkeypatch.setattr(registry_module, "entry_points", lambda **kwargs: [])
+    manager = PluginManager()
+    original = SOURCE.parents[2] / "packages" / "anycubic" / "anycubic-0.1.0.bbp"
+    original_bytes = original.read_bytes()
+    assert (
+        hashlib.sha256(original_bytes).hexdigest() == "6cffe5bf562ae3397a228d0b2a2c8ba4801822119d2679345489866befd4babb"
+    )
+    manager.stage(original_bytes)
+    manager.select("anycubic", "0.1.0")
+    running = PrinterPluginRegistry()
+    monkeypatch.setattr(registry_module, "registry", running)
+    assert running.get("anycubic").version == "0.1.0"
+    _, updated = release
+    manager.stage(updated.read_bytes())
+    manager.select("anycubic", "0.1.1", loaded_version="0.1.0")
+    assert running.get("anycubic").version == "0.1.0"
+    restarted = PrinterPluginRegistry()
+    monkeypatch.setattr(registry_module, "registry", restarted)
+    assert restarted.get("anycubic").version == "0.1.1"
+    assert restarted.get("anycubic").__class__.__module__ != running.get("anycubic").__class__.__module__
+    state = manager.read_state()["plugins"]["anycubic"]
+    assert {"0.1.0", "0.1.1"} <= state["versions"].keys()
+    assert state["previous_version"] == "0.1.0"
+    assert original.read_bytes() == original_bytes
 
 
 def test_release_is_identical_for_lf_and_crlf_checkouts(tmp_path):
