@@ -20,6 +20,7 @@ _thread_lock = threading.RLock()
 _MAX_BYTES = 8 * 1024 * 1024
 _PENDING = {"intent", "submitting", "publishing", "unknown", "accepted", "running"}
 _OUTCOMES = {"completed", "failed", "cancelled", "aborted"}
+_TERMINAL = _OUTCOMES | {"rejected", "resolved"}
 _STATUSES = _PENDING | {
     "completed",
     "failed",
@@ -164,6 +165,12 @@ class Journal:
     def _path(self, job_id):
         return self.directory / "jobs" / (_digest(job_id) + ".json")
 
+    def _dispatch_record(self, job_id, record):
+        # Plate clearance and enclosure labels share the storage machinery,
+        # but their metadata states legitimately change more than once.
+        metadata_key = job_id == "plate:" + self.printer_key or job_id.startswith("name:" + self.printer_key + ":")
+        return not metadata_key or any(key in record for key in ("bindings", "uri", "native_filename"))
+
     def _record(self, value, job_id=None):
         record = value.get("record")
         if not isinstance(record, dict):
@@ -183,19 +190,50 @@ class Journal:
         pending = record.get("pending_outcome")
         if pending is not None and (not isinstance(pending, str) or pending not in _OUTCOMES):
             raise JournalError("Dispatch journal accounting outcome is invalid")
+        finalized = record.get("finalized_outcome")
+        if finalized is not None:
+            if (
+                not isinstance(finalized, str)
+                or finalized not in _TERMINAL
+                or not self._dispatch_record(identity, record)
+                or type(record.get("finalized_accounting_pending")) is not bool
+                or record["finalized_accounting_pending"]
+                and finalized not in _OUTCOMES
+            ):
+                raise JournalError("Dispatch journal final outcome is invalid")
+            # Published older versions preserve unknown fields when writing a
+            # delayed RUNNING report. This marker remains authoritative even
+            # when that legacy writer does not understand it.
+            record["status"] = finalized
+            record["pending_outcome"] = finalized if record["finalized_accounting_pending"] else None
+        elif record["status"] in _TERMINAL and self._dispatch_record(identity, record):
+            record["finalized_outcome"] = record["status"]
+            record["finalized_accounting_pending"] = pending == record["status"] and pending in _OUTCOMES
+            record["pending_outcome"] = record["status"] if record["finalized_accounting_pending"] else None
+        return record
+
+    def _validated_record(self, value, path, job_id=None):
+        before = dict(value["record"]) if isinstance(value.get("record"), dict) else None
+        record = self._record(value, job_id)
+        if self._path(record["job_id"]) != path:
+            raise JournalError("Dispatch journal filename identity does not match")
+        if record != before:
+            # Callers hold storage_lock, so healing also makes the terminal
+            # state visible to a still-running legacy observer's next read.
+            write_json(path, value)
         return record
 
     def get(self, job_id):
         with storage_lock(self.printer_key):
             path = self._path(job_id)
             value = read_json(path, {"format_version": 1})
-            return self._record(value, job_id) if path.exists() else None
+            return self._validated_record(value, path, job_id) if path.exists() else None
 
     def begin(self, job_id, record) -> bool:
         with storage_lock(self.printer_key):
             path = self._path(job_id)
             if path.exists():
-                self._record(read_json(path, {}), job_id)
+                self._validated_record(read_json(path, {}), path, job_id)
                 return False
             now = datetime.now(timezone.utc).isoformat()
             value = {**record, "job_id": job_id, "printer_key": self.printer_key, "created_at": now, "updated_at": now}
@@ -208,8 +246,20 @@ class Journal:
         with storage_lock(self.printer_key):
             path = self._path(job_id)
             value = read_json(path, {"format_version": 1})
-            record = self._record(value, job_id)
+            record = self._validated_record(value, path, job_id)
+            if "finalized_outcome" in fields or "finalized_accounting_pending" in fields:
+                raise JournalError("Final outcome markers are managed by the dispatch journal")
+            finalized = record.get("finalized_outcome")
+            if finalized is not None:
+                if fields.get("status", finalized) != finalized:
+                    return dict(record)
+                if fields.get("pending_outcome") is not None and (
+                    not record["finalized_accounting_pending"] or fields["pending_outcome"] != finalized
+                ):
+                    return dict(record)
             record.update(fields)
+            if finalized is not None and "pending_outcome" in fields:
+                record["finalized_accounting_pending"] = fields["pending_outcome"] is not None
             record.update(
                 job_id=job_id, printer_key=self.printer_key, updated_at=datetime.now(timezone.utc).isoformat()
             )
@@ -223,7 +273,7 @@ class Journal:
         with storage_lock(self.printer_key):
             result = []
             for path in sorted((self.directory / "jobs").glob("*.json")):
-                record = self._record(read_json(path, {}))
+                record = self._validated_record(read_json(path, {}), path)
                 if self._path(record["job_id"]) != path:
                     raise JournalError("Dispatch journal filename identity does not match")
                 if record.get("status") in _PENDING:
@@ -249,7 +299,7 @@ class Journal:
         with storage_lock(self.printer_key):
             result = []
             for path in sorted((self.directory / "jobs").glob("*.json")):
-                record = self._record(read_json(path, {}))
+                record = self._validated_record(read_json(path, {}), path)
                 if self._path(record["job_id"]) != path:
                     raise JournalError("Dispatch journal filename identity does not match")
                 pending = record.get("pending_outcome")

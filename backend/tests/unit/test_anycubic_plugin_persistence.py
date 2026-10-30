@@ -2,9 +2,11 @@
 
 import json
 import multiprocessing
+import types
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
 
@@ -164,3 +166,116 @@ def test_accounting_retry_scan_excludes_hardware_pending_and_validates_records(s
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(persistence.JournalError):
         journal.pending_accounting()
+
+
+@pytest.fixture(params=["0.1.0", "0.1.1"])
+def legacy_persistence(request):
+    """Run the real immutable legacy implementation in its own namespace."""
+    archive = Path(__file__).resolve().parents[3] / "packages/anycubic" / f"anycubic-{request.param}.bbp"
+    with zipfile.ZipFile(archive) as package:
+        source = package.read("payload/persistence.py")
+    module = types.ModuleType("legacy_anycubic_" + request.param.replace(".", "_"))
+    exec(compile(source, str(archive) + "/payload/persistence.py", "exec"), module.__dict__)
+    return module
+
+
+@pytest.mark.parametrize("accounting_pending", [False, True])
+def test_legacy_observer_stale_write_after_new_completion_is_healed(
+    state_directory, legacy_persistence, accounting_pending
+):
+    modern, legacy = persistence.Journal("printer"), legacy_persistence.Journal("printer")
+    assert modern.begin("job", {"status": "running", "native_job_id": "42"})
+    captured, completed = Event(), Event()
+
+    def delayed_legacy_observer():
+        stale = legacy.unresolved()[0]
+        captured.set()
+        assert completed.wait(timeout=5)
+        # This is the active-report write made by an unmodified older version.
+        return legacy.update(stale["job_id"], status="running", native_job_id="42")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        delayed = executor.submit(delayed_legacy_observer)
+        try:
+            assert captured.wait(timeout=5)
+            finalized = modern.update(
+                "job", status="completed", pending_outcome="completed" if accounting_pending else None
+            )
+            assert finalized["finalized_outcome"] == "completed"
+        finally:
+            completed.set()
+        assert delayed.result(timeout=5)["status"] == "running"
+
+    # Prove the actual legacy code regressed the ordinary field and preserved
+    # the unknown marker before the new reader repairs it under the OS lock.
+    assert legacy.get("job")["status"] == "running"
+    assert modern.unresolved() == []
+    healed = legacy.get("job")
+    assert healed["status"] == "completed"
+    assert healed["pending_outcome"] == ("completed" if accounting_pending else None)
+    assert legacy.unresolved() == []
+    assert len(modern.pending_accounting()) == int(accounting_pending)
+
+    modern.update("job", pending_outcome=None)
+    # A second old observer's terminal report must not rearm accounting after
+    # it has already committed successfully or been intentionally skipped.
+    legacy.update("job", status="running", pending_outcome="completed")
+    assert modern.pending_accounting() == []
+    assert legacy.get("job")["status"] == "completed"
+    assert legacy.get("job")["pending_outcome"] is None
+
+
+def test_new_stale_active_report_stamps_and_preserves_legacy_completion(state_directory, legacy_persistence):
+    modern, legacy = persistence.Journal("printer"), legacy_persistence.Journal("printer")
+    assert legacy.begin("job", {"status": "running"})
+    stale = modern.unresolved()[0]
+    legacy.update("job", status="completed", pending_outcome="completed")
+    result = modern.update(stale["job_id"], status="running")
+    assert result["status"] == result["finalized_outcome"] == "completed"
+    assert result["pending_outcome"] == "completed"
+    legacy.update("job", status="accepted")
+    assert modern.get("job")["status"] == "completed"
+    assert legacy.unresolved() == []
+
+
+def test_pending_terminal_observation_remains_replayable_until_host_cleanup(state_directory, legacy_persistence):
+    modern, legacy = persistence.Journal("printer"), legacy_persistence.Journal("printer")
+    assert legacy.begin("job", {"status": "running"})
+    legacy.update("job", pending_outcome="completed")
+    observed = modern.get("job")
+    assert observed["status"] == "running" and "finalized_outcome" not in observed
+    assert [record["job_id"] for record in modern.unresolved()] == ["job"]
+    assert modern.pending_accounting() == []
+    modern.update("job", status="completed", pending_outcome="completed")
+    assert modern.get("job")["finalized_outcome"] == "completed"
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled", "aborted", "resolved", "rejected"])
+def test_finalized_dispatch_cannot_regress_or_change_outcome(state_directory, outcome):
+    journal = persistence.Journal("printer")
+    assert journal.begin("job", {"status": "unknown"})
+    finalized = journal.update("job", status=outcome)
+    for stale in ("intent", "accepted", "running", "unknown", "failed", "completed"):
+        assert journal.update("job", status=stale)["status"] == outcome
+    assert journal.get("job")["finalized_outcome"] == finalized["status"]
+    assert journal.unresolved() == []
+
+
+def test_plate_and_label_metadata_remain_mutable_across_legacy_versions(state_directory, legacy_persistence):
+    modern, legacy = persistence.Journal("printer"), legacy_persistence.Journal("printer")
+    assert legacy.begin("plate:printer", {"status": "plate_required"})
+    for status in ("resolved", "plate_required", "resolved"):
+        legacy.update("plate:printer", status=status)
+        record = modern.get("plate:printer")
+        assert record["status"] == status and "finalized_outcome" not in record
+    assert modern.begin("name:printer:ace:0", {"status": "metadata", "name": "Before"})
+    legacy.update("name:printer:ace:0", name="After")
+    assert modern.get("name:printer:ace:0")["name"] == "After"
+
+
+@pytest.mark.parametrize("job_id", ["plate:printer", "name:printer:opaque-dispatch"])
+def test_opaque_dispatch_ids_with_metadata_like_prefixes_still_finalize(state_directory, job_id):
+    journal = persistence.Journal("printer")
+    assert journal.begin(job_id, {"status": "running", "bindings": {}, "uri": "native.gcode"})
+    journal.update(job_id, status="completed")
+    assert journal.update(job_id, status="running")["status"] == "completed"

@@ -39,7 +39,7 @@ _CAPABILITIES = frozenset(
 class AnycubicPrinterPlugin(PrinterPlugin):
     id = "anycubic"
     name = "Anycubic signed LAN"
-    version = "0.1.1"
+    version = "0.1.2"
     api_version = 2
     publisher_id = "fryguy503"
     capabilities = _CAPABILITIES
