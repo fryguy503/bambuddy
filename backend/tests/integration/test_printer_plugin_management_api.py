@@ -25,6 +25,23 @@ def management_api(tmp_path, monkeypatch):
     return PluginManager(tmp_path / "printer-plugins")
 
 
+def _operation_record(printer_id, status="running"):
+    from backend.app.models.printer_operation import PrinterOperation
+
+    return PrinterOperation(
+        id=str(uuid4()),
+        printer_id=printer_id,
+        operation_id="example.calibrate",
+        idempotency_key="calibration",
+        request_digest="0" * 64,
+        request_data={},
+        operation_schema={},
+        receipt={"status": status},
+        provider_task_id="calibration-1",
+        process_id=str(uuid4()),
+    )
+
+
 async def test_stage_select_and_status_are_truthful_about_restart(async_client, management_api, tmp_path):
     marker = tmp_path / "executed.txt"
     response = await async_client.post(
@@ -116,29 +133,136 @@ async def test_inflight_upload_prevents_selection(async_client, management_api, 
     assert "upload" in response.json()["detail"]
 
 
-async def test_running_sdk_operation_blocks_upgrade(async_client, management_api, printer_factory, db_session):
-    from backend.app.models.printer_operation import PrinterOperation
+@pytest.mark.parametrize("active_status", ["printing", "uploading", "starting", "paused"])
+async def test_queue_guard_names_only_active_rows_for_affected_printers(
+    async_client, management_api, printer_factory, db_session, active_status
+):
+    from backend.app.models.print_queue import PrintQueueItem
 
     management_api.stage(package_bytes())
+    management_api.stage(package_bytes(version="1.1.0"))
+    management_api.select("example", "1.0.0")  # Load a real provider before testing an upgrade.
+    affected = await printer_factory(plugin_id="example", name="Affected printer")
+    unrelated = await printer_factory(plugin_id="bambu", name="Unrelated printer")
+    unrelated_job = PrintQueueItem(printer_id=unrelated.id, status=active_status)
+    cancelled_job = PrintQueueItem(printer_id=affected.id, status="cancelled")
+    db_session.add_all([unrelated_job, cancelled_job])
+    await db_session.commit()
+
+    # Cancelled order-history rows and another provider's active jobs must not
+    # prevent selection. This also covers an otherwise empty affected queue.
+    response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
+    assert response.status_code == 200, response.text
+
+    active_job = PrintQueueItem(printer_id=affected.id, status=active_status)
+    db_session.add(active_job)
+    await db_session.commit()
+    response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.1.0"})
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "Affected printer" in detail
+    assert f"printer {affected.id}" in detail
+    assert f"queue item {active_job.id} ({active_status})" in detail
+    assert "Unrelated printer" not in detail
+    assert f"queue item {unrelated_job.id} (" not in detail
+    assert f"queue item {cancelled_job.id} (" not in detail
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] == "1.0.0"
+    await db_session.refresh(active_job)
+    assert active_job.status == active_status  # Inspection never cancels a job.
+
+
+async def test_running_sdk_operation_blocks_upgrade(async_client, management_api, printer_factory, db_session):
+    management_api.stage(package_bytes())
+    management_api.select("example", "1.0.0")
     printer = await printer_factory(plugin_id="example", name="Calibrating printer")
-    db_session.add(
-        PrinterOperation(
-            id=str(uuid4()),
-            printer_id=printer.id,
-            operation_id="example.calibrate",
-            idempotency_key="calibration",
-            request_digest="0" * 64,
-            request_data={},
-            operation_schema={},
-            receipt={"status": "running"},
-            provider_task_id="calibration-1",
-            process_id=str(uuid4()),
-        )
-    )
+    db_session.add(_operation_record(printer.id))
     await db_session.commit()
     response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
     assert response.status_code == 409, response.text
     assert "SDK operation" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("operation_status", ["accepted", "running"])
+async def test_first_activation_restores_missing_provider_without_cancelling_durable_jobs(
+    async_client, management_api, printer_factory, db_session, tmp_path, operation_status
+):
+    from backend.app.models.print_queue import PrintQueueItem
+    from backend.app.printers.registry import registry
+    from backend.app.services.printer_manager import printer_manager
+
+    marker = tmp_path / "recovery-import.txt"
+    management_api.stage(package_bytes(marker=marker))
+    printer = await printer_factory(plugin_id="example", name="Migrated printer")
+    queue_job = PrintQueueItem(printer_id=printer.id, status="printing")
+    operation = _operation_record(printer.id, operation_status)
+    db_session.add_all([queue_job, operation])
+    await db_session.commit()
+
+    with (
+        patch.object(printer_manager, "get_status", return_value=None),
+        patch.object(printer_manager, "get_client", return_value=None),
+    ):
+        response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
+    assert response.status_code == 200, response.text
+    assert response.json()["restart_required"]
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] == "1.0.0"
+    assert "example" not in registry._plugins
+    assert not marker.exists()  # Selection does not execute or dispatch anything.
+    await db_session.refresh(queue_job)
+    await db_session.refresh(operation)
+    assert queue_job.status == "printing"
+    assert operation.receipt["status"] == operation_status
+
+
+@pytest.mark.parametrize("blocker", ["queue", "operation"])
+async def test_missing_provider_with_existing_connection_cannot_use_recovery_exception(
+    async_client, management_api, printer_factory, db_session, blocker
+):
+    from backend.app.models.print_queue import PrintQueueItem
+    from backend.app.services.printer_manager import printer_manager
+
+    management_api.stage(package_bytes())
+    printer = await printer_factory(plugin_id="example", name="Existing connection")
+    record = (
+        PrintQueueItem(printer_id=printer.id, status="printing")
+        if blocker == "queue"
+        else _operation_record(printer.id)
+    )
+    db_session.add(record)
+    await db_session.commit()
+    with (
+        patch.object(printer_manager, "get_status", return_value=None),
+        patch.object(printer_manager, "get_client", return_value=SimpleNamespace()),
+    ):
+        response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
+    assert response.status_code == 409, response.text
+    assert ("active queue job" if blocker == "queue" else "active SDK operation") in response.json()["detail"]
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] is None
+
+
+async def test_recovery_exception_does_not_apply_to_rollback(async_client, management_api, printer_factory, db_session):
+    from backend.app.models.print_queue import PrintQueueItem
+
+    management_api.stage(package_bytes())
+    printer = await printer_factory(plugin_id="example", name="Unloaded provider")
+    db_session.add(PrintQueueItem(printer_id=printer.id, status="printing"))
+    await db_session.commit()
+    response = await async_client.post("/api/v1/printer-plugins/example/rollback", json={"version": "1.0.0"})
+    assert response.status_code == 409, response.text
+    assert "active queue job" in response.json()["detail"]
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] is None
+
+
+async def test_live_dispatch_still_prevents_missing_provider_recovery(async_client, management_api, printer_factory):
+    from backend.app.services.print_scheduler import scheduler as print_scheduler
+
+    management_api.stage(package_bytes())
+    await printer_factory(plugin_id="example", name="Dispatching printer")
+    with patch.object(print_scheduler, "_printer_in_dispatch_hold", return_value=True):
+        response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
+    assert response.status_code == 409, response.text
+    assert "active dispatch" in response.json()["detail"]
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] is None
 
 
 async def test_unselected_version_can_be_removed_but_bundle_cannot(async_client, management_api):

@@ -102,7 +102,13 @@ async def _validate_saved_configuration(db: AsyncSession, plugin_id: str, versio
             ) from exc
 
 
-async def _require_idle(db: AsyncSession, plugin_id: str, *, require_unconfigured: bool = False):
+async def _require_idle(
+    db: AsyncSession,
+    plugin_id: str,
+    *,
+    require_unconfigured: bool = False,
+    allow_unloaded_recovery: bool = False,
+):
     from backend.app.models.print_queue import PrintQueueItem
     from backend.app.models.printer_operation import PrinterOperation
     from backend.app.printers.contracts import PrinterConfig
@@ -115,6 +121,7 @@ async def _require_idle(db: AsyncSession, plugin_id: str, *, require_unconfigure
         raise HTTPException(409, "Remove or reassign configured printers before disabling or removing their plugin")
     ids = {printer.id for printer in printers}
     loaded_plugin = _registry()._plugins.get(plugin_id)
+    has_connection = False
     for printer in printers:
         state = printer_manager.get_status(printer.id)
         if state is not None and state.state in printer_manager.ACTIVE_PRINT_STATES:
@@ -122,6 +129,8 @@ async def _require_idle(db: AsyncSession, plugin_id: str, *, require_unconfigure
         if loaded_plugin is not None and upload_in_progress(printer.id, plugin_id=plugin_id):
             raise HTTPException(409, "An affected printer is uploading firmware")
         connection = printer_manager.get_client(printer.id)
+        if connection is not None:
+            has_connection = True
         predicate = getattr(loaded_plugin, "can_deactivate", None)
         if connection is not None and predicate is not None:
             ready = predicate(PrinterConfig.from_printer(printer), connection)
@@ -136,15 +145,40 @@ async def _require_idle(db: AsyncSession, plugin_id: str, *, require_unconfigure
         raise HTTPException(409, "An affected printer has an in-flight upload")
     if any(print_scheduler._printer_in_dispatch_hold(printer_id) for printer_id in ids):
         raise HTTPException(409, "An affected printer has an active dispatch")
-    if ids and await db.scalar(
-        select(func.count())
-        .select_from(PrintQueueItem)
-        .where(
-            PrintQueueItem.printer_id.in_(ids),
-            PrintQueueItem.status.in_(("printing", "uploading", "starting", "paused")),
-        )
-    ):
-        raise HTTPException(409, "An affected printer has an active queue job")
+    if allow_unloaded_recovery and loaded_plugin is None and not has_connection:
+        # Activation selects metadata for the next restart; it does not send a
+        # command or replace a running provider. A missing/failed provider needs
+        # this recovery path to reconnect and reconcile durable jobs from the
+        # previous process. Otherwise those very jobs prevent its first load.
+        # Keep their records unchanged, and retain every live-activity check
+        # above. Updating a loaded provider and every destructive action remain
+        # subject to the persisted-job guards below.
+        return
+    if ids:
+        # Retained or filtered queue rows may not be visible on the current
+        # Queue page. Identify the records rather than asking the administrator
+        # to clear a seemingly empty queue; their persisted status still protects
+        # a dispatch whose hardware acknowledgement has not arrived.
+        active_jobs = (
+            await db.execute(
+                select(PrintQueueItem.id, PrintQueueItem.printer_id, PrintQueueItem.status)
+                .where(
+                    PrintQueueItem.printer_id.in_(ids),
+                    PrintQueueItem.status.in_(("printing", "uploading", "starting", "paused")),
+                )
+                .order_by(PrintQueueItem.printer_id, PrintQueueItem.id)
+                .limit(6)
+            )
+        ).all()
+        if active_jobs:
+            names = {printer.id: printer.name for printer in printers}
+            blockers = "; ".join(
+                f"{names[printer_id]} (printer {printer_id}), queue item {item_id} ({status})"
+                for item_id, printer_id, status in active_jobs[:5]
+                if printer_id is not None
+            )
+            remaining = "; additional queue jobs also remain" if len(active_jobs) > 5 else ""
+            raise HTTPException(409, f"An affected printer has an active queue job: {blockers}{remaining}")
     if ids and await db.scalar(
         select(func.count())
         .select_from(PrinterOperation)
@@ -257,7 +291,7 @@ async def activate_printer_package(
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
     registry = _registry()
-    await _require_idle(db, plugin_id)
+    await _require_idle(db, plugin_id, allow_unloaded_recovery=True)
     await _validate_saved_configuration(db, plugin_id, body.version)
     source = registry.loaded_sources.get(plugin_id, {})
     loaded_version = "bundled" if source.get("source") == "bundled" else source.get("version")

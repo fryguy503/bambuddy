@@ -78,6 +78,13 @@ is accepted/running. A plugin may also refuse deactivation through
 `can_deactivate(config, connection)` for hardware-specific operations such as
 calibration or a tool change.
 
+First activation can restore a missing provider even when its saved queue or
+operation records remain active. This recovery applies only when the provider
+is not loaded and none of its printers has a managed connection. Live print,
+upload and dispatch checks still apply. Activation does not clear queue records
+or replay commands; after restart the restored provider can observe the printers
+and let the host reconcile their state.
+
 Package management requires an actual administrator when authentication is
 enabled. A user granted `settings:update` without administrator status cannot
 install executable code, and an administrator-owned API key cannot do so either.
