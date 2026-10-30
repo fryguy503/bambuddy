@@ -72,6 +72,7 @@ contains credentials and private keys. The logs volume remains intact.
 
 ```sh
 git status --short
+git remote set-branches --add origin codex/printer-modularization-https
 git fetch origin
 git switch --track -c codex/printer-modularization-https \
   origin/codex/printer-modularization-https
