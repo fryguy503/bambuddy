@@ -94,6 +94,7 @@ export interface PrinterOperation {
   resource_parameters_schemas?: Record<string, JsonSchema>;
   result_schema: JsonSchema;
   permission: string;
+  additional_permissions?: string[];
   asynchronous: boolean;
   cancellable: boolean;
   idempotent: boolean;

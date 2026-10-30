@@ -606,6 +606,10 @@ function getStatusDisplay(state: string | null | undefined, stg_cur_name: string
       return 'Printing';
     case 'PAUSE':
       return 'Paused';
+    case 'PREPARE':
+      return 'Preparing';
+    case 'SLICING':
+      return 'Slicing';
     case 'FINISH':
       return 'Finished';
     case 'FAILED':
@@ -1300,6 +1304,7 @@ function PrinterCard({
     select: (archives) => archives.find((a) => a.printer_id === printer.id),
   });
   const isPrintingOrPaused = status?.state === 'RUNNING' || status?.state === 'PAUSE';
+  const hasActivePrintState = isPrintingOrPaused || status?.state === 'PREPARE' || status?.state === 'SLICING';
   const needsPlateClear = requirePlateClear && status?.awaiting_plate_clear === true;
   // Post-print outcome confirmation on the card (#1898): while the plate-clear
   // gate is up and the just-finished print asked for a verdict, offer
@@ -1319,8 +1324,8 @@ function PrinterCard({
   // Not gated on `connected`: the plate-clear gate is Bambuddy-side state, and with
   // Auto Power Off the printer is powered down exactly when the operator clears the
   // plate. Hiding the control there left no way to release the gate (#2864).
-  const showClearPlateButton = needsPlateClear && !isPrintingOrPaused;
-  const activePrintName = status?.current_print && isPrintingOrPaused
+  const showClearPlateButton = needsPlateClear && !hasActivePrintState;
+  const activePrintName = status?.current_print && hasActivePrintState
     ? formatPrintName(status.subtask_name || status.current_print || null, status.gcode_file, t, activePlateLabel)
     : null;
   const [retainedPrintJob, setRetainedPrintJob] = useState<{ name: string; coverUrl: string | null } | null>(null);
@@ -3009,14 +3014,14 @@ function PrinterCard({
               (() => {
                 const hmsErrors = status.hms_errors ? filterKnownHMSErrors(status.hms_errors) : [];
                 const hasProblem = status.state === 'FAILED' || hmsErrors.length > 0;
-                const compactProgress = status.state === 'RUNNING' || status.state === 'PAUSE'
+                const compactProgress = hasActivePrintState
                   ? Math.max(0, Math.min(100, status.progress || 0))
                   : showClearPlateButton
                     ? 100
                     : hasProblem
                       ? 100
                       : 0;
-                const isActiveCompactPrint = status.state === 'RUNNING' || status.state === 'PAUSE';
+                const isActiveCompactPrint = hasActivePrintState;
                 const compactProgressClass = hasProblem
                   ? 'bg-status-error'
                   : status.state === 'PAUSE'
@@ -3086,11 +3091,13 @@ function PrinterCard({
 
                 {/* Current Print or Idle Placeholder */}
                 {(() => {
-                  const isActivePrint = !!(status.current_print && (status.state === 'RUNNING' || status.state === 'PAUSE'));
+                  const isActivePrint = hasActivePrintState;
                   const showRetainedPrint = !isActivePrint && needsPlateClear && retainedPrintJob;
-                  const printName = isActivePrint ? activePrintName : showRetainedPrint ? retainedPrintJob.name : null;
+                  const printName = isActivePrint
+                    ? activePrintName || t('printers.currentPrint', 'Current print')
+                    : showRetainedPrint ? retainedPrintJob.name : null;
                   const coverUrl = isActivePrint ? status.cover_url : showRetainedPrint ? retainedPrintJob.coverUrl : null;
-                  const progress = isActivePrint ? (status.progress || 0) : showRetainedPrint ? 100 : 0;
+                  const progress = isActivePrint ? Math.max(0, Math.min(100, status.progress || 0)) : showRetainedPrint ? 100 : 0;
 
                   // A running print always has at least one object, so a count of
                   // zero means "not loaded", not "nothing to skip" — after a
@@ -3104,7 +3111,7 @@ function PrinterCard({
 
                   return (
                     <div className="p-2 bg-bambu-dark rounded-[10px] relative overflow-hidden">
-                      <button
+                      {compatibilityUi && <button
                         onClick={() => setShowSkipObjectsModal(true)}
                         disabled={!canSkipObjects}
                         className={`absolute top-2 right-2 p-1.5 rounded transition-colors z-10 ${
@@ -3128,7 +3135,7 @@ function PrinterCard({
                             {objectsData.skipped_count}
                           </span>
                         )}
-                      </button>
+                      </button>}
                       <div className="flex items-stretch gap-2">
                         <CoverImage
                           url={coverUrl}
@@ -3228,11 +3235,8 @@ function PrinterCard({
             )}
 
             {/* Temperatures */}
-            {deviceQuery.data && viewMode === 'expanded' && <ManagedPrinterControls printerId={printer.id} device={deviceQuery.data} />}
+            {deviceQuery.data && <ManagedPrinterControls printerId={printer.id} device={deviceQuery.data} compact={viewMode !== 'expanded'} />}
             {deviceQuery.error && <p role="alert" className="mt-2 text-xs text-red-400">{deviceQuery.error.message}</p>}
-            {deviceQuery.data && viewMode !== 'expanded' && <div className="mt-2 flex flex-wrap gap-1 text-xs text-bambu-gray">
-              {deviceQuery.data.resources.filter(resource => resource.kind === 'tool').map(tool => <span key={tool.id} className="rounded bg-bambu-dark px-2 py-1">{tool.label}</span>)}
-            </div>}
             {legacyControls && status.temperatures && viewMode === 'expanded' && <LegacyBambuTemperatures
               status={status}
               printer={printer}
