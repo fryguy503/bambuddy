@@ -6,7 +6,7 @@ from typing import Any
 
 from backend.app.printers.api import config_for_id
 from backend.app.printers.contracts import PrinterPluginError
-from backend.app.printers.registry import get_plugin
+from backend.app.printers.registry import get_plugin, plugin_for
 
 # Stable compatibility reasons consumed by existing archive and recovery views.
 REASON_INTERNAL_STORAGE = "internal_storage"
@@ -72,7 +72,7 @@ def _dispatch(operation: str, *args: Any, printer_id: int | None = None, plugin_
     selected_id = plugin_id or (config.plugin_id if config is not None else None)
     if selected_id is None and isinstance(state_plugin_id, str):
         selected_id = state_plugin_id
-    plugin = get_plugin(selected_id or "bambu")
+    plugin = plugin_for(config) if config is not None else get_plugin(selected_id or "bambu")
     if config is not None and (plugin_id is None or plugin_id == config.plugin_id):
         return plugin.storage_operation_for(config, operation, *args, **kwargs)
     return plugin.storage_operation(operation, *args, **kwargs)

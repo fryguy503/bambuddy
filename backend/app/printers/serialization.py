@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from backend.app.printers.api import config_for_id
 from backend.app.printers.contracts import PrinterPlugin
 from backend.app.printers.models import _provider
-from backend.app.printers.registry import get_plugin
+from backend.app.printers.registry import get_plugin, plugin_for
 from backend.app.services.pause_eta import next_pause
 
 if TYPE_CHECKING:
@@ -103,10 +103,12 @@ def common_state_to_dict(
 
 
 def _state_plugin(printer_id: int | None, model: str | None, plugin_id: str | None):
+    config = config_for_id(printer_id)
+    if config is not None:
+        return plugin_for(config)
     if plugin_id is not None:
         return get_plugin(plugin_id)
-    config = config_for_id(printer_id)
-    return get_plugin(config.plugin_id) if config else _provider(model)
+    return _provider(model)
 
 
 def printer_state_to_dict(

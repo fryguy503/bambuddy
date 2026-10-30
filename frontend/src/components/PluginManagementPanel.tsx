@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, CheckCircle2, ChevronDown, Info, Loader2, Package, Power, Puzzle, RefreshCw, RotateCcw, Trash2, Upload } from 'lucide-react';
-import { pluginManagementApi, type StagedPlugin } from '../printer-plugins/api';
+import { pluginManagementApi, type ManagedPlugin, type PluginManagementChange, type StagedPlugin } from '../printer-plugins/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './Button';
 import { Card, CardContent, CardHeader } from './Card';
@@ -20,12 +20,67 @@ function StatusBadge({ children, tone = 'neutral' }: {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${colors[tone]}`}>{children}</span>;
 }
 
-/** Package changes are staged/activated explicitly; this view never restarts the server. */
+function versionLabel(plugin: ManagedPlugin, version: string | null): string {
+  return version === 'bundled' ? `${plugin.bundled_version || 'Included version'} (included)` : version || 'None';
+}
+
+function versionsInUse(plugin: ManagedPlugin): string[] {
+  const versions = [...(plugin.running_versions?.map(version => version.version) || []),
+    ...(plugin.rollout?.printers.flatMap(printer => printer.running_version ? [printer.running_version] : []) || [])];
+  return [...new Set(versions)];
+}
+
+function rolloutPending(plugin: ManagedPlugin): boolean {
+  return plugin.rollout?.status === 'rolling_out' || !!plugin.rollout?.printers.some(printer => ['waiting_idle', 'applying'].includes(printer.status));
+}
+
+function PluginRolloutStatus({ plugin }: { plugin: ManagedPlugin }) {
+  const rollout = plugin.rollout;
+  if (!rollout || !rollout.printers.length) return null;
+  return <section aria-label={`${plugin.name} update status`} className="space-y-3 rounded-lg border border-bambu-dark-tertiary">
+    <div className="border-b border-bambu-dark-tertiary px-4 py-3">
+      <h5 className="text-sm font-medium text-white">Printer versions</h5>
+      {rolloutPending(plugin) && <p className="mt-1 text-xs text-bambu-gray">Printer connections refresh in the background. Current prints continue.</p>}
+    </div>
+    <ul className="divide-y divide-bambu-dark-tertiary">
+      {rollout.printers.map(printer => <li key={printer.printer_id} aria-label={printer.name} className="space-y-2 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="min-w-0 break-words text-sm font-medium text-white">{printer.name}</span>
+          <StatusBadge tone={printer.status === 'current' ? 'success' : printer.status === 'error' ? 'error' : 'warning'}>
+            {printer.status === 'current' ? 'Up to date' : printer.status === 'waiting_idle' ? 'Refresh pending' : printer.status === 'applying' ? 'Refreshing connection' : 'Update needs attention'}
+          </StatusBadge>
+        </div>
+        <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+          <div className="flex gap-2"><dt className="text-bambu-gray">Running version</dt><dd className="font-medium text-white">{printer.running_version || 'Not loaded'}</dd></div>
+          {printer.status !== 'current' && <div className="flex gap-2"><dt className="text-bambu-gray">Selected version</dt><dd className="font-medium text-white">{versionLabel(plugin, printer.desired_version)}</dd></div>}
+        </dl>
+        {printer.reason && <p className="text-xs text-bambu-gray">{printer.reason}</p>}
+        {printer.error && <p role="alert" className="flex items-start gap-2 text-xs text-red-400"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />{printer.error}</p>}
+      </li>)}
+    </ul>
+  </section>;
+}
+
+/** Selection refreshes printer monitoring; it does not change the physical print. */
 export function PluginManagementPanel() {
   const { isAdmin, authEnabled, loading } = useAuth();
   const queryClient = useQueryClient();
   const allowed = !loading && (isAdmin || !authEnabled);
-  const management = useQuery({ queryKey: ['printer-plugin-management'], queryFn: pluginManagementApi.list, enabled: allowed, retry: false });
+  const management = useQuery({ queryKey: ['printer-plugin-management'], queryFn: pluginManagementApi.list, enabled: allowed, retry: false,
+    refetchInterval: query => query.state.data?.plugins.some(rolloutPending) ? 3000 : false,
+    refetchIntervalInBackground: true,
+  });
+  const previousVersions = useRef<string | null>(null);
+  useEffect(() => {
+    if (!management.data) return;
+    const versions = JSON.stringify(management.data.plugins.map(plugin => [plugin.id, plugin.loaded_version, plugin.rollout?.printers.map(printer => [printer.printer_id, printer.running_version])]));
+    if (previousVersions.current !== null && previousVersions.current !== versions) {
+      queryClient.invalidateQueries({ queryKey: ['printer-device'] });
+      queryClient.invalidateQueries({ queryKey: ['printer-device-state'] });
+      queryClient.invalidateQueries({ queryKey: ['printer-plugins'] });
+    }
+    previousVersions.current = versions;
+  }, [management.data, queryClient]);
   const [file, setFile] = useState<File | null>(null);
   const [checksum, setChecksum] = useState('');
   const [staged, setStaged] = useState<StagedPlugin | null>(null);
@@ -33,15 +88,18 @@ export function PluginManagementPanel() {
   const changed = () => {
     queryClient.invalidateQueries({ queryKey: ['printer-plugin-management'] });
     queryClient.invalidateQueries({ queryKey: ['printer-plugins'] });
+    queryClient.invalidateQueries({ queryKey: ['printer-device'] });
+    queryClient.invalidateQueries({ queryKey: ['printer-device-state'] });
   };
   const stage = useMutation({
     mutationFn: () => pluginManagementApi.stage(file!, checksum.trim() || undefined),
-    onSuccess: result => { setStaged(result); setMessage('Package validated and staged. Activate it when ready.'); changed(); },
+    onSuccess: result => { setStaged(result); setMessage('Package validated and staged. Apply the update when ready.'); changed(); },
   });
   const change = useMutation({
-    mutationFn: async (action: () => Promise<unknown>) => action(),
-    onSuccess: () => { setMessage('Plugin selection saved. Restart Bambuddy to apply the change.'); setStaged(null); changed(); },
+    mutationFn: async ({ action }: { action: () => Promise<PluginManagementChange>; message: string }) => action(),
+    onSuccess: (result, variables) => { setMessage(`${variables.message}${result?.restart_required ? ' Restart Bambuddy to finish applying this change.' : ''}`); setStaged(null); changed(); },
   });
+  const applyVersion = (pluginId: string, version: string) => change.mutate({ action: () => pluginManagementApi.activate(pluginId, version), message: 'Update selected. Printer connections refresh automatically without stopping current prints.' });
   if (!allowed) return null;
   const busy = stage.isPending || change.isPending;
   const error = change.error || stage.error || management.error;
@@ -55,7 +113,7 @@ export function PluginManagementPanel() {
         </h2>
       </CardHeader>
       <CardContent className="space-y-5">
-        <p className="text-sm text-bambu-gray">Printer support can be updated separately from Bambuddy. Package activation takes effect after a restart.</p>
+        <p className="text-sm text-bambu-gray">Printer support updates separately from Bambuddy. Updates refresh printer connections without stopping current prints.</p>
         <form className="space-y-4" onSubmit={event => { event.preventDefault(); stage.mutate(); }}>
           <div>
             <h3 className="text-sm font-medium text-white">Install or update a plugin</h3>
@@ -95,11 +153,11 @@ export function PluginManagementPanel() {
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-bambu-green" aria-hidden="true" />
               <div className="min-w-0">
                 <p className="text-sm font-medium text-white">{staged.plugin_id} {staged.version}: compatible</p>
-                <p className="mt-1 text-xs text-bambu-gray">Validated and staged. Activation selects this version for the next restart.</p>
+                <p className="mt-1 text-xs text-bambu-gray">Validated and staged. Apply the update to select this version and refresh printer connections.</p>
               </div>
             </div>
-            <Button type="button" size="sm" disabled={busy} className="shrink-0" onClick={() => change.mutate(() => pluginManagementApi.activate(staged.plugin_id, staged.version))}>
-              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />Activate {staged.version}
+            <Button type="button" size="sm" disabled={busy} className="shrink-0" onClick={() => applyVersion(staged.plugin_id, staged.version)}>
+              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />Apply update {staged.version}
             </Button>
           </div>
           <p className="mt-3 break-all rounded-md bg-bambu-dark/50 px-3 py-2 font-mono text-xs text-bambu-gray-light">SHA-256: {staged.sha256}</p>
@@ -115,9 +173,10 @@ export function PluginManagementPanel() {
     </div>}
 
     <section aria-labelledby="installed-printer-plugins" className="space-y-4">
-      <div>
-        <h3 id="installed-printer-plugins" className="text-lg font-semibold text-white">Installed plugins</h3>
-        <p className="mt-1 text-sm text-bambu-gray">Manage printer providers and choose which version loads when Bambuddy starts.</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h3 id="installed-printer-plugins" className="text-lg font-semibold text-white">Installed plugins</h3>
+        <p className="mt-1 text-sm text-bambu-gray">Choose a default version and follow each printer's connection refresh.</p></div>
+        <Button type="button" variant="secondary" size="sm" disabled={management.isFetching} onClick={() => management.refetch()}><RefreshCw className={`h-4 w-4 ${management.isFetching ? 'animate-spin' : ''}`} aria-hidden="true" />Refresh status</Button>
       </div>
       {management.isPending && <Card><CardContent className="flex items-center justify-center gap-2 py-8 text-sm text-bambu-gray">
         <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />Loading plugins…
@@ -128,6 +187,7 @@ export function PluginManagementPanel() {
       </CardContent></Card>}
       {management.data?.plugins.map(plugin => {
         const hostManaged = plugin.host_managed || plugin.source === 'entry-point';
+        const inUse = versionsInUse(plugin);
         return <Card key={plugin.id}>
           <CardHeader className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
@@ -141,17 +201,20 @@ export function PluginManagementPanel() {
               <StatusBadge>{plugin.bundled_version ? 'Included' : 'Installed'}</StatusBadge>
               <StatusBadge tone={plugin.enabled ? 'success' : 'neutral'}>{plugin.enabled ? 'Enabled' : 'Disabled'}</StatusBadge>
               {plugin.restart_required && <StatusBadge tone="warning">Restart required</StatusBadge>}
+              {!plugin.restart_required && rolloutPending(plugin) && <StatusBadge tone="warning">Update in progress</StatusBadge>}
+              {!plugin.restart_required && plugin.rollout?.status === 'error' && <StatusBadge tone="error">Update needs attention</StatusBadge>}
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <dl className="grid gap-4 text-sm sm:grid-cols-3">
-              <div><dt className="text-bambu-gray">Running version</dt><dd className="mt-1 font-medium text-white">{plugin.loaded_version || 'Not loaded'}</dd></div>
-              <div><dt className="text-bambu-gray">Selected version</dt><dd className="mt-1 font-medium text-white">{plugin.desired_version === 'bundled' ? `${plugin.bundled_version} (included)` : plugin.desired_version || plugin.bundled_version || 'None'}</dd></div>
+              <div><dt className="text-bambu-gray">{hostManaged ? 'Host version' : 'Selected default'}</dt><dd className="mt-1 break-words font-medium text-white">{hostManaged ? plugin.loaded_version || 'Not loaded' : versionLabel(plugin, plugin.desired_version)}</dd></div>
+              <div><dt className="text-bambu-gray">Versions in use</dt><dd className="mt-1 font-medium text-white">{inUse.join(', ') || 'None'}</dd></div>
               <div><dt className="text-bambu-gray">Configured printers</dt><dd className="mt-1 font-medium text-white">{plugin.configured_printers}</dd></div>
             </dl>
             {plugin.restart_required && <p role="status" className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-400">
               <RefreshCw className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />Restart required to apply this plugin selection.
             </p>}
+            <PluginRolloutStatus plugin={plugin} />
             {plugin.load_error && <p role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-sm text-red-400">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />{plugin.load_error}
             </p>}
@@ -159,13 +222,13 @@ export function PluginManagementPanel() {
               <Info className="h-4 w-4 shrink-0" aria-hidden="true" />This plugin is managed by the host Python environment.
             </p>}
             {!hostManaged && <div className="flex flex-wrap gap-2 border-t border-bambu-dark-tertiary pt-4">
-              <Button type="button" variant="secondary" size="sm" disabled={busy || !plugin.enabled && !plugin.desired_version} onClick={() => change.mutate(() => plugin.enabled ? pluginManagementApi.disable(plugin.id) : pluginManagementApi.enable(plugin.id))}>
+              <Button type="button" variant="secondary" size="sm" disabled={busy || !plugin.enabled && !plugin.desired_version} onClick={() => change.mutate({ action: () => plugin.enabled ? pluginManagementApi.disable(plugin.id) : pluginManagementApi.enable(plugin.id), message: plugin.enabled ? 'Disable request saved.' : 'Enable request saved.' })}>
                 <Power className="h-4 w-4" aria-hidden="true" />{plugin.enabled ? 'Disable' : 'Enable'}
               </Button>
-              {plugin.previous_version && <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => change.mutate(() => pluginManagementApi.rollback(plugin.id))}>
-                <RotateCcw className="h-4 w-4" aria-hidden="true" />Roll back to {plugin.previous_version}
+              {plugin.previous_version && <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => change.mutate({ action: () => pluginManagementApi.rollback(plugin.id), message: 'Previous version selected. Printer connections refresh automatically without stopping current prints.' })}>
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />Roll back to {versionLabel(plugin, plugin.previous_version)}
               </Button>}
-              {!plugin.bundled_version && plugin.configured_printers === 0 && <Button type="button" variant="danger" size="sm" disabled={busy} onClick={() => change.mutate(() => pluginManagementApi.remove(plugin.id))}>
+              {!plugin.bundled_version && plugin.configured_printers === 0 && <Button type="button" variant="danger" size="sm" disabled={busy} onClick={() => change.mutate({ action: () => pluginManagementApi.remove(plugin.id), message: 'Plugin removal saved.' })}>
                 <Trash2 className="h-4 w-4" aria-hidden="true" />Remove plugin
               </Button>}
             </div>}
@@ -175,17 +238,17 @@ export function PluginManagementPanel() {
                 <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
               </summary>
               <div className="divide-y divide-bambu-dark-tertiary border-t border-bambu-dark-tertiary">
-                {plugin.versions.map(version => <div key={version.version} className="space-y-2 px-4 py-3">
+                {plugin.versions.map(version => <div key={version.version} role="group" aria-label={`Version ${version.version}`} className="space-y-2 px-4 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium text-white">{version.version}</span>
                       <StatusBadge tone={version.compatible ? 'success' : 'error'}>{version.compatible ? 'Compatible' : 'Incompatible'}</StatusBadge>
-                      {version.version === plugin.loaded_version && <StatusBadge>Running</StatusBadge>}
+                      {inUse.includes(version.version) && <StatusBadge>In use</StatusBadge>}
                       {version.version === plugin.desired_version && <StatusBadge>Selected</StatusBadge>}
                     </div>
                     {!hostManaged && <div className="flex flex-wrap gap-2">
-                      {version.compatible && version.version !== plugin.desired_version && <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => change.mutate(() => pluginManagementApi.activate(plugin.id, version.version))}>Select</Button>}
-                      {version.version !== plugin.desired_version && version.version !== plugin.loaded_version && <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => change.mutate(() => pluginManagementApi.removeVersion(plugin.id, version.version))}>
+                      {version.compatible && version.version !== plugin.desired_version && <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => applyVersion(plugin.id, version.version)}>Apply update</Button>}
+                      {version.version !== plugin.desired_version && version.version !== plugin.loaded_version && <Button type="button" variant="ghost" size="sm" disabled={busy || inUse.includes(version.version)} title={inUse.includes(version.version) ? 'This version is still in use by a printer.' : undefined} onClick={() => change.mutate({ action: () => pluginManagementApi.removeVersion(plugin.id, version.version), message: 'Installed version removed.' })}>
                         <Trash2 className="h-4 w-4 text-red-400" aria-hidden="true" />Remove version
                       </Button>}
                     </div>}

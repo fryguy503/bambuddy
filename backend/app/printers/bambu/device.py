@@ -66,7 +66,7 @@ def _job_schema():
     return schema
 
 
-def describe(config, version="1.0.0", state=None) -> DeviceDescriptor:
+def describe(config, version="1.0.1", state=None) -> DeviceDescriptor:
     dual = models.is_dual_nozzle_model(config.model)
     count = 2 if dual else 1
     if state is not None and "nozzle_2" in state.temperatures:

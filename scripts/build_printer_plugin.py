@@ -1,7 +1,7 @@
 """Build a versioned, independently installable Bambu printer plugin archive.
 
 Run from the repository root with the application's Python environment:
-  python scripts/build_printer_plugin.py --output dist/bambu-1.0.0.bbp
+  python scripts/build_printer_plugin.py --output dist/bambu-1.0.1.bbp
 Only plugin files are packaged; no application or database is replaced.
 """
 

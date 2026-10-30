@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import traceback
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -25,7 +27,7 @@ from backend.app.printers.capabilities import (
     supports_drying as supports_drying,
     supports_drying_while_printing as supports_drying_while_printing,
 )
-from backend.app.printers.contracts import PrinterConfig
+from backend.app.printers.contracts import PrinterConfig, PrinterPlugin
 from backend.app.printers.registry import get_plugin, plugin_for
 from backend.app.printers.serialization import (
     get_derived_status_name as get_derived_status_name,
@@ -119,12 +121,31 @@ class PrinterInfo:
         self.serial_number = serial_number
 
 
+@dataclass
+class PreparedPrinterConnection:
+    """A candidate observer whose callbacks cannot reach host workflows yet."""
+
+    printer: Printer
+    config: PrinterConfig
+    provider: PrinterPlugin
+    client: PrinterConnectionAdapter
+    token: object
+    reused: bool = False
+
+
 class PrinterManager:
     """Manager for multiple printer connections."""
 
     def __init__(self):
         self._clients: dict[int, PrinterConnectionAdapter] = {}
         self._configs: dict[int, PrinterConfig] = {}
+        self._connection_tokens: dict[int, object] = {}
+        self._workflow_owners: dict[tuple[int, str], object] = {}
+        self._workflow_terminal: dict[tuple[int, str], None] = {}
+        self._workflow_retired: dict[tuple[int, str], None] = {}
+        self._retained_clients: dict[tuple[int, int], dict[str, Any]] = {}
+        self._callback_tasks: dict[tuple[int, int], int] = {}
+        self._callback_providers: dict[tuple[int, int], PrinterPlugin] = {}
         self._models: dict[int, str | None] = {}  # Cache printer models for feature detection
         self._printer_info: dict[int, PrinterInfo] = {}  # Cache printer name/serial for callbacks
         # Last AMS / external-spool reading of a printer whose client has been
@@ -206,6 +227,11 @@ class PrinterManager:
         self._awaiting_plate_clear.discard(printer_id)
         self._last_trays.pop(printer_id, None)
         self._configs.pop(printer_id, None)
+        for key in [key for key in self._workflow_owners if key[0] == printer_id]:
+            self._workflow_owners.pop(key, None)
+        for collection in (self._workflow_terminal, self._workflow_retired):
+            for key in [key for key in collection if key[0] == printer_id]:
+                collection.pop(key, None)
         from backend.app.printers.api import unbind_printer
 
         unbind_printer(printer_id)
@@ -532,75 +558,162 @@ class PrinterManager:
 
     async def connect_printer(self, printer: Printer) -> bool:
         """Connect to a printer."""
+        from backend.app.printers.rolling import operation_lease
+
+        with operation_lease(printer.id):
+            return await self._connect_printer(printer)
+
+    async def _connect_printer(self, printer: Printer) -> bool:
         if printer.id in self._clients:
             self.disconnect_printer(printer.id)
+        prepared = self.prepare_connection(printer, plugin_for(printer))
+        self.publish_connection(prepared)
+        prepared.client.connect()
+        await asyncio.sleep(1)
+        return prepared.client.state.connected
+
+    def prepare_connection(self, printer: Printer, provider: PrinterPlugin) -> PreparedPrinterConnection:
+        """Build an isolated observer without disconnecting or publishing anything."""
 
         printer_id = printer.id
+        config = PrinterConfig.from_printer(printer)
+        provider.validate_config(config)
+        retained = self._retained_clients.get((printer_id, id(provider)))
+        if retained is not None:
+            client = retained["client"]
+            if client._config != config:
+                raise ValueError(
+                    "Retained printer work uses different saved settings; reconcile it before changing them"
+                )
+            # A rollback must revive the exact observer holding its accepted
+            # tasks. Creating another instance of the same version would hide
+            # those tasks behind a new connection with the same provider id.
+            return PreparedPrinterConnection(printer, config, provider, client, retained["token"], reused=True)
+        token = object()
+
+        def active(data=None, *, workflow=False) -> bool:
+            owner = self._connection_tokens.get(printer_id)
+            if workflow:
+                identity = self._job_identity(client, data)
+                if identity is not None and (printer_id, identity) in self._workflow_retired:
+                    return False
+                owner = self._workflow_owners.get((printer_id, identity), owner) if identity is not None else owner
+            if owner is not token:
+                return False
+            if self._connection_tokens.get(printer_id) is not token:
+                return self.retained_connection(printer_id, provider) is client
+            return True
+
+        def schedule(callback, *args):
+            from backend.app.printers.registry import provider_context
+
+            key = (printer_id, id(provider))
+            with provider_context(config, provider):
+                value = callback(printer_id, *args)
+            if not inspect.isawaitable(value):
+                if callback is self._on_print_complete and args:
+                    completed = self._job_identity(client, args[0])
+                    if completed is not None:
+                        self._retire_workflow(printer_id, completed)
+                return
+            self._callback_tasks[key] = self._callback_tasks.get(key, 0) + 1
+            self._callback_providers[key] = provider
+
+            async def perform():
+                try:
+                    with provider_context(config, provider):
+                        await value
+                finally:
+                    if callback is self._on_print_complete and args:
+                        completed = self._job_identity(client, args[0])
+                        if completed is not None:
+                            self._retire_workflow(printer_id, completed)
+                    remaining = self._callback_tasks.get(key, 1) - 1
+                    if remaining:
+                        self._callback_tasks[key] = remaining
+                    else:
+                        self._callback_tasks.pop(key, None)
+                        self._callback_providers.pop(key, None)
+
+            if self._loop is None and type(self)._schedule_async.__get__(self) == self._schedule_async:
+                if inspect.iscoroutine(value):
+                    value.close()
+                self._callback_tasks[key] -= 1
+                if not self._callback_tasks[key]:
+                    self._callback_tasks.pop(key, None)
+                    self._callback_providers.pop(key, None)
+                return
+            with provider_context(config, provider):
+                self._schedule_async(perform())
 
         def on_state_change(state: PrinterState):
             state.plugin_id = config.plugin_id
-            if self._on_status_change:
-                self._schedule_async(self._on_status_change(printer_id, state))
+            if active() and self._on_status_change:
+                schedule(self._on_status_change, state)
 
         def on_print_start(data: dict):
-            if self._on_print_start:
-                self._schedule_async(self._on_print_start(printer_id, data))
+            if active(data, workflow=True) and self._on_print_start:
+                schedule(self._on_print_start, data)
 
         def on_print_complete(data: dict):
-            if self._on_print_complete:
-                self._schedule_async(self._on_print_complete(printer_id, data))
+            if active(data, workflow=True) and self._on_print_complete:
+                identity = self._job_identity(client, data)
+                if identity is not None:
+                    key = (printer_id, identity)
+                    if key in self._workflow_terminal:
+                        return
+                    self._workflow_terminal[key] = None
+                schedule(self._on_print_complete, data)
 
         def on_print_running_observed(data: dict):
-            if self._on_print_running_observed:
-                self._schedule_async(self._on_print_running_observed(printer_id, data))
+            if active(data, workflow=True) and self._on_print_running_observed:
+                schedule(self._on_print_running_observed, data)
 
         def on_finish_photo_moment(data: dict):
-            if self._on_finish_photo_moment:
-                self._schedule_async(self._on_finish_photo_moment(printer_id, data))
+            if active(data, workflow=True) and self._on_finish_photo_moment:
+                schedule(self._on_finish_photo_moment, data)
 
         def on_ams_change(ams_data: list):
-            if self._on_ams_change:
-                self._schedule_async(self._on_ams_change(printer_id, ams_data))
+            if active() and self._on_ams_change:
+                schedule(self._on_ams_change, ams_data)
 
         def on_fts_inlet_change(ams_id: int, inlet: str):
-            if self._on_fts_inlet_change:
-                self._schedule_async(self._on_fts_inlet_change(printer_id, ams_id, inlet))
+            if active() and self._on_fts_inlet_change:
+                schedule(self._on_fts_inlet_change, ams_id, inlet)
 
         def on_layer_change(layer_num: int):
-            if self._on_layer_change:
-                self._schedule_async(self._on_layer_change(printer_id, layer_num))
+            if active(workflow=True) and self._on_layer_change:
+                schedule(self._on_layer_change, layer_num)
 
         def on_print_progress(percent: int):
-            if self._on_print_progress:
-                self._schedule_async(self._on_print_progress(printer_id, percent))
+            if active(workflow=True) and self._on_print_progress:
+                schedule(self._on_print_progress, percent)
 
         def on_bed_temp_update(bed_temp: float):
-            if self._on_bed_temp_update:
-                self._schedule_async(self._on_bed_temp_update(printer_id, bed_temp))
+            if active() and self._on_bed_temp_update:
+                schedule(self._on_bed_temp_update, bed_temp)
 
         def on_drying_complete(ams_id: int):
-            if self._on_drying_complete:
-                self._schedule_async(self._on_drying_complete(printer_id, ams_id))
+            if active() and self._on_drying_complete:
+                schedule(self._on_drying_complete, ams_id)
 
         def on_drying_cycle_end(cycle: DryingCycleEnd):
-            if self._on_drying_cycle_end:
-                self._schedule_async(self._on_drying_cycle_end(printer_id, cycle))
+            if active() and self._on_drying_cycle_end:
+                schedule(self._on_drying_cycle_end, cycle)
 
         def on_assignment_verified(ams_id: int, tray_id: int, verified: bool, detail: dict):
-            if self._on_assignment_verified:
-                self._schedule_async(self._on_assignment_verified(printer_id, ams_id, tray_id, verified, detail))
+            if active() and self._on_assignment_verified:
+                schedule(self._on_assignment_verified, ams_id, tray_id, verified, detail)
 
         def on_tray_change(tray_global: int, layer_num: int):
-            if self._on_tray_change:
-                self._schedule_async(self._on_tray_change(printer_id, tray_global, layer_num))
+            if active(workflow=True) and self._on_tray_change:
+                schedule(self._on_tray_change, tray_global, layer_num)
 
-        config = PrinterConfig.from_printer(printer)
-        plugin = plugin_for(config)
-        plugin.validate_config(config)
         from backend.app.printers.api import printer_api
 
         client = printer_api.create_connection(
             config,
+            provider=provider,
             on_state_change=on_state_change,
             on_print_start=on_print_start,
             on_print_complete=on_print_complete,
@@ -617,38 +730,153 @@ class PrinterManager:
             on_tray_change=on_tray_change,
         )
 
-        client = wrap_connection(config, client)
-        client.connect()
+        client = wrap_connection(config, client, provider=provider)
+        return PreparedPrinterConnection(printer, config, provider, client, token)
+
+    @staticmethod
+    def _job_identity(client, data=None) -> str | None:
+        identity = (data.get("job_id") or data.get("subtask_id")) if isinstance(data, dict) else None
+        if identity is None:
+            identity = getattr(client.state, "subtask_id", None)
+        return str(identity) if identity is not None and str(identity).strip() else None
+
+    def publish_connection(
+        self,
+        prepared: PreparedPrinterConnection,
+        *,
+        retain_old: bool = False,
+        workflow_job_id: str | None = None,
+        workflow_job_ids: set[str] | None = None,
+    ) -> PrinterConnectionAdapter | None:
+        """Commit the durable provider pin before exposing its connected observer.
+
+        No await separates the pin, callback generation and client publication.
+        A failed pin leaves the old connection and callbacks intact.
+        """
+        from backend.app.printers.registry import registry
+
+        printer, config, client = prepared.printer, prepared.config, prepared.client
+        printer_id = printer.id
+        old = self._clients.get(printer_id)
+        if old is not None and client._event_bridge is not None and old._event_bridge is not None:
+            outgoing_token = self._connection_tokens.get(printer_id)
+            foreign_jobs = {
+                job_id
+                for (owner_id, job_id), token in self._workflow_owners.items()
+                if owner_id == printer_id and token is not outgoing_token
+            }
+            client._event_bridge.adopt_lifecycle(old._event_bridge, exclude_job_ids=foreign_jobs)
+        registry.pin_printer(config, prepared.provider)
+        revived = self._retained_clients.get((printer_id, id(prepared.provider)))
+        if revived is not None and revived["client"] is client:
+            self._retained_clients.pop((printer_id, id(prepared.provider)), None)
+            registry.release_runtime(revived["runtime_key"])
+        if old is not None and retain_old:
+            key = f"printer-observer:{printer_id}:{id(old)}"
+            registry.retain_runtime(old._plugin, key, printer_id=printer_id, reason="previous observer work")
+            token = self._connection_tokens.get(printer_id, object())
+            scopes = set(workflow_job_ids or ())
+            if workflow_job_id is not None:
+                scopes.add(workflow_job_id)
+            for operation, request in old._active_tasks.values():
+                pending_job_id = request.parameters.get("job_id")
+                if operation.id == "job.start" and isinstance(pending_job_id, str) and pending_job_id.strip():
+                    scopes.add(pending_job_id)
+            for job_id in scopes:
+                self._workflow_owners.setdefault((printer_id, job_id), token)
+            owned_scopes = {job_id for job_id in scopes if self._workflow_owners[(printer_id, job_id)] is token}
+            self._retained_clients[(printer_id, id(old._plugin))] = {
+                "client": old,
+                "runtime_key": key,
+                "job_id": workflow_job_id if workflow_job_id in owned_scopes else None,
+                "job_ids": owned_scopes,
+                "token": token,
+            }
         self._clients[printer_id] = client
+        self._connection_tokens[printer_id] = prepared.token
         self._configs[printer_id] = config
         from backend.app.printers.files import bind_printer
 
         bind_printer(config)
         self._models[printer_id] = printer.model  # Cache model for feature detection
         self._printer_info[printer_id] = PrinterInfo(printer.name, printer.serial_number)
+        return old
 
-        # Wait a moment for connection
-        await asyncio.sleep(1)
-        return client.state.connected
+    def retained_connection(self, printer_id: int, provider: PrinterPlugin) -> PrinterConnectionAdapter | None:
+        current = self._clients.get(printer_id)
+        if current is not None and current._plugin is provider:
+            return current
+        record = self._retained_clients.get((printer_id, id(provider)))
+        return record["client"] if record is not None else None
+
+    def retained_connections(self) -> list[tuple[int, dict[str, Any]]]:
+        return [(printer_id, dict(record)) for (printer_id, _), record in self._retained_clients.items()]
+
+    def annotate_retained(self, printer_id: int, provider: PrinterPlugin, values: dict) -> None:
+        record = self._retained_clients.get((printer_id, id(provider)))
+        if record is not None:
+            record.update(values)
+
+    def retained_providers(self) -> tuple[PrinterPlugin, ...]:
+        providers = {
+            id(record["client"]._plugin): record["client"]._plugin for record in self._retained_clients.values()
+        }
+        providers.update({id(provider): provider for provider in self._callback_providers.values()})
+        return tuple(providers.values())
+
+    def provider_callbacks_pending(self, printer_id: int, provider: PrinterPlugin) -> bool:
+        return bool(self._callback_tasks.get((printer_id, id(provider)), 0))
+
+    def _retire_workflow(self, printer_id: int, job_id: str) -> None:
+        key = (printer_id, job_id)
+        self._workflow_owners.pop(key, None)
+        self._workflow_terminal.pop(key, None)
+        self._workflow_retired[key] = None
+        # Only completed job tombstones are bounded. Active ownership is never
+        # evicted when a large fleet refreshes simultaneously.
+        while len(self._workflow_retired) > 1024:
+            self._workflow_retired.pop(next(iter(self._workflow_retired)))
+
+    async def retire_connection(self, printer_id: int, provider: PrinterPlugin) -> None:
+        from backend.app.printers.registry import registry
+
+        key = (printer_id, id(provider))
+        record = self._retained_clients.get(key)
+        if record is None:
+            return
+        await asyncio.to_thread(record["client"].disconnect, timeout=1)
+        for job_id in record.get("job_ids", ()):
+            if self._workflow_owners.get((printer_id, job_id)) is record["token"]:
+                self._retire_workflow(printer_id, job_id)
+        self._retained_clients.pop(key, None)
+        registry.release_runtime(record["runtime_key"])
 
     def disconnect_printer(self, printer_id: int, timeout: float = 0):
         """Disconnect from a printer."""
+        self._connection_tokens.pop(printer_id, None)
         if printer_id in self._clients:
             self._remember_trays(printer_id)
             self._clients[printer_id].disconnect(timeout=timeout)
             del self._clients[printer_id]
         self._models.pop(printer_id, None)  # Clean up model cache
         self._printer_info.pop(printer_id, None)  # Clean up printer info cache
+        from backend.app.printers.registry import registry
+
+        for key, record in list(self._retained_clients.items()):
+            if key[0] == printer_id:
+                record["client"].disconnect(timeout=timeout)
+                self._retained_clients.pop(key, None)
+                registry.release_runtime(record["runtime_key"])
 
     def disconnect_all(self, timeout: float = 0):
         """Disconnect from all printers."""
-        for printer_id in list(self._clients.keys()):
+        for printer_id in set(self._clients) | {key[0] for key in self._retained_clients}:
             self.disconnect_printer(printer_id, timeout=timeout)
 
     def get_status(self, printer_id: int) -> PrinterState | None:
         """Get the current status of a printer (checks for stale connections)."""
-        if printer_id in self._clients:
-            client = self._clients[printer_id]
+        client = self.get_client(printer_id)
+        if client is not None:
             # Check staleness and update connected state if needed
             client.check_staleness()
             return client.state
@@ -707,6 +935,11 @@ class PrinterManager:
 
     def get_client(self, printer_id: int) -> PrinterConnectionAdapter | None:
         """Get the MQTT client for a printer."""
+        from backend.app.printers.registry import context_provider
+
+        provider = context_provider(printer_id)
+        if provider is not None:
+            return self.retained_connection(printer_id, provider)
         return self._clients.get(printer_id)
 
     def mark_printer_offline(self, printer_id: int):

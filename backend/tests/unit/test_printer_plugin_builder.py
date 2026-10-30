@@ -14,15 +14,15 @@ def test_builder_uses_release_source_and_produces_installable_identical_archives
     shutil.copytree(included, source, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     factory = source / "plugin.py"
     factory.write_text(
-        factory.read_text(encoding="utf-8").replace('version = "1.0.0"', 'version = "1.0.1"', 1), encoding="utf-8"
+        factory.read_text(encoding="utf-8").replace('version = "1.0.1"', 'version = "1.0.2"', 1), encoding="utf-8"
     )
     first, retry = tmp_path / "first.bbp", tmp_path / "retry.bbp"
     manifest = build(source, first)
     build(source, retry)
-    assert manifest.version == "1.0.1"
+    assert manifest.version == "1.0.2"
     assert first.read_bytes() == retry.read_bytes()
     inspected = inspect_package(first.read_bytes())
-    assert inspected.manifest.version == "1.0.1"
+    assert inspected.manifest.version == "1.0.2"
     assert inspected.manifest.models
     assert all(model.get("device_template") for model in inspected.manifest.models)
     assert "heater.set_target" in {operation.id for operation in inspected.manifest.operations}

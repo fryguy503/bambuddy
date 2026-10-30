@@ -1,5 +1,10 @@
 """Only administrators can stage executable packages or change plugin selection."""
 
+import hashlib
+import io
+import json
+import warnings
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -17,11 +22,13 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 @pytest.fixture
 def management_api(tmp_path, monkeypatch):
     from backend.app.core.config import settings
-    from backend.app.printers import registry
+    from backend.app.printers import lifecycle, registry, rolling
 
     monkeypatch.setattr(settings, "base_dir", tmp_path)
     monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [])
     monkeypatch.setattr(registry, "registry", PrinterPluginRegistry())
+    monkeypatch.setattr(lifecycle, "lifecycle", lifecycle.PluginLifecycle())
+    monkeypatch.setattr(rolling, "rollouts", rolling.RolloutCoordinator())
     return PluginManager(tmp_path / "printer-plugins")
 
 
@@ -42,7 +49,33 @@ def _operation_record(printer_id, status="running"):
     )
 
 
-async def test_stage_select_and_status_are_truthful_about_restart(async_client, management_api, tmp_path):
+async def test_openapi_includes_selected_printer_extensions_without_duplicate_live_routes(async_client, management_api):
+    from fastapi.openapi.utils import get_openapi
+
+    from backend.app.main import app
+
+    routes = tuple(app.routes)
+    with warnings.catch_warnings(record=True) as core_warnings:
+        warnings.simplefilter("always")
+        get_openapi(title=app.title, version=app.version, routes=app.routes)
+    with warnings.catch_warnings(record=True) as documented_warnings:
+        warnings.simplefilter("always")
+        response = await async_client.get("/openapi.json")
+    assert response.status_code == 200, response.text
+    paths = response.json()["paths"]
+    assert "/api/v1/printers/{printer_id}/temperature/nozzle" in paths
+    assert "/api/v1/cloud/status" in paths
+    assert "/api/v1/printer-plugins/{plugin_id}/activate" in paths
+    assert tuple(app.routes) == routes
+    # Existing core endpoints can expose more than one HTTP method under one
+    # operation ID. Adding plugin docs must not introduce further duplicates.
+    original_duplicates = {str(item.message) for item in core_warnings if "Duplicate Operation ID" in str(item.message)}
+    assert {
+        str(item.message) for item in documented_warnings if "Duplicate Operation ID" in str(item.message)
+    } <= original_duplicates
+
+
+async def test_staging_never_imports_and_activation_loads_without_restart(async_client, management_api, tmp_path):
     marker = tmp_path / "executed.txt"
     response = await async_client.post(
         "/api/v1/printer-plugins/packages",
@@ -58,11 +91,13 @@ async def test_stage_select_and_status_are_truthful_about_restart(async_client, 
     assert not item["restart_required"]
     response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
     assert response.status_code == 200, response.text
-    assert response.json()["restart_required"] and not marker.exists()
+    assert response.json()["restart_required"] is False and marker.exists()
     status = (await async_client.get("/api/v1/printer-plugins/management")).json()
     item = next(item for item in status["plugins"] if item["id"] == "example")
-    assert item["loaded_version"] is None and item["desired_version"] == "1.0.0"
-    assert item["restart_required"]
+    assert item["loaded_version"] == "1.0.0" and item["desired_version"] == "1.0.0"
+    assert item["restart_required"] is False
+    assert item["rollout"]["status"] == "current"
+    assert item["running_versions"][0]["version"] == "1.0.0"
 
 
 async def test_management_requires_actual_admin_not_only_settings_permission(async_client, management_api):
@@ -100,7 +135,7 @@ async def test_invalid_upload_is_rejected_before_import(async_client, management
     assert not management_api.state_path.exists()
 
 
-async def test_active_print_prevents_selection_and_configured_printers_prevent_disable(
+async def test_active_print_allows_refresh_but_configured_printers_prevent_disable(
     async_client,
     management_api,
     printer_factory,
@@ -112,8 +147,9 @@ async def test_active_print_prevents_selection_and_configured_printers_prevent_d
     state = SimpleNamespace(state="RUNNING", connected=True)
     with patch.object(printer_manager, "get_status", return_value=state):
         response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
-    assert response.status_code == 409
-    assert management_api.read_state()["plugins"]["example"]["desired_version"] is None
+    assert response.status_code == 200, response.text
+    assert response.json()["restart_required"] is False
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] == "1.0.0"
     disabled = await async_client.post("/api/v1/printer-plugins/example/disable")
     assert disabled.status_code == 409
     removed = await async_client.delete("/api/v1/printer-plugins/example")
@@ -121,7 +157,7 @@ async def test_active_print_prevents_selection_and_configured_printers_prevent_d
     assert printer.id > 0
 
 
-async def test_inflight_upload_prevents_selection(async_client, management_api, printer_factory):
+async def test_inflight_upload_does_not_prevent_monitor_refresh(async_client, management_api, printer_factory):
     from backend.app.services.print_scheduler import scheduler as print_scheduler
 
     management_api.stage(package_bytes())
@@ -129,12 +165,13 @@ async def test_inflight_upload_prevents_selection(async_client, management_api, 
     task = SimpleNamespace(done=lambda: False)
     with patch.object(print_scheduler, "_inflight", {123: (task, printer.id)}):
         response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
-    assert response.status_code == 409
-    assert "upload" in response.json()["detail"]
+    assert response.status_code == 200, response.text
+    assert response.json()["restart_required"] is False
+    assert not task.done()
 
 
 @pytest.mark.parametrize("active_status", ["printing", "uploading", "starting", "paused"])
-async def test_queue_guard_names_only_active_rows_for_affected_printers(
+async def test_refresh_preserves_active_and_unrelated_queue_jobs(
     async_client, management_api, printer_factory, db_session, active_status
 ):
     from backend.app.models.print_queue import PrintQueueItem
@@ -149,8 +186,7 @@ async def test_queue_guard_names_only_active_rows_for_affected_printers(
     db_session.add_all([unrelated_job, cancelled_job])
     await db_session.commit()
 
-    # Cancelled order-history rows and another provider's active jobs must not
-    # prevent selection. This also covers an otherwise empty affected queue.
+    # Neither active nor historical jobs are deleted or rewritten by selection.
     response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
     assert response.status_code == 200, response.text
 
@@ -158,28 +194,27 @@ async def test_queue_guard_names_only_active_rows_for_affected_printers(
     db_session.add(active_job)
     await db_session.commit()
     response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.1.0"})
-    assert response.status_code == 409, response.text
-    detail = response.json()["detail"]
-    assert "Affected printer" in detail
-    assert f"printer {affected.id}" in detail
-    assert f"queue item {active_job.id} ({active_status})" in detail
-    assert "Unrelated printer" not in detail
-    assert f"queue item {unrelated_job.id} (" not in detail
-    assert f"queue item {cancelled_job.id} (" not in detail
-    assert management_api.read_state()["plugins"]["example"]["desired_version"] == "1.0.0"
+    assert response.status_code == 200, response.text
+    assert response.json()["restart_required"] is False
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] == "1.1.0"
     await db_session.refresh(active_job)
+    await db_session.refresh(unrelated_job)
+    await db_session.refresh(cancelled_job)
     assert active_job.status == active_status  # Inspection never cancels a job.
+    assert unrelated_job.status == active_status and cancelled_job.status == "cancelled"
 
 
-async def test_running_sdk_operation_blocks_upgrade(async_client, management_api, printer_factory, db_session):
+async def test_running_sdk_operation_does_not_block_monitor_refresh(
+    async_client, management_api, printer_factory, db_session
+):
     management_api.stage(package_bytes())
     management_api.select("example", "1.0.0")
     printer = await printer_factory(plugin_id="example", name="Calibrating printer")
     db_session.add(_operation_record(printer.id))
     await db_session.commit()
     response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
-    assert response.status_code == 409, response.text
-    assert "SDK operation" in response.json()["detail"]
+    assert response.status_code == 200, response.text
+    assert response.json()["restart_required"] is False
 
 
 @pytest.mark.parametrize("operation_status", ["accepted", "running"])
@@ -204,10 +239,10 @@ async def test_first_activation_restores_missing_provider_without_cancelling_dur
     ):
         response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
     assert response.status_code == 200, response.text
-    assert response.json()["restart_required"]
+    assert response.json()["restart_required"] is False
     assert management_api.read_state()["plugins"]["example"]["desired_version"] == "1.0.0"
-    assert "example" not in registry._plugins
-    assert not marker.exists()  # Selection does not execute or dispatch anything.
+    assert "example" in registry._plugins
+    assert marker.exists()  # Explicit activation imports trusted code; it does not dispatch a job.
     await db_session.refresh(queue_job)
     await db_session.refresh(operation)
     assert queue_job.status == "printing"
@@ -215,13 +250,17 @@ async def test_first_activation_restores_missing_provider_without_cancelling_dur
 
 
 @pytest.mark.parametrize("blocker", ["queue", "operation"])
-async def test_missing_provider_with_existing_connection_cannot_use_recovery_exception(
+async def test_refresh_retains_existing_provider_pin_with_active_durable_work(
     async_client, management_api, printer_factory, db_session, blocker
 ):
     from backend.app.models.print_queue import PrintQueueItem
+    from backend.app.printers.registry import registry
     from backend.app.services.printer_manager import printer_manager
 
     management_api.stage(package_bytes())
+    management_api.stage(package_bytes(version="1.1.0"))
+    management_api.select("example", "1.0.0")
+    old_plugin = registry.get("example")
     printer = await printer_factory(plugin_id="example", name="Existing connection")
     record = (
         PrintQueueItem(printer_id=printer.id, status="printing")
@@ -232,15 +271,19 @@ async def test_missing_provider_with_existing_connection_cannot_use_recovery_exc
     await db_session.commit()
     with (
         patch.object(printer_manager, "get_status", return_value=None),
-        patch.object(printer_manager, "get_client", return_value=SimpleNamespace()),
+        patch.object(printer_manager, "get_client", return_value=SimpleNamespace(_plugin=old_plugin)),
     ):
-        response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
-    assert response.status_code == 409, response.text
-    assert ("active queue job" if blocker == "queue" else "active SDK operation") in response.json()["detail"]
-    assert management_api.read_state()["plugins"]["example"]["desired_version"] is None
+        response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.1.0"})
+    assert response.status_code == 200, response.text
+    assert response.json()["restart_required"] is False
+    assert registry.get("example").version == "1.1.0"
+    assert registry.provider_for(printer) is old_plugin
+    assert management_api.get_printer_pins()[str(printer.id)]["version"] == "1.0.0"
+    await db_session.refresh(record)
+    assert (record.status if blocker == "queue" else record.receipt["status"]) in {"printing", "running"}
 
 
-async def test_recovery_exception_does_not_apply_to_rollback(async_client, management_api, printer_factory, db_session):
+async def test_rollback_refreshes_with_active_queue_jobs(async_client, management_api, printer_factory, db_session):
     from backend.app.models.print_queue import PrintQueueItem
 
     management_api.stage(package_bytes())
@@ -248,21 +291,106 @@ async def test_recovery_exception_does_not_apply_to_rollback(async_client, manag
     db_session.add(PrintQueueItem(printer_id=printer.id, status="printing"))
     await db_session.commit()
     response = await async_client.post("/api/v1/printer-plugins/example/rollback", json={"version": "1.0.0"})
-    assert response.status_code == 409, response.text
-    assert "active queue job" in response.json()["detail"]
-    assert management_api.read_state()["plugins"]["example"]["desired_version"] is None
+    assert response.status_code == 200, response.text
+    assert response.json()["restart_required"] is False
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] == "1.0.0"
 
 
-async def test_live_dispatch_still_prevents_missing_provider_recovery(async_client, management_api, printer_factory):
+async def test_live_dispatch_does_not_block_provider_activation(async_client, management_api, printer_factory):
     from backend.app.services.print_scheduler import scheduler as print_scheduler
 
     management_api.stage(package_bytes())
     await printer_factory(plugin_id="example", name="Dispatching printer")
     with patch.object(print_scheduler, "_printer_in_dispatch_hold", return_value=True):
         response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
+    assert response.status_code == 200, response.text
+    assert response.json()["restart_required"] is False
+    assert management_api.read_state()["plugins"]["example"]["desired_version"] == "1.0.0"
+
+
+async def test_bad_candidate_import_preserves_running_default_and_selection(async_client, management_api):
+    from backend.app.printers.registry import registry
+
+    management_api.stage(package_bytes())
+    response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
+    assert response.status_code == 200
+    previous = registry.get("example")
+    management_api.stage(package_bytes(version="2.0.0", broken=True))
+    checkpoint = management_api.selection_checkpoint("example")
+    response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "2.0.0"})
     assert response.status_code == 409, response.text
-    assert "active dispatch" in response.json()["detail"]
-    assert management_api.read_state()["plugins"]["example"]["desired_version"] is None
+    assert registry.get("example") is previous
+    assert management_api.selection_checkpoint("example") == checkpoint
+
+
+async def test_failed_first_service_start_does_not_publish_or_select_candidate(async_client, management_api):
+    from backend.app.printers.registry import registry
+
+    with zipfile.ZipFile(io.BytesIO(package_bytes())) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    files["payload/plugin.py"] += (
+        b"\nasync def fail_start(self, host):\n    raise RuntimeError('PRIVATE-SERVICE-DETAIL')\n"
+        b"Example.start_host_services = fail_start\n"
+    )
+    manifest = json.loads(files["manifest.json"])
+    manifest["files"]["plugin.py"] = hashlib.sha256(files["payload/plugin.py"]).hexdigest()
+    files["manifest.json"] = json.dumps(manifest).encode()
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    management_api.stage(output.getvalue())
+    checkpoint = management_api.selection_checkpoint("example")
+    response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": "1.0.0"})
+    assert response.status_code == 409, response.text
+    assert "PRIVATE-SERVICE-DETAIL" not in response.text
+    assert "example" not in registry._plugins
+    assert management_api.selection_checkpoint("example") == checkpoint
+
+
+async def test_pending_receipt_retains_origin_beyond_multiple_default_updates(
+    async_client, management_api, printer_factory, db_session, monkeypatch
+):
+    from backend.app.printers.contracts import PrinterConfig
+    from backend.app.printers.management import printer_pin_identity
+    from backend.app.printers.registry import registry
+
+    for version in ("1.0.0", "2.0.0", "3.0.0"):
+        management_api.stage(package_bytes(version=version))
+    management_api.select("example", "1.0.0")
+    registry.load()
+    printer = await printer_factory(plugin_id="example", name="Printing while monitoring refreshes")
+    operation = _operation_record(printer.id)
+    db_session.add(operation)
+    await db_session.commit()
+    for version in ("2.0.0", "3.0.0"):
+        response = await async_client.post("/api/v1/printer-plugins/example/activate", json={"version": version})
+        assert response.status_code == 200, response.text
+    await db_session.refresh(operation)
+    binding = operation.operation_schema["extensions"]["bambuddy:provider"]
+    assert binding == {
+        "plugin_id": "example",
+        "version": "1.0.0",
+        "identity": printer_pin_identity(PrinterConfig.from_printer(printer)),
+    }
+    assert operation.receipt["status"] == "running"
+    assert management_api.read_state()["plugins"]["example"]["previous_version"] == "2.0.0"
+    assert "1.0.0" in registry.protected_runtime_versions("example")
+    response = await async_client.delete("/api/v1/printer-plugins/example/versions/1.0.0")
+    assert response.status_code == 409, response.text
+    # A process restart restores the task's old origin independently of the
+    # current default and its most recent rollback version.
+    from backend.app.core.database import async_session
+    from backend.app.printers import registry as registry_module
+    from backend.app.printers.lifecycle import PluginLifecycle
+
+    restarted = PrinterPluginRegistry()
+    monkeypatch.setattr(registry_module, "registry", restarted)
+    lifecycle = PluginLifecycle()
+    lifecycle._host = SimpleNamespace(async_session=async_session)
+    await lifecycle._restore_pending_operations()
+    assert restarted.get("example").version == "3.0.0"
+    assert "1.0.0" in restarted.protected_runtime_versions("example")
 
 
 async def test_unselected_version_can_be_removed_but_bundle_cannot(async_client, management_api):

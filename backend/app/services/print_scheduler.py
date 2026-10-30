@@ -2775,6 +2775,17 @@ class PrintScheduler:
         ``self._inflight`` before returning, so the next (sequential) tick sees
         an accurate in-flight count with no interleaving await.
         """
+        from backend.app.printers.rolling import queue_admission_blocked
+
+        admitted = []
+        for item_id in item_ids:
+            printer_id = item_printers.get(item_id)
+            if queue_admission_blocked(printer_id):
+                if printer_id is not None:
+                    self._rollback_preheat_pin(item_id, printer_id)
+            else:
+                admitted.append(item_id)
+        item_ids = admitted
         free = limit - len(self._inflight)
         if free <= 0:
             logger.info(
@@ -2808,6 +2819,33 @@ class PrintScheduler:
             task.add_done_callback(lambda _t, iid=item_id: self._inflight.pop(iid, None))
 
     async def _dispatch_one(self, item_id: int, selected_printer_id: int | None = None) -> None:
+        """Hold admission from before the DB claim until this dispatch finishes."""
+        from backend.app.printers.rolling import PrinterUpdateInProgress, operation_lease, queue_admission_blocked
+
+        if selected_printer_id is None:
+            async with async_session() as db:
+                selected_printer_id = await db.scalar(
+                    select(PrintQueueItem.printer_id).where(PrintQueueItem.id == item_id)
+                )
+        if queue_admission_blocked(selected_printer_id):
+            if selected_printer_id is not None:
+                self._rollback_preheat_pin(item_id, selected_printer_id)
+            return
+        try:
+            from backend.app.printers.registry import provider_context
+
+            client = printer_manager.get_client(selected_printer_id) if selected_printer_id is not None else None
+            with operation_lease(selected_printer_id):
+                if client is not None:
+                    with provider_context(client._config, client._plugin):
+                        await self._dispatch_one_admitted(item_id, selected_printer_id)
+                else:
+                    await self._dispatch_one_admitted(item_id, selected_printer_id)
+        except PrinterUpdateInProgress:
+            if selected_printer_id is not None:
+                self._rollback_preheat_pin(item_id, selected_printer_id)
+
+    async def _dispatch_one_admitted(self, item_id: int, selected_printer_id: int | None = None) -> None:
         """Upload + start one queue item in its own session (pool worker, #2602).
 
         Its own session: pool workers run concurrently and an AsyncSession is
@@ -3198,6 +3236,10 @@ class PrintScheduler:
         ``printer_id`` is the printer the item was selected for: a row moved to
         another printer since is not claimed, and the next pass selects it for
         that one."""
+        from backend.app.printers.rolling import queue_admission_blocked
+
+        if queue_admission_blocked(printer_id):
+            return False
         query = (
             update(PrintQueueItem)
             .where(PrintQueueItem.id == item_id)
@@ -5218,6 +5260,11 @@ class PrintScheduler:
 
     def _is_printer_idle(self, printer_id: int, require_plate_clear: bool = True) -> bool:
         """Check if a printer is connected and idle."""
+        from backend.app.printers.rolling import queue_admission_blocked
+
+        if queue_admission_blocked(printer_id):
+            logger.debug("Printer %d: publishing a refreshed data observer", printer_id)
+            return False
         if not printer_manager.is_connected(printer_id):
             logger.debug("Printer %d: not connected", printer_id)
             return False

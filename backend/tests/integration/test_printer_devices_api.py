@@ -171,6 +171,149 @@ async def create_sdk_printer(client, headers=None):
     return response.json()["id"]
 
 
+async def test_observer_refresh_during_permission_await_keeps_command_on_original_provider(
+    async_client, sdk_plugin, db_session, monkeypatch
+):
+    from backend.app.api.routes import printer_devices
+    from backend.app.models.printer import Printer
+    from backend.app.models.printer_operation import PrinterOperation
+    from backend.app.printers.registry import RuntimeProvider, current_registry
+    from backend.app.services.printer_manager import printer_manager
+
+    printer_id = await create_sdk_printer(async_client)
+    printer = await db_session.get(Printer, printer_id)
+    original = printer_manager.get_client(printer_id)
+    updated = SixToolPlugin()
+    updated.version = "1.1.0"
+    registry = current_registry()
+    candidate = RuntimeProvider(updated, updated.version, {"version": updated.version, "source": "managed-package"})
+    monkeypatch.setattr(printer_manager, "_retained_clients", {})
+    switched = False
+
+    async def permission_with_refresh(request, target_id, permission):
+        nonlocal switched
+        if not switched:
+            switched = True
+            registry.activate(candidate)
+            prepared = printer_manager.prepare_connection(printer, updated)
+            printer_manager.publish_connection(prepared, retain_old=True)
+
+    monkeypatch.setattr(printer_devices, "_permission", permission_with_refresh)
+    response = await async_client.post(
+        f"/api/v1/printers/{printer_id}/operations/tool.select",
+        json={"resource_id": "tool:violet", "request_id": "refresh-during-permission", "parameters": {}},
+    )
+    assert response.status_code == 200, response.text
+    assert switched and len(sdk_plugin.calls) == 1 and updated.calls == []
+    assert printer_manager.get_client(printer_id)._plugin is updated
+    assert printer_manager.retained_connection(printer_id, sdk_plugin) is original
+    row = await db_session.get(PrinterOperation, response.json()["task_id"])
+    assert row.operation_schema["extensions"]["bambuddy:provider"]["version"] == sdk_plugin.version
+
+
+@pytest.mark.parametrize("endpoint", ["invoke", "snapshot"])
+async def test_observer_refresh_before_connection_lookup_keeps_original_provider_and_transport(
+    async_client, sdk_plugin, db_session, monkeypatch, endpoint
+):
+    from backend.app.api.routes import printer_devices
+    from backend.app.models.printer_operation import PrinterOperation
+    from backend.app.printers.registry import RuntimeProvider, current_registry
+    from backend.app.services.printer_manager import printer_manager
+
+    printer_id = await create_sdk_printer(async_client)
+    original = printer_manager.get_client(printer_id)
+    updated = SixToolPlugin()
+    updated.version = "1.1.0"
+    registry = current_registry()
+    candidate = RuntimeProvider(updated, updated.version, {"version": updated.version, "source": "managed-package"})
+    monkeypatch.setattr(printer_manager, "_retained_clients", {})
+    original_lookup = printer_devices._printer
+    original_invoke = sdk_plugin.invoke
+    original_snapshot = sdk_plugin.snapshot_device
+    invoked_connections = []
+    snapshot_connections = []
+    switched = False
+
+    async def lookup_with_refresh(db, target_id, *, lock=False):
+        nonlocal switched
+        printer = await original_lookup(db, target_id, lock=lock)
+        if not switched:
+            switched = True
+            registry.activate(candidate)
+            prepared = printer_manager.prepare_connection(printer, updated)
+            printer_manager.publish_connection(prepared, retain_old=True)
+        return printer
+
+    async def record_invoke(config, connection, request):
+        invoked_connections.append(connection)
+        return await original_invoke(config, connection, request)
+
+    def record_snapshot(config, connection):
+        snapshot_connections.append(connection)
+        return original_snapshot(config, connection)
+
+    monkeypatch.setattr(printer_devices, "_printer", lookup_with_refresh)
+    monkeypatch.setattr(sdk_plugin, "invoke", record_invoke)
+    monkeypatch.setattr(sdk_plugin, "snapshot_device", record_snapshot)
+    if endpoint == "invoke":
+        response = await async_client.post(
+            f"/api/v1/printers/{printer_id}/operations/tool.select",
+            json={"resource_id": "tool:violet", "request_id": "refresh-during-lookup", "parameters": {}},
+        )
+        assert response.status_code == 200, response.text
+        assert invoked_connections == [original._connection]
+        assert len(sdk_plugin.calls) == 1 and updated.calls == []
+        assert original._connection.selected_tool == "tool:violet"
+        assert getattr(printer_manager.get_client(printer_id)._connection, "selected_tool", None) is None
+        row = await db_session.get(PrinterOperation, response.json()["task_id"])
+        assert row.operation_schema["extensions"]["bambuddy:provider"]["version"] == sdk_plugin.version
+    else:
+        response = await async_client.get(f"/api/v1/printers/{printer_id}/device-state")
+        assert response.status_code == 200, response.text
+        assert snapshot_connections == [original._connection]
+        assert invoked_connections == []
+        assert sdk_plugin.calls == updated.calls == []
+    assert switched
+    assert printer_manager.get_client(printer_id)._plugin is updated
+    assert printer_manager.retained_connection(printer_id, sdk_plugin) is original
+
+
+@pytest.mark.parametrize("endpoint", ["invoke", "snapshot", "descriptor"])
+async def test_identity_change_after_request_capture_rejects_stale_transport(
+    async_client, sdk_plugin, monkeypatch, endpoint
+):
+    from sqlalchemy import update
+
+    from backend.app.api.routes import printer_devices
+    from backend.app.models.printer import Printer
+    from backend.app.services.printer_manager import printer_manager
+
+    printer_id = await create_sdk_printer(async_client)
+    original = printer_manager.get_client(printer_id)
+    original_lookup = printer_devices._printer
+
+    async def lookup_after_edit(db, target_id, *, lock=False):
+        # The HTTP dependency has captured the adapter before the awaited
+        # database lookup sees an administrator's changed physical identity.
+        await db.execute(update(Printer).where(Printer.id == target_id).values(serial_number="REPLACED-DEVICE"))
+        await db.commit()
+        return await original_lookup(db, target_id, lock=lock)
+
+    monkeypatch.setattr(printer_devices, "_printer", lookup_after_edit)
+    if endpoint == "invoke":
+        response = await async_client.post(
+            f"/api/v1/printers/{printer_id}/operations/tool.select",
+            json={"resource_id": "tool:violet", "parameters": {}},
+        )
+    else:
+        suffix = "device-state" if endpoint == "snapshot" else "device"
+        response = await async_client.get(f"/api/v1/printers/{printer_id}/{suffix}")
+    assert response.status_code == 409, response.text
+    assert "configuration changed" in response.json()["detail"].lower()
+    assert sdk_plugin.calls == []
+    assert getattr(original._connection, "selected_tool", None) is None
+
+
 async def invoke(client, printer_id, operation, parameters=None, resource=None, headers=None, **fields):
     return await client.post(
         f"/api/v1/printers/{printer_id}/operations/{operation}",
