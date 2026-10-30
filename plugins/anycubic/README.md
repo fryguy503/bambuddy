@@ -22,8 +22,11 @@ Its adjacent `.sha256` file records the archive's SHA-256 digest.
    or enable its code.
 4. Add or edit a printer, select **Anycubic**, and choose its model.
 
-Package updates use the same flow. Activation requires affected printers and
-queue jobs to be idle. Installed versions can be selected or rolled back through
+Package updates use the same flow. Updating a loaded plugin requires affected
+printers and queue jobs to be idle. First activation can restore a missing
+provider with no managed connections despite old queue records; it preserves
+those records and still checks live printing, uploads and dispatches.
+Installed versions can be selected or rolled back through
 the plugin manager. Existing application data and plugin selections belong in
 your normal pre-upgrade backup.
 
