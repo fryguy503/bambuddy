@@ -5,7 +5,7 @@ from backend.app.core.websocket import ws_manager
 from backend.app.models.printer import Printer
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
-from backend.app.services.bambu_mqtt import PrinterState
+from backend.app.printers.state import PrinterState
 from backend.app.services.inventory_mode import spoolman_owns_assignments
 from backend.app.services.notification_service import notification_service
 from backend.app.services.printer_manager import printer_manager

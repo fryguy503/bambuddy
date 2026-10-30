@@ -72,6 +72,7 @@ import { availableEngines, hasEngineChoice, resolveEngine, type SliceEngineId } 
 import { NumberInput } from '../components/NumberInput';
 import { PrinterSearchPicker } from '../components/PrinterSearchPicker';
 import { UsbCameraDevicePicker } from '../components/UsbCameraDevicePicker';
+import { PluginManagementPanel } from '../components/PluginManagementPanel';
 
 const validTabs = ['general', 'plugs', 'sensors', 'notifications', 'queue', 'filament', 'camera', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'users', 'backup'] as const;
 type TabType = typeof validTabs[number];
@@ -1786,6 +1787,7 @@ export function SettingsPage() {
       <div className="flex-1 min-w-0">
       {activeTab === 'general' && (
       <>
+      <div className="mb-4"><PluginManagementPanel /></div>
       {/* Sponsor banner — independence callout, or the commercial ask on a
           business-sized fleet (see utils/fleetAudience). */}
       <a
@@ -5375,7 +5377,7 @@ export function SettingsPage() {
                   <div key={category.key}>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-sm text-white">
-                        {rowLabel} <span className="text-bambu-gray text-xs">({unitLabel} · {category.lo}–{category.hi})</span>
+                        {rowLabel} <span className="text-bambu-gray text-xs">({unitLabel}{category.hi === undefined ? "" : ` · ${category.lo}–${category.hi}`})</span>
                       </label>
                       <button
                         type="button"
@@ -5397,7 +5399,8 @@ export function SettingsPage() {
                           onChange={(e) => {
                             const next: [number, number, number] = [triple[0], triple[1], triple[2]];
                             const parsedValue = parseInt(e.target.value, 10);
-                            const clamped = Math.max(category.lo, Math.min(category.hi, Number.isFinite(parsedValue) ? parsedValue : category.lo));
+                            const validValue = Number.isFinite(parsedValue) ? parsedValue : category.lo;
+                            const clamped = Math.max(category.lo, category.hi === undefined ? validValue : Math.min(category.hi, validValue));
                             next[idx] = clamped;
                             updateSetting(category.key, JSON.stringify(next));
                           }}

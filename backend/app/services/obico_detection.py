@@ -216,7 +216,7 @@ class ObicoDetectionService:
     async def _capture_frame(self, printer_id: int) -> bytes | None:
         """Capture one JPEG frame from the printer camera. Returns None on failure."""
         # Late import to avoid cycles at module load time
-        from backend.app.services.camera import capture_camera_frame_bytes
+        from backend.app.printers.camera import capture_camera_frame_bytes
         from backend.app.services.external_camera import capture_frame as capture_external_frame
 
         async with async_session() as db:
@@ -277,6 +277,7 @@ class ObicoDetectionService:
             access_code=printer.access_code,
             model=printer.model,
             timeout=SNAPSHOT_CAPTURE_TIMEOUT,
+            printer_id=printer_id,
         )
 
     def _no_verdict(self, printer_id: int, reason: str) -> None:

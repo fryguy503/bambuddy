@@ -43,6 +43,12 @@ import type {
 import { DEFAULT_PRINT_OPTIONS, DEFAULT_SCHEDULE_OPTIONS } from './types';
 import { NumberInput } from '../NumberInput';
 import { hasGcodeSnippets, useUiSettings } from '../../hooks/useUiSettings';
+import { usePrinterPlugins } from '../../hooks/usePrinterPlugins';
+import { usePrinterDevice } from '../../hooks/usePrinterDevice';
+import { printerModelSupports } from '../../printer-plugins/catalog';
+import { GenericPrintSetup } from '../GenericPrintSetup';
+import { buildSdkJobPlan, emptyGenericJobSetup } from '../../printer-plugins/forms';
+import type { GenericJobSetup, PrinterDevice } from '../../printer-plugins/types';
 
 /** Same filament: type ignoring case, colour as RRGGBB ignoring `#`, case and alpha. */
 function isSameFilament(a: { type: string; color: string }, b: { type: string; color: string }): boolean {
@@ -154,6 +160,15 @@ export function PrintModal({
     }
     return [];
   });
+  const { data: printerPlugins = [] } = usePrinterPlugins();
+  const [genericSetups, setGenericSetups] = useState<Record<number, GenericJobSetup>>(() => queueItem?.printer_id ? {
+    [queueItem.printer_id]: {
+      tool_ids: queueItem.sdk_job?.selected_tool_ids || queueItem.tool_ids || [],
+      material_bindings: queueItem.sdk_job ? Object.fromEntries(queueItem.sdk_job.bindings.filter(binding => binding.source_id).map(binding => [binding.input_id, binding.source_id!])) : queueItem.material_bindings || {},
+      job_options: queueItem.sdk_job?.options || queueItem.job_options || {},
+      material_tool_ids: Object.fromEntries((queueItem.sdk_job?.bindings || []).map(binding => [binding.input_id, binding.tool_id])),
+    },
+  } : {});
 
   // Multi-select plates: create mode users can pick a subset of plates
   const [selectedPlates, setSelectedPlates] = useState<Set<number>>(() => {
@@ -368,6 +383,10 @@ export function PrintModal({
     queryKey: ['printers'],
     queryFn: api.getPrinters,
   });
+  const effectivePrinter = printers?.find(printer => printer.id === effectivePrinterId);
+  const effectivePlugin = printerPlugins.find(plugin => plugin.id === (effectivePrinter?.plugin_id || 'bambu'));
+  const effectiveDevice = usePrinterDevice(effectivePrinterId || 0, !!effectivePrinterId && (effectivePlugin?.api_version || 0) >= 2);
+  const legacyMaterialUi = effectivePlugin?.api_version === 1 || effectiveDevice.data?.extensions.compatibility_ui === 'bambu-v1';
 
   const { data: myCostCenters, isLoading: loadingCostCenters } = useQuery({
     queryKey: ['finance', 'cost-centers', 'mine'],
@@ -1051,11 +1070,53 @@ export function PrintModal({
   // `acknowledgedPrinters`: the printers whose filament warning the user
   // answered with "Print Anyway". Only their jobs skip the scheduler's check;
   // another printer in the same submit was never checked against.
+  const isGenericPrinter = (printerId: number) => {
+    const printer = printers?.find(candidate => candidate.id === printerId);
+    return (printerPlugins.find(plugin => plugin.id === (printer?.plugin_id || 'bambu'))?.api_version || 0) >= 2;
+  };
+  const genericPayloadFor = (printerId: number, plateId: number | null): Pick<PrintQueueItemCreate, 'tool_ids' | 'material_bindings' | 'job_options' | 'sdk_job'> => {
+    if (!isGenericPrinter(printerId)) return {};
+    const setup = genericSetups[printerId] || emptyGenericJobSetup();
+    const sourceName = libraryFileDetails?.filename || archiveName;
+    return {
+      tool_ids: setup.tool_ids,
+      material_bindings: setup.material_bindings,
+      job_options: setup.job_options,
+      sdk_job: buildSdkJobPlan(setup, {
+        jobId: queueItem?.sdk_job?.job_id || crypto.randomUUID(),
+        name: archiveName,
+        artifact: {
+          uri: isLibraryFile ? `library:${libraryFileId}` : `archive:${archiveId}`,
+          filename: sourceName,
+          format: libraryFileDetails?.file_type || (sourceName.toLowerCase().endsWith('.gcode') ? 'gcode' : '3mf'),
+        },
+        plateId,
+      }),
+    };
+  };
   const handleSubmit = async (
     e?: React.FormEvent,
     options?: { skipFilamentCheck?: boolean; acknowledgedPrinters?: number[] },
   ) => {
     e?.preventDefault();
+
+    for (const printerId of assignmentMode === 'printer' ? selectedPrinters : []) {
+      if (!isGenericPrinter(printerId)) continue;
+      const device = queryClient.getQueryData<PrinterDevice>(['printer-device', printerId]);
+      if (!device) {
+        showToast('Wait for the printer resource description before submitting.', 'error');
+        return;
+      }
+      const setup = genericSetups[printerId] || emptyGenericJobSetup();
+      if (device.resources.filter(resource => resource.kind === 'tool').length > 1 && !setup.tool_ids.length && !Object.keys(setup.material_tool_ids).length) {
+        showToast('Select the tools to use for each printer.', 'error');
+        return;
+      }
+      if (Object.keys(setup.material_bindings).some(inputId => !setup.material_tool_ids[inputId])) {
+        showToast('Select a tool for each material source binding.', 'error');
+        return;
+      }
+    }
 
     if (billingEnabled && selectedCostCenter == null) {
       showToast(t('printModal.noPrintableCostCenters'), 'error');
@@ -1081,6 +1142,8 @@ export function PrintModal({
 
       if (plateJobs.some((job) => job.reqs.length > 0) && slotMaterialsPerPrinter.size > 0) {
         for (const printerId of selectedPrinters) {
+          const description = queryClient.getQueryData<PrinterDevice>(['printer-device', printerId]);
+          if (isGenericPrinter(printerId) && description?.extensions.compatibility_ui !== 'bambu-v1') continue;
           const printerStatusForWarning = selectedPrinters.length > 1
             ? multiPrinterMapping.printerResults.find((result) => result.printerId === printerId)?.status
             : printerStatus;
@@ -1432,6 +1495,7 @@ export function PrintModal({
         ? new Date(scheduleOptions.scheduledTime).toISOString()
         : undefined,
       ...printOptions,
+      ...(printerId !== null ? genericPayloadFor(printerId, plateId) : {}),
       project_id: projectId ?? undefined,
       cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
       estimated_cost: billingEnabled && selectedCostCenterId != null ? plateEstimatedCost : undefined,
@@ -1536,6 +1600,7 @@ export function PrintModal({
                   ? new Date(scheduleOptions.scheduledTime).toISOString()
                   : null,
                 ...printOptions,
+                ...genericPayloadFor(printerId, plateId),
                 cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
                 estimated_cost: billingEnabled && selectedCostCenterId != null
                   ? (plateId != null && isMultiPlateSelection
@@ -1730,7 +1795,7 @@ export function PrintModal({
   // - Single printer selected
   // - For archives: plate is selected (for multi-plate) or not required (single-plate)
   // - For library files: always show (no plate selection)
-  const showFilamentMapping = effectivePrinterId && selectedPlates.size <= 1 && (
+  const showFilamentMapping = legacyMaterialUi && effectivePrinterId && selectedPlates.size <= 1 && (
     isLibraryFile || (isMultiPlate ? selectedPlate !== null : true)
   );
 
@@ -1745,7 +1810,7 @@ export function PrintModal({
   // plate *per printer*, so those items ship without a mapping and the scheduler
   // computes one per plate when it picks the printer.
   const showPerPlateFilamentMapping =
-    !!effectivePrinterId && isMultiPlateSelection && selectedPrinters.length === 1;
+    legacyMaterialUi && !!effectivePrinterId && isMultiPlateSelection && selectedPrinters.length === 1;
 
   // Model mode has no printer and so no trays to map onto; what it offers instead
   // is the filament each slot must be printed in, which the scheduler matches
@@ -1759,22 +1824,24 @@ export function PrintModal({
     && !!effectiveAvailableFilaments
     && effectiveAvailableFilaments.length > 0;
 
-  // Dual-nozzle gate for the Nozzle Offset Calibration toggle (#1682).
-  // Mirrors backend `DUAL_NOZZLE_MODELS` so model-based assignment can show
-  // the toggle without a specific printer selected. For printer-mode we rely
-  // on the canonical `nozzle_count` field auto-detected from MQTT.
-  const DUAL_NOZZLE_MODELS = useMemo(
-    () => new Set(['H2D', 'H2DPRO', 'H2C', 'X2D']),
-    [],
-  );
+  // This option is a declared hardware capability, independent of tool count.
   const showDualNozzleOptions = useMemo(() => {
+    const supportsOffset = (model: string | null, pluginId: string) => printerModelSupports('nozzle_offset_calibration', model, pluginId, printerPlugins)
+      || printerPlugins.find(plugin => plugin.id === pluginId)?.api_version === 1 && printerModelSupports('dual_nozzle', model, pluginId, printerPlugins);
     if (assignmentMode === 'model') {
-      if (!targetModel) return false;
-      return DUAL_NOZZLE_MODELS.has(targetModel.toUpperCase().replace(/[\s-]/g, ''));
+      return !!targetModel && printerPlugins.some(plugin => supportsOffset(targetModel, plugin.id));
     }
-    if (!printers || selectedPrinters.length === 0) return false;
-    return selectedPrinters.some(id => printers.find(p => p.id === id)?.nozzle_count === 2);
-  }, [assignmentMode, targetModel, printers, selectedPrinters, DUAL_NOZZLE_MODELS]);
+    return selectedPrinters.some(id => {
+      const printer = printers?.find(candidate => candidate.id === id);
+      return !!printer && supportsOffset(printer.model, printer.plugin_id || 'bambu');
+    });
+  }, [assignmentMode, targetModel, printers, selectedPrinters, printerPlugins]);
+  const genericJobOptions = assignmentMode === 'printer' && selectedPrinters.length > 0
+    ? selectedPrinters.every(id => {
+      const printer = printers?.find(candidate => candidate.id === id);
+      return (printerPlugins.find(plugin => plugin.id === (printer?.plugin_id || 'bambu'))?.api_version || 0) >= 2;
+    })
+    : !!targetModel && printerPlugins.some(plugin => plugin.api_version >= 2 && plugin.models.some(model => model.id === targetModel));
 
   return (
     <div
@@ -2072,12 +2139,23 @@ export function PrintModal({
 
             {/* Print options */}
             {(mode === 'create' || effectivePrinterCount > 0 || (assignmentMode === 'model' && targetModel)) && (
-              <PrintOptionsPanel
+              <>
+              {assignmentMode === 'printer' && selectedPrinters.map(printerId => {
+              const printer = printers?.find(candidate => candidate.id === printerId);
+              const plugin = printerPlugins.find(candidate => candidate.id === (printer?.plugin_id || 'bambu'));
+              return printer && (plugin?.api_version || 0) >= 2 ? <GenericPrintSetup key={printerId} printerId={printerId} printerName={printer.name}
+                value={genericSetups[printerId] || emptyGenericJobSetup()}
+                onChange={next => setGenericSetups(previous => ({ ...previous, [printerId]: next }))}
+                materials={(effectiveFilamentReqs?.filaments || []).map(material => ({ id: String(material.slot_id), label: `${material.type} (${material.slot_id})` }))} /> : null;
+            })}
+            <PrintOptionsPanel
                 options={printOptions}
                 onChange={setPrintOptions}
                 defaultExpanded={!!initialSelectedPrinterIds?.length}
                 showDualNozzleOptions={showDualNozzleOptions}
+                genericDevice={genericJobOptions}
               />
+              </>
             )}
 
             {billingEnabled && printableCostCenters.length > 0 && (

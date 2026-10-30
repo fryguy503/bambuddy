@@ -1,4 +1,4 @@
-"""Regenerate backend/app/data/hms_catalog.json from a Bambu Studio checkout.
+"""Regenerate backend/app/printers/bambu/data/hms_catalog.json from a Bambu Studio checkout.
 
 Usage:
     python scripts/generate_hms_catalog.py /path/to/BambuStudio
@@ -18,7 +18,7 @@ differ from it. A code listed with empty text stays in as "" -- Bambu keeping a
 code but publishing nothing for it is what Bambuddy uses to leave it out of the
 fault count (#2728), so it must not be dropped or filled in.
 
-backend/app/data/hms_catalog_extra.json holds `print_error` texts Bambu Studio does not
+backend/app/printers/bambu/data/hms_catalog_extra.json holds `print_error` texts Bambu Studio does not
 ship (they came from the ha-bambulab table Bambuddy used before). They are
 merged in only where Studio has no entry, so Studio always wins.
 
@@ -33,8 +33,8 @@ from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = REPO_ROOT / "backend" / "app" / "data" / "hms_catalog.json"
-EXTRA = REPO_ROOT / "backend" / "app" / "data" / "hms_catalog_extra.json"
+OUTPUT = REPO_ROOT / "backend" / "app" / "printers" / "bambu" / "data" / "hms_catalog.json"
+EXTRA = REPO_ROOT / "backend" / "app" / "printers" / "bambu" / "data" / "hms_catalog_extra.json"
 
 SECTIONS = {"hms": ("device_hms", 16), "error": ("device_error", 8)}
 

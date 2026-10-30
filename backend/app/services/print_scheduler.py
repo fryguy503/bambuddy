@@ -33,8 +33,7 @@ from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
-from backend.app.services import drying_preflight, kprofile_drift, print_dispatch_context, stock_forecast
-from backend.app.services.bambu_ftp import (
+from backend.app.printers.files import (
     FtpFailureKind,
     FtpFailureReport,
     UploadCancelled,
@@ -45,6 +44,14 @@ from backend.app.services.bambu_ftp import (
     upload_file_async,
     with_ftp_retry,
 )
+from backend.app.printers.models import (
+    is_dual_nozzle_model,
+    is_gcode_compatible,
+    is_nozzle_rack_model,
+    normalize_printer_model,
+)
+from backend.app.printers.state_accessors import printer_telemetry
+from backend.app.services import drying_preflight, kprofile_drift, print_dispatch_context, stock_forecast
 from backend.app.services.bambu_mqtt import _RACK_NOZZLE_IDS, HMS_MQTT_VERIFY_FAILED, resolve_rack_plan_mapping
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.finance_budget import (
@@ -65,7 +72,6 @@ from backend.app.services.printer_manager import (
     supports_drying_while_printing,
 )
 from backend.app.services.queue_item_printer import drop_printer_resolved
-from backend.app.services.slot_nozzle import reports_two_nozzles
 from backend.app.services.smart_plug_manager import publish_plug_state, smart_plug_manager
 from backend.app.services.spool_assignment_notifications import (
     _global_tray_from_assignment,
@@ -79,12 +85,6 @@ from backend.app.utils.filament_types import canonical_filament_type
 from backend.app.utils.filename import InvalidFilenameError, derive_remote_filename, validate_print_filename
 from backend.app.utils.library_paths import move_library_photos
 from backend.app.utils.local_time import utcnow_naive
-from backend.app.utils.printer_models import (
-    is_dual_nozzle_model,
-    is_gcode_compatible,
-    is_nozzle_rack_model,
-    normalize_printer_model,
-)
 from backend.app.utils.threemf_tools import (
     default_plate_number,
     extract_rack_plan_from_3mf,
@@ -94,6 +94,20 @@ from backend.app.utils.threemf_tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _uses_resource_job(item, connection) -> bool:
+    """Whether this queue dispatch uses the resource API instead of vendor options."""
+    from backend.app.printers.api import PrinterConnectionAdapter
+
+    return (
+        isinstance(connection, PrinterConnectionAdapter)
+        and connection._plugin.api_version == 2
+        and (
+            "start_print" not in connection._plugin.operations
+            or any(getattr(item, name, None) for name in ("sdk_job", "tool_ids", "material_bindings", "job_options"))
+        )
+    )
 
 
 def _ams_slot_label(ams_id: int, tray_id: int) -> str:
@@ -858,7 +872,9 @@ def _global_tray_id(ams_id: int, tray_id: int) -> int:
     produces the ids stored in ``PrintQueueItem.ams_mapping`` — the two must
     agree or a mapping cannot be read back against live tray telemetry.
     """
-    return ams_id if ams_id >= 128 else ams_id * 4 + tray_id
+    from backend.app.printers.compat import compatibility_module
+
+    return compatibility_module("bambu", "materials").global_tray_id(ams_id, tray_id)
 
 
 def _used_global_tray_ids(item: PrintQueueItem | None) -> set[int] | None:
@@ -2594,7 +2610,7 @@ class PrintScheduler:
                         if (
                             (chosen is None or chosen.variant is None)
                             and printer is not None
-                            and is_nozzle_rack_model(printer.model)
+                            and is_nozzle_rack_model(printer.model, plugin_id=printer.plugin_id)
                         ):
                             item.nozzle_mapping = None
 
@@ -3690,7 +3706,7 @@ class PrintScheduler:
             status = printer_manager.get_status(printer_id)
             if not status:
                 return [f"{o.get('type', '?')} ({o.get('color_name') or o.get('color', '?')})" for o in force_overrides]
-            raw_data = status.raw_data
+            raw_data = printer_telemetry(status)
 
         # Build loaded (type, colour, tray_info_idx) triples from AMS and external spool.
         loaded: list[tuple[str, str, str]] = []
@@ -3748,7 +3764,7 @@ class PrintScheduler:
             status = printer_manager.get_status(printer_id)
             if not status:
                 return required_types  # Can't determine, assume all missing
-            raw_data = status.raw_data
+            raw_data = printer_telemetry(status)
 
         # Collect all filament types loaded on this printer (AMS units + external spool)
         # Use canonical types so equivalence groups (e.g. PA-CF/PA12-CF/PAHT-CF) match.
@@ -3788,7 +3804,7 @@ class PrintScheduler:
             status = printer_manager.get_status(printer_id)
             if not status:
                 return 0
-            raw_data = status.raw_data
+            raw_data = printer_telemetry(status)
 
         # Collect loaded filaments' type+color pairs
         loaded: set[tuple[str, str]] = set()
@@ -3833,7 +3849,7 @@ class PrintScheduler:
         safe to act on.
         """
         status = printer_manager.get_status(printer_id)
-        raw = (status.raw_data if status else None) or {}
+        raw = (printer_telemetry(status) if status else None) or {}
         for ams_unit in raw.get("ams") or []:
             if any(tray.get("tray_type") for tray in ams_unit.get("tray", [])):
                 return raw
@@ -3973,6 +3989,11 @@ class PrintScheduler:
         the data to judge, so dispatch is only ever blocked on a positive
         finding.
         """
+        # Resource job plans are validated against the provider descriptor; they
+        # never acquire numeric vendor tray mappings through the legacy matcher.
+        if _uses_resource_job(item, printer_manager.get_client(printer_id)):
+            return None
+
         stored_mapping: list | None = None
         if item.ams_mapping:
             try:
@@ -4086,12 +4107,12 @@ class PrintScheduler:
             ):
                 return None
         status = printer_manager.get_status(printer_id)
-        if status is None or not isinstance(status.raw_data, dict):
+        if status is None or not isinstance(printer_telemetry(status), dict):
             return None
-        ams_units = status.raw_data.get("ams")
+        ams_units = printer_telemetry(status).get("ams")
         if not isinstance(ams_units, list) or ams_units:
             return None
-        vt_trays = status.raw_data.get("vt_tray")
+        vt_trays = printer_telemetry(status).get("vt_tray")
         if not isinstance(vt_trays, list) or len(vt_trays) != 1 or not isinstance(vt_trays[0], dict):
             return None
         if self._build_loaded_filaments(status):
@@ -4292,7 +4313,7 @@ class PrintScheduler:
         # External feeds the printer reports and reports as empty. That is
         # evidence, unlike an external feed it says nothing about (#3239).
         empty_external: set[int] = set()
-        vt_trays = status.raw_data.get("vt_tray") if isinstance(status.raw_data, dict) else None
+        vt_trays = printer_telemetry(status).get("vt_tray") if isinstance(printer_telemetry(status), dict) else None
         for vt in vt_trays if isinstance(vt_trays, list) else []:
             if isinstance(vt, dict) and not vt.get("tray_type"):
                 try:
@@ -4398,7 +4419,7 @@ class PrintScheduler:
         # key means we have not heard yet — most likely a reconnect, where the
         # trays of a fully loaded AMS would be invisible for a few seconds. An
         # empty list is the positive report of a printer with no AMS.
-        ams_units = status.raw_data.get("ams")
+        ams_units = printer_telemetry(status).get("ams")
         if not isinstance(ams_units, list) or ams_units:
             return None
 
@@ -4690,78 +4711,9 @@ class PrintScheduler:
         Returns:
             List of loaded filament dicts with type, color, ams_id, tray_id, global_tray_id
         """
-        filaments = []
+        from backend.app.printers.state_accessors import loaded_materials
 
-        # Get ams_extruder_map for dual-nozzle printers (H2D, H2D Pro)
-        ams_extruder_map = status.raw_data.get("ams_extruder_map", {})
-
-        # Routes external spools to an extruder (#2771). Mirrors
-        # `buildLoadedFilaments` in the frontend.
-        vt_trays = status.raw_data.get("vt_tray") or []
-        is_dual_nozzle = reports_two_nozzles(status)
-
-        # Parse AMS units from raw_data
-        ams_data = status.raw_data.get("ams", [])
-        for ams_unit in ams_data:
-            ams_id = int(ams_unit.get("id", 0))
-            trays = ams_unit.get("tray", [])
-            is_ht = 128 <= ams_id <= 135  # AMS-HT unit ids; a regular AMS may list fewer trays
-
-            for tray in trays:
-                tray_type = tray.get("tray_type")
-                if tray_type:
-                    tray_id = int(tray.get("id", 0))
-                    tray_color = tray.get("tray_color", "")
-                    # tray_info_idx identifies the specific spool (e.g., "GFA00", "P4d64437")
-                    tray_info_idx = tray.get("tray_info_idx", "")
-                    # Normalize color: remove alpha, add hash
-                    color = self._normalize_color(tray_color)
-                    # Calculate global tray ID
-                    # AMS-HT units have IDs starting at 128 with a single tray
-                    global_tray_id = ams_id if ams_id >= 128 else ams_id * 4 + tray_id
-
-                    filaments.append(
-                        {
-                            "type": tray_type,
-                            "color": color,
-                            # `color` reads a missing colour as #808080; this
-                            # says whether the printer reported one at all.
-                            "color_known": bool(tray_color),
-                            "tray_info_idx": tray_info_idx,
-                            "ams_id": ams_id,
-                            "tray_id": tray_id,
-                            "is_ht": is_ht,
-                            "is_external": False,
-                            "global_tray_id": global_tray_id,
-                            "extruder_id": ams_extruder_map.get(str(ams_id)),
-                            "remain": tray.get("remain", -1),
-                        }
-                    )
-
-        # Check external spool(s) (vt_tray is a list)
-        for idx, vt in enumerate(vt_trays):
-            if vt.get("tray_type"):
-                color = self._normalize_color(vt.get("tray_color", ""))
-                tray_id = int(vt.get("id", 254))
-                filaments.append(
-                    {
-                        "type": vt["tray_type"],
-                        "color": color,
-                        "color_known": bool(vt.get("tray_color")),
-                        "tray_info_idx": vt.get("tray_info_idx", ""),
-                        "ams_id": -1,
-                        "tray_id": idx,
-                        "is_ht": False,
-                        "is_external": True,
-                        "global_tray_id": tray_id,
-                        # 254 = VIRTUAL_TRAY_DEPUTY_ID feeds extruder 1 (left),
-                        # 255 = VIRTUAL_TRAY_MAIN_ID feeds extruder 0 (right).
-                        "extruder_id": (255 - tray_id) if is_dual_nozzle else None,
-                        "remain": vt.get("remain", -1),
-                    }
-                )
-
-        return filaments
+        return loaded_materials(status)
 
     def _normalize_color(self, color: str | None) -> str:
         """Normalize color to #RRGGBB format."""
@@ -5294,7 +5246,7 @@ class PrintScheduler:
             return False
 
         # A print would run from the SD card the firmware is being written to.
-        from backend.app.services.firmware_update import upload_in_progress
+        from backend.app.printers.firmware import upload_in_progress
 
         if upload_in_progress(printer_id):
             logger.debug("Printer %d: not idle — firmware upload in progress", printer_id)
@@ -6268,7 +6220,7 @@ class PrintScheduler:
                 continue
 
             # Check each AMS unit from raw_data
-            ams_list = state.raw_data.get("ams", [])
+            ams_list = printer_telemetry(state).get("ams", [])
             logger.debug("Auto-drying: printer %d — checking %d AMS units", pid, len(ams_list))
             for ams_data in ams_list:
                 module_type = str(ams_data.get("module_type") or "")
@@ -6659,7 +6611,7 @@ class PrintScheduler:
                 to_remove.append(pid)
                 continue
             # Check if any AMS unit is still drying
-            ams_list = state.raw_data.get("ams", [])
+            ams_list = printer_telemetry(state).get("ams", [])
             any_drying = any(int(a.get("dry_time") or 0) > 0 for a in ams_list)
             if not any_drying:
                 to_remove.append(pid)
@@ -6687,7 +6639,7 @@ class PrintScheduler:
         reported back is real drying about to begin.
         """
         state = printer_manager.get_status(printer_id)
-        units = [a for a in ((state.raw_data or {}).get("ams") or [] if state else []) if isinstance(a, dict)]
+        units = [a for a in ((printer_telemetry(state) or {}).get("ams") or [] if state else []) if isinstance(a, dict)]
         timed = []
         for unit in units:
             try:
@@ -6732,7 +6684,7 @@ class PrintScheduler:
             self._drying_in_progress.pop(printer_id, None)
             return
 
-        ams_list = state.raw_data.get("ams", [])
+        ams_list = printer_telemetry(state).get("ams", [])
         for ams_data in ams_list:
             dry_time = int(ams_data.get("dry_time") or 0)
             if dry_time > 0:
@@ -7122,7 +7074,7 @@ class PrintScheduler:
         state = printer_manager.get_status(printer.id)
         if state is None:
             return 0
-        raw_data = state.raw_data or {}
+        raw_data = printer_telemetry(state) or {}
         used = _used_global_tray_ids(item)
         ams_list = raw_data.get("ams")
         # Older Bambu firmware nests AMS as {"ams": {"ams": [...]}} — try both.
@@ -8526,6 +8478,11 @@ class PrintScheduler:
         since been swapped to one with enough material clears the flag here
         so the next scheduler tick dispatches it.
         """
+        # Resource job plans are validated against the provider descriptor; they
+        # never acquire numeric vendor tray mappings through the legacy matcher.
+        if item.printer_id is not None and _uses_resource_job(item, printer_manager.get_client(item.printer_id)):
+            return False
+
         # User has explicitly acknowledged the deficit ("Print Anyway") —
         # don't re-flag, don't even compute. Without this short-circuit the
         # scheduler bounces between "user said anyway" (route clears
@@ -8732,6 +8689,11 @@ class PrintScheduler:
 
         Returns True when this dispatch attempt was blocked.
         """
+        # Resource job plans are validated against the provider descriptor; they
+        # never acquire numeric vendor tray mappings through the legacy matcher.
+        if item.printer_id is not None and _uses_resource_job(item, printer_manager.get_client(item.printer_id)):
+            return False
+
         if item.skip_filament_check or not item.printer_id:
             return False
 
@@ -8967,6 +8929,9 @@ class PrintScheduler:
             logger.error("Queue item %s: Printer %s not connected", item.id, item.printer_id)
             await self._power_off_if_needed(db, item)
             return
+
+        managed_connection = printer_manager.get_client(item.printer_id) if item.printer_id is not None else None
+        typed_dispatch = _uses_resource_job(item, managed_connection)
 
         # Cancel-while-dispatching race (#1853): the scheduler's snapshot of
         # `items` was taken at the top of check_queue, but the user can /cancel
@@ -9282,7 +9247,17 @@ class PrintScheduler:
         # well before the rack picker at the bottom of this method, so without
         # the rack in scope here that picker never got the chance to run.
         sliced_nozzle = archive.nozzle_diameter if archive else None
-        if sliced_nozzle:
+        if typed_dispatch:
+            from backend.app.printers.contracts import PrinterConfig
+            from backend.app.printers.job_dispatch import queue_job_plan
+            from backend.app.printers.sdk import SDKValidationError
+
+            try:
+                queue_job_plan(item, PrinterConfig.from_printer(printer), filename)
+            except SDKValidationError as exc:
+                await self._fail_dispatch(db, item, f"Invalid resource job plan: {exc}")
+                return
+        elif sliced_nozzle:
             nozzle_status = printer_manager.get_status(item.printer_id)
             installed = _installed_nozzle_diameters(nozzle_status)
             rack = _rack_nozzle_diameters(nozzle_status)
@@ -9325,7 +9300,7 @@ class PrintScheduler:
 
         # See `_effective_plate_id` for why this is resolved once here rather
         # than each site below repeating `item.plate_id or 1`.
-        effective_plate_id = _effective_plate_id(item.plate_id, file_path)
+        effective_plate_id = item.plate_id if typed_dispatch else _effective_plate_id(item.plate_id, file_path)
 
         # G-code injection for auto-print systems (#422)
         injected_path = None
@@ -9333,7 +9308,7 @@ class PrintScheduler:
         # only a START snippet was injected. Only an END snippet changes what the
         # camera sees at print completion.
         end_gcode_injected = False
-        if item.gcode_injection:
+        if item.gcode_injection and not typed_dispatch:
             try:
                 snippets_raw = await self._get_setting(db, "gcode_snippets")
                 if snippets_raw:
@@ -9345,7 +9320,7 @@ class PrintScheduler:
                         from backend.app.utils.threemf_tools import inject_gcode_into_3mf
 
                         injected_path = inject_gcode_into_3mf(
-                            file_path, effective_plate_id, start_gc or None, end_gc or None
+                            file_path, effective_plate_id or 1, start_gc or None, end_gc or None
                         )
                         if injected_path:
                             file_path = injected_path
@@ -9367,7 +9342,7 @@ class PrintScheduler:
 
         # Upload to root directory (not /cache/) - the start_print command references
         # files by name only (ftp://{filename}), so they must be in the root
-        remote_filename = derive_remote_filename(filename)
+        remote_filename = filename if typed_dispatch else derive_remote_filename(filename)
         remote_path = f"/{remote_filename}"
 
         # Get FTP retry settings
@@ -9410,6 +9385,7 @@ class PrintScheduler:
                 # and the upload's four attempts were then spent against it
                 # without a socket being opened.
                 respect_handshake_cooloff=False,
+                printer_id=getattr(printer, "id", None),
             )
             logger.debug("Queue item %s: Delete result: %s", item.id, delete_result)
         except Exception as e:
@@ -9461,6 +9437,7 @@ class PrintScheduler:
                     max_retries=ftp_retry_count,
                     retry_delay=ftp_retry_delay,
                     operation_name=f"Upload print to {printer.name}",
+                    printer_id=getattr(printer, "id", None),
                 )
             else:
                 uploaded = await upload_file_async(
@@ -9473,6 +9450,7 @@ class PrintScheduler:
                     progress_callback=progress_bridge,
                     respect_handshake_cooloff=False,
                     failure=upload_failure,
+                    printer_id=getattr(printer, "id", None),
                 )
         except UploadCancelled as e:
             uploaded = False
@@ -9557,7 +9535,7 @@ class PrintScheduler:
 
         # Parse AMS mapping if stored
         ams_mapping = None
-        if item.ams_mapping:
+        if not typed_dispatch and item.ams_mapping:
             try:
                 ams_mapping = json.loads(item.ams_mapping)
             except json.JSONDecodeError:
@@ -9615,7 +9593,7 @@ class PrintScheduler:
         billing_run_id = str(uuid.uuid4())
         # Written with the move to printing, so a retried send replaces the
         # last answer and a cancelled one leaves the row alone (#3279).
-        color_substitutions = await self._color_substitutions_for(db, item)
+        color_substitutions = None if typed_dispatch else await self._color_substitutions_for(db, item)
         cas = await db.execute(
             update(PrintQueueItem)
             .where(PrintQueueItem.id == item.id)
@@ -9641,6 +9619,7 @@ class PrintScheduler:
                     remote_path,
                     socket_timeout=ftp_timeout,
                     printer_model=printer.model,
+                    printer_id=getattr(printer, "id", None),
                 )
             except Exception as cleanup_err:
                 logger.debug(
@@ -9745,7 +9724,12 @@ class PrintScheduler:
         # files identical bar float noise — so it is resolved here against the
         # rack as it stands right now, after the upload, not at queue time.
         resolved_nozzle_mapping = None
-        if not item.nozzle_mapping and file_path is not None and is_nozzle_rack_model(printer.model):
+        if (
+            not typed_dispatch
+            and not item.nozzle_mapping
+            and file_path is not None
+            and is_nozzle_rack_model(printer.model, plugin_id=printer.plugin_id)
+        ):
             rack_plan = extract_rack_plan_from_3mf(file_path, plate_id=effective_plate_id)
             if rack_plan is not None:
                 try:
@@ -9785,6 +9769,7 @@ class PrintScheduler:
                             printer.access_code,
                             remote_path,
                             printer_model=printer.model,
+                            printer_id=getattr(printer, "id", None),
                         )
                     except Exception:
                         pass  # Best-effort — don't fail the error handler
@@ -9843,10 +9828,11 @@ class PrintScheduler:
 
         nozzle_slot_extruders = None
         if (
-            not item.nozzle_mapping
+            not typed_dispatch
+            and not item.nozzle_mapping
             and resolved_nozzle_mapping is None
             and file_path is not None
-            and is_nozzle_rack_model(printer.model)
+            and is_nozzle_rack_model(printer.model, plugin_id=printer.plugin_id)
         ):
             slot_extruders = extract_slot_extruders_from_3mf(file_path, plate_id=effective_plate_id)
             if slot_extruders:
@@ -9873,7 +9859,8 @@ class PrintScheduler:
         effective_use_ams = item.use_ams
         plate_uses_only_external = False
         if (
-            ams_mapping
+            not typed_dispatch
+            and ams_mapping
             and file_path is not None
             # Cheap gate before opening the file: with nothing on the spool
             # holder anywhere in the mapping, no subset of it can be all
@@ -9910,10 +9897,13 @@ class PrintScheduler:
         # the status handler normally restores it first, but nothing guarantees
         # it ran before this dispatch (#3219). Unthrottled: once per job.
         # Never allowed to stop the print it is protecting.
-        try:
-            await kprofile_drift.reapply_lost_kprofiles(item.printer_id, _used_global_tray_ids(item), throttle=False)
-        except Exception:
-            logger.exception("Queue item %s: K-profile check before dispatch failed", item.id)
+        if not typed_dispatch and item.printer_id is not None:
+            try:
+                await kprofile_drift.reapply_lost_kprofiles(
+                    item.printer_id, _used_global_tray_ids(item), throttle=False
+                )
+            except Exception:
+                logger.exception("Queue item %s: K-profile check before dispatch failed", item.id)
 
         # Start the print with AMS mapping, plate_id and print options.
         # nozzle_mapping rides through verbatim — JSON string captured from
@@ -9921,23 +9911,31 @@ class PrintScheduler:
         # parses + injects it only for dual-nozzle models so a null on every
         # other model is a transparent pass-through. The rack fallback is
         # resolved down there too, where the live rack position is known.
-        started = printer_manager.start_print(
-            item.printer_id,
-            remote_filename,
-            plate_id=effective_plate_id,
-            ams_mapping=ams_mapping,
-            bed_levelling=item.bed_levelling,
-            flow_cali=item.flow_cali,
-            vibration_cali=item.vibration_cali,
-            layer_inspect=item.layer_inspect,
-            timelapse=effective_timelapse,
-            use_ams=effective_use_ams,
-            plate_uses_only_external=plate_uses_only_external,
-            nozzle_offset_cali=item.nozzle_offset_cali,
-            nozzle_mapping=item.nozzle_mapping
-            or (json.dumps(resolved_nozzle_mapping) if resolved_nozzle_mapping else None),
-            nozzle_slot_extruders=nozzle_slot_extruders,
-        )
+        from backend.app.printers.job_dispatch import start_queue_job
+
+        dispatch_printer_id = item.printer_id
+        if dispatch_printer_id is None:
+            raise ValueError("A queue job must have a printer before dispatch")
+        if typed_dispatch:
+            started = await start_queue_job(item, printer, managed_connection, remote_filename)
+        else:
+            started = printer_manager.start_print(
+                dispatch_printer_id,
+                remote_filename,
+                plate_id=effective_plate_id or 1,
+                ams_mapping=ams_mapping,
+                bed_levelling=item.bed_levelling,
+                flow_cali=item.flow_cali,
+                vibration_cali=item.vibration_cali,
+                layer_inspect=item.layer_inspect,
+                timelapse=effective_timelapse,
+                use_ams=effective_use_ams,
+                plate_uses_only_external=plate_uses_only_external,
+                nozzle_offset_cali=item.nozzle_offset_cali,
+                nozzle_mapping=item.nozzle_mapping
+                or (json.dumps(resolved_nozzle_mapping) if resolved_nozzle_mapping else None),
+                nozzle_slot_extruders=nozzle_slot_extruders,
+            )
 
         if started:
             # The command is away, so the expectation is now legitimate and must
@@ -10047,6 +10045,7 @@ class PrintScheduler:
                     printer.access_code,
                     remote_path,
                     printer_model=printer.model,
+                    printer_id=getattr(printer, "id", None),
                 )
             except Exception:
                 pass  # Best-effort — don't fail the error handler

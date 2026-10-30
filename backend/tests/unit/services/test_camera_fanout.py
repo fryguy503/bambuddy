@@ -83,6 +83,39 @@ async def test_single_subscriber_receives_all_frames():
     await bc.force_shutdown()
 
 
+@pytest.mark.parametrize("forced", [True, False])
+async def test_a_full_viewer_queue_still_receives_stream_end(forced):
+    """Slow viewers finish after a forced stop or natural upstream completion."""
+    full = asyncio.Event()
+    finish = asyncio.Event()
+    frames = [f"frame-{index}".encode() for index in range(camera_fanout._SUBSCRIBER_QUEUE_SIZE)]
+
+    async def factory(disconnect):
+        for frame in frames:
+            yield frame
+        full.set()
+        await finish.wait()
+
+    broadcaster = MjpegBroadcaster("full-viewer", factory)
+    queue = await broadcaster.subscribe()
+    try:
+        await asyncio.wait_for(full.wait(), timeout=1)
+        assert queue.full()
+        if forced:
+            await broadcaster.force_shutdown()
+        else:
+            finish.set()
+            await broadcaster._pump_task
+
+        async def collect_remaining():
+            return [chunk async for chunk in iter_subscriber(broadcaster, queue)]
+
+        assert await asyncio.wait_for(collect_remaining(), timeout=1) == frames[1:]
+        assert broadcaster.subscriber_count == 0
+    finally:
+        await broadcaster.force_shutdown()
+
+
 # ---------------------------------------------------------------------------
 # Multiple subscribers share one upstream
 # ---------------------------------------------------------------------------

@@ -36,11 +36,11 @@ from backend.app.models.printer import Printer
 from backend.app.models.project import Project
 from backend.app.models.spool_usage_history import SpoolUsageHistory
 from backend.app.models.user import User
+from backend.app.printers.files import ftps_handshake_blocked, list_files_result_async
 from backend.app.schemas.archive import ArchiveResponse, ArchiveSlim, ArchiveStats, ArchiveUpdate
 from backend.app.schemas.print_log import PrintLogResponse
 from backend.app.schemas.slicer import SliceRequest
 from backend.app.services.archive import ArchiveService
-from backend.app.services.bambu_ftp import ftps_handshake_blocked, list_files_result_async
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_requirements import annotate_rack_groups
 from backend.app.services.print_confirmation import (
@@ -2671,7 +2671,7 @@ async def get_archive_printer_media(
         response["warnings"].append("printer_missing")
         return response
 
-    if ftps_handshake_blocked(printer.ip_address):
+    if ftps_handshake_blocked(printer.ip_address, printer_id=getattr(printer, "id", None)):
         if local_timelapse is None:
             response["warnings"].append("timelapse_unavailable")
         response["warnings"].append("ipcam_unavailable")
@@ -2685,7 +2685,7 @@ async def get_archive_printer_media(
         videos: list[dict] = []
         any_timelapse_directory_available = False
         for timelapse_dir in ("/timelapse", "/timelapse/video", "/record", "/recording"):
-            if ftps_handshake_blocked(printer.ip_address):
+            if ftps_handshake_blocked(printer.ip_address, printer_id=getattr(printer, "id", None)):
                 break
             listing = await list_files_result_async(
                 printer.ip_address,
@@ -2693,6 +2693,7 @@ async def get_archive_printer_media(
                 timelapse_dir,
                 timeout=_PRINTER_MEDIA_LIST_TIMEOUT_SECONDS,
                 printer_model=printer.model,
+                printer_id=getattr(printer, "id", None),
             )
             any_timelapse_directory_available |= listing.available
             candidates = [
@@ -2728,7 +2729,7 @@ async def get_archive_printer_media(
                     }
                 )
 
-    if ftps_handshake_blocked(printer.ip_address):
+    if ftps_handshake_blocked(printer.ip_address, printer_id=getattr(printer, "id", None)):
         response["warnings"].append("ipcam_unavailable")
         response["remote_files"] = remote_files
         return response
@@ -2739,6 +2740,7 @@ async def get_archive_printer_media(
         "/ipcam",
         timeout=_PRINTER_MEDIA_LIST_TIMEOUT_SECONDS,
         printer_model=printer.model,
+        printer_id=getattr(printer, "id", None),
     )
     if ipcam_listing.available:
         for file in match_ipcam_chunks(ipcam_listing.files, archive.started_at, archive.completed_at):
@@ -2904,7 +2906,7 @@ async def scan_timelapse(
     """Scan printer for timelapse matching this archive and attach it."""
     from backend.app.core.database import async_session
     from backend.app.models.printer import Printer
-    from backend.app.services.bambu_ftp import (
+    from backend.app.printers.files import (
         DownloadDeadlineExceeded,
         delete_archived_timelapse,
         download_file_bytes_async,
@@ -2945,11 +2947,15 @@ async def scan_timelapse(
     # Different printer models use different paths
     files = []
     for timelapse_path in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
-        if ftps_handshake_blocked(printer.ip_address):
+        if ftps_handshake_blocked(printer.ip_address, printer_id=getattr(printer, "id", None)):
             break
         try:
             files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_path, printer_model=printer.model
+                printer.ip_address,
+                printer.access_code,
+                timelapse_path,
+                printer_model=printer.model,
+                printer_id=getattr(printer, "id", None),
             )
             if files:
                 break
@@ -2961,7 +2967,7 @@ async def scan_timelapse(
         # to come back as one 500 (#2780). Nothing here will work while the
         # printer's file service is not answering over TLS, so say that rather
         # than reporting an empty directory.
-        if ftps_handshake_blocked(printer.ip_address):
+        if ftps_handshake_blocked(printer.ip_address, printer_id=getattr(printer, "id", None)):
             raise HTTPException(
                 503,
                 f"Printer {printer.ip_address} is not answering its file service over TLS. "
@@ -3112,6 +3118,7 @@ async def scan_timelapse(
                 retry_delay=ftp_retry_delay,
                 operation_name=f"Download timelapse {matching_file['name']}",
                 cooloff_ip=printer.ip_address,
+                printer_id=getattr(printer, "id", None),
             )
         else:
             timelapse_data = await download_file_bytes_async(
@@ -3121,6 +3128,7 @@ async def scan_timelapse(
                 socket_timeout=ftp_timeout,
                 printer_model=printer.model,
                 expected_size=matching_file.get("size"),
+                printer_id=getattr(printer, "id", None),
             )
     except DownloadDeadlineExceeded as exc:
         # Not retried: the deadline already fitted the file's size.
@@ -3138,6 +3146,7 @@ async def scan_timelapse(
         remote_path,
         len(timelapse_data),
         printer_model=printer.model,
+        printer_id=getattr(printer, "id", None),
     ):
         raise HTTPException(409, "The printer is still writing this video — try again in a moment")
 
@@ -3157,6 +3166,7 @@ async def scan_timelapse(
         verified=matching_file.get("size") is not None,
         printer_model=printer.model,
         printer_name=printer.name,
+        printer_id=getattr(printer, "id", None),
     )
 
     return {
@@ -3176,7 +3186,7 @@ async def select_timelapse(
     """Manually select a timelapse from the printer to attach."""
     from backend.app.core.database import async_session
     from backend.app.models.printer import Printer
-    from backend.app.services.bambu_ftp import (
+    from backend.app.printers.files import (
         DownloadDeadlineExceeded,
         delete_archived_timelapse,
         download_file_bytes_async,
@@ -3210,7 +3220,11 @@ async def select_timelapse(
     for timelapse_dir in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
             files = await list_files_async(
-                printer.ip_address, printer.access_code, timelapse_dir, printer_model=printer.model
+                printer.ip_address,
+                printer.access_code,
+                timelapse_dir,
+                printer_model=printer.model,
+                printer_id=getattr(printer, "id", None),
             )
             for f in files:
                 if f.get("name") == filename:
@@ -3242,6 +3256,7 @@ async def select_timelapse(
                 retry_delay=ftp_retry_delay,
                 operation_name=f"Download timelapse {filename}",
                 cooloff_ip=printer.ip_address,
+                printer_id=getattr(printer, "id", None),
             )
         else:
             timelapse_data = await download_file_bytes_async(
@@ -3251,6 +3266,7 @@ async def select_timelapse(
                 socket_timeout=ftp_timeout,
                 printer_model=printer.model,
                 expected_size=expected_size,
+                printer_id=getattr(printer, "id", None),
             )
     except DownloadDeadlineExceeded as exc:
         # Not retried: the deadline already fitted the file's size.
@@ -3268,6 +3284,7 @@ async def select_timelapse(
         remote_path,
         len(timelapse_data),
         printer_model=printer.model,
+        printer_id=getattr(printer, "id", None),
     ):
         raise HTTPException(409, "The printer is still writing this video — try again in a moment")
 
@@ -3286,6 +3303,7 @@ async def select_timelapse(
         verified=expected_size is not None,
         printer_model=printer.model,
         printer_name=printer.name,
+        printer_id=getattr(printer, "id", None),
     )
 
     return {

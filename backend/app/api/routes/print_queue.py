@@ -6,6 +6,7 @@ import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
 import defusedxml.ElementTree as ET
@@ -39,6 +40,9 @@ from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.printer import Printer
 from backend.app.models.project import Project
 from backend.app.models.user import User
+from backend.app.printers.models import (
+    is_gcode_compatible,
+)
 from backend.app.schemas.print_queue import (
     ColorSubstitution,
     PrintBatchCreate,
@@ -74,9 +78,6 @@ from backend.app.services.print_cost_estimate import estimate_queue_source_cost
 from backend.app.services.queue_announcements import announce_queue_jobs_added
 from backend.app.services.queue_item_printer import PRINTER_RESOLVED_DEFAULTS, drop_printer_resolved
 from backend.app.services.queue_position import lock_queue_positions, max_queue_position
-from backend.app.utils.printer_models import (
-    is_gcode_compatible,
-)
 from backend.app.utils.threemf_tools import (
     extract_plate_metadata_from_3mf,
     extract_print_time_from_3mf,
@@ -88,6 +89,35 @@ router = APIRouter(prefix="/queue", tags=["queue"])
 
 # Answer to a caller who may not start a job that waits for review (#1620)
 _AWAITING_REVIEW = "This job waits for review: someone who can manage all queue jobs has to start it"
+
+
+async def _validate_sdk_queue_plan(db: AsyncSession, printer_id: int | None, values: dict) -> None:
+    """Validate resource-bound plans without opening a hardware connection."""
+    if not any(values.get(name) for name in ("sdk_job", "tool_ids", "material_bindings", "job_options")):
+        return
+    if printer_id is None:
+        raise HTTPException(400, "A resource-bound SDK job plan requires a selected printer")
+    from backend.app.printers.api import printer_api
+    from backend.app.printers.contracts import PrinterConfig, PrinterPluginError
+    from backend.app.printers.job_dispatch import queue_job_plan
+    from backend.app.printers.sdk import OperationRequest, SDKValidationError, validate_invocation
+
+    printer = await db.scalar(select(Printer).where(Printer.id == printer_id))
+    if printer is None:
+        raise HTTPException(400, "Printer not found")
+    try:
+        config = PrinterConfig.from_printer(printer)
+        candidate = SimpleNamespace(id="validation", **values)
+        job = queue_job_plan(candidate, config, "host://queue/validation.gcode")
+        device = printer_api.describe_device(config)
+        validate_invocation(
+            device,
+            OperationRequest(operation_id="job.start", parameters=job.model_dump(mode="json", exclude_none=True)),
+        )
+    except ValidationError as error:
+        raise HTTPException(400, "Invalid printer job plan fields") from error
+    except (SDKValidationError, PrinterPluginError, ValueError) as error:
+        raise HTTPException(400, f"Invalid printer job plan: {error}") from error
 
 
 def _variant_summaries(item: PrintQueueItem) -> list[QueueVariantSummary]:
@@ -521,6 +551,10 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "confirm_outcome": item.confirm_outcome,
         "preheat_override": item.preheat_override,
         "preheat_chamber_target_override": item.preheat_chamber_target_override,
+        "tool_ids": item.tool_ids,
+        "material_bindings": item.material_bindings,
+        "job_options": item.job_options,
+        "sdk_job": item.sdk_job,
         "status": item.status,
         "started_at": item.started_at,
         "completed_at": item.completed_at,
@@ -1215,6 +1249,12 @@ async def add_to_queue(
         if not result.scalar_one_or_none():
             raise HTTPException(400, "Printer not found")
 
+    await _validate_sdk_queue_plan(
+        db,
+        data.printer_id,
+        {name: getattr(data, name) for name in ("sdk_job", "tool_ids", "material_bindings", "job_options", "plate_id")},
+    )
+
     # Validate target_model has active printers. Skipped for cross-model items:
     # target_model there is just the first candidate, and _resolve_queue_variants
     # has already required that *some* candidate has a printer.
@@ -1520,6 +1560,10 @@ async def add_to_queue(
             confirm_outcome=data.confirm_outcome,
             preheat_override=data.preheat_override,
             preheat_chamber_target_override=data.preheat_chamber_target_override,
+            tool_ids=data.tool_ids,
+            material_bindings=data.material_bindings,
+            job_options=data.job_options,
+            sdk_job=data.sdk_job,
             gcode_injection=data.gcode_injection,
             cleanup_library_after_dispatch=data.cleanup_library_after_dispatch,
             project_id=data.project_id,
@@ -2512,6 +2556,15 @@ async def update_queue_item(
         for field, default in PRINTER_RESOLVED_DEFAULTS.items():
             update_data.setdefault(field, default)
 
+    await _validate_sdk_queue_plan(
+        db,
+        new_printer_id,
+        {
+            name: update_data.get(name, getattr(item, name))
+            for name in ("sdk_job", "tool_ids", "material_bindings", "job_options", "plate_id")
+        },
+    )
+
     # Serialize ams_mapping to JSON for TEXT column storage
     if "ams_mapping" in update_data:
         update_data["ams_mapping"] = json.dumps(update_data["ams_mapping"]) if update_data["ams_mapping"] else None
@@ -2898,13 +2951,13 @@ async def stop_queue_item(
     # printer reports later is the user's cancel. Marked before the first await
     # so an on_print_complete arriving during the db.commit() yield already
     # sees the flag (no spurious "print failed" notification).
-    from backend.app.services.print_control import stop_print_by_user
+    from backend.app.services.print_control import stop_print_by_user_async
 
     stop_sent = False
     try:
         # A printing job always has a printer; without one there is nothing to stop.
         if printer_id is not None:
-            stop_sent = stop_print_by_user(printer_id, mark_when_unsent=True)
+            stop_sent = await stop_print_by_user_async(printer_id, mark_when_unsent=True)
         if not stop_sent:
             logger.warning("stop_print returned False for printer %s - printer may not be connected", printer_id)
     except Exception as e:

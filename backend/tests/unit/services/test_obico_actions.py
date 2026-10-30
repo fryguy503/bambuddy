@@ -12,11 +12,25 @@ This file pins the post-#1794 wiring: `execute_action` calls
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from backend.app.services.obico_actions import execute_action
+
+
+async def test_pause_uses_standard_job_operation_for_api2_only_provider():
+    from backend.app.printers.api import PrinterConnectionAdapter
+    from backend.app.services.obico_actions import _pause_print_async
+
+    client = MagicMock(spec=PrinterConnectionAdapter)
+    client._plugin = SimpleNamespace(operations=())
+    with (
+        patch("backend.app.services.printer_manager.printer_manager.get_client", return_value=client),
+        patch("backend.app.printers.api.execute_host_command", new_callable=AsyncMock, return_value=True) as dispatch,
+    ):
+        await _pause_print_async(7)
+    dispatch.assert_awaited_once_with(client, "pause_print")
 
 
 @asynccontextmanager

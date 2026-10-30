@@ -6,7 +6,6 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from backend.app.schemas.print_queue import TriState
-from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C
 
 # Outbound service URLs validated on save, so a bad value is rejected at
 # configuration time with a clear message rather than failing opaquely at
@@ -1015,7 +1014,7 @@ class AppSettingsUpdate(BaseModel):
         return candidate
 
     @staticmethod
-    def _validate_preset_triple(v: str | None, field_name: str, lo: int, hi: int) -> str | None:
+    def _validate_preset_triple(v: str | None, field_name: str, lo: int, hi: int | None) -> str | None:
         """Validate a JSON array of exactly 3 ints in [lo, hi]. Empty = defaults."""
         if v is None or v == "":
             return v
@@ -1027,24 +1026,24 @@ class AppSettingsUpdate(BaseModel):
             raise ValueError(f"{field_name} must be a JSON array of exactly 3 integers")
         if not all(isinstance(item, int) and not isinstance(item, bool) for item in parsed):
             raise ValueError(f"{field_name} entries must all be integers")
-        if not all(lo <= item <= hi for item in parsed):
+        if not all(item >= lo and (hi is None or item <= hi) for item in parsed):
             raise ValueError(f"{field_name} entries must each be in [{lo}, {hi}]")
         return v
 
     @field_validator("nozzle_temp_presets")
     @classmethod
     def validate_nozzle_temp_presets(cls, v: str | None) -> str | None:
-        return cls._validate_preset_triple(v, "nozzle_temp_presets", 0, 320)
+        return cls._validate_preset_triple(v, "nozzle_temp_presets", 0, None)
 
     @field_validator("bed_temp_presets")
     @classmethod
     def validate_bed_temp_presets(cls, v: str | None) -> str | None:
-        return cls._validate_preset_triple(v, "bed_temp_presets", 0, 140)
+        return cls._validate_preset_triple(v, "bed_temp_presets", 0, None)
 
     @field_validator("chamber_temp_presets")
     @classmethod
     def validate_chamber_temp_presets(cls, v: str | None) -> str | None:
-        return cls._validate_preset_triple(v, "chamber_temp_presets", 0, MAX_CHAMBER_TEMP_C)
+        return cls._validate_preset_triple(v, "chamber_temp_presets", 0, None)
 
     @field_validator("fan_speed_presets")
     @classmethod

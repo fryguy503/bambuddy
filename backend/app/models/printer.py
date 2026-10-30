@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, String, false, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, String, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -12,13 +12,17 @@ class Printer(Base):
     __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Existing installations are Bambu printers. The provider is persisted so
+    # installing another printer plugin never changes how an existing row connects.
+    plugin_id: Mapped[str] = mapped_column(String(64), default="bambu", server_default="bambu")
+    plugin_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     name: Mapped[str] = mapped_column(String(100))
-    serial_number: Mapped[str] = mapped_column(String(50), unique=True)
+    serial_number: Mapped[str] = mapped_column(String(128), unique=True)
     ip_address: Mapped[str] = mapped_column(String(253))
-    access_code: Mapped[str] = mapped_column(String(20))
+    access_code: Mapped[str] = mapped_column(String(2048))
     model: Mapped[str | None] = mapped_column(String(50))
     location: Mapped[str | None] = mapped_column(String(100))  # Group/location name
-    nozzle_count: Mapped[int] = mapped_column(default=1)  # 1 or 2, auto-detected from MQTT
+    nozzle_count: Mapped[int] = mapped_column(default=1)  # Arbitrary detected tool count; see the SDK topology.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_archive: Mapped[bool] = mapped_column(Boolean, default=True)
     print_hours_offset: Mapped[float] = mapped_column(Float, default=0.0)  # Baseline hours to add

@@ -48,6 +48,7 @@ from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.models.library import FileVariantGroup, LibraryFile
 from backend.app.models.user import User
+from backend.app.printers.models import normalize_printer_model, normalize_printer_model_id
 from backend.app.schemas.library import (
     VariantGroupCreate,
     VariantGroupMemberRequest,
@@ -55,7 +56,6 @@ from backend.app.schemas.library import (
     VariantGroupResponse,
     VariantGroupUpdate,
 )
-from backend.app.utils.printer_models import normalize_printer_model, normalize_printer_model_id
 
 logger = logging.getLogger(__name__)
 

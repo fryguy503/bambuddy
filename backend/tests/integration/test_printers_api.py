@@ -34,6 +34,16 @@ def _mock_printer_test_connection():
 class TestPrintersAPI:
     """Integration tests for /api/v1/printers/ endpoints."""
 
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_vendor_controls_reject_other_printer_plugins(self, async_client: AsyncClient, printer_factory):
+        printer = await printer_factory(plugin_id="fixture.other", is_active=False)
+        with patch("backend.app.api.routes.printers.printer_manager") as manager:
+            response = await async_client.post(f"/api/v1/printers/{printer.id}/temperature/nozzle?target=220")
+        assert response.status_code == 409
+        assert "generic SDK" in response.json()["detail"]
+        manager.get_client.assert_not_called()
+
     # ========================================================================
     # List endpoints
     # ========================================================================
@@ -313,6 +323,35 @@ class TestPrintersAPI:
         response = await async_client.delete("/api/v1/printers/9999")
 
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize("status", ["accepted", "running", "succeeded", "failed", "cancelled"])
+    async def test_delete_printer_respects_operation_receipts(
+        self, async_client: AsyncClient, printer_factory, db_session, status
+    ):
+        from backend.app.models.printer import Printer
+        from backend.app.models.printer_operation import PrinterOperation
+
+        printer = await printer_factory()
+        printer_id = printer.id
+        row = PrinterOperation(
+            id="delete-operation", printer_id=printer_id, operation_id="fixture.operation",
+            idempotency_key="delete-operation", request_digest="digest", request_data={},
+            operation_schema={}, receipt={"status": status}, process_id="test",
+        )
+        db_session.add(row)
+        await db_session.commit()
+
+        response = await async_client.delete(f"/api/v1/printers/{printer_id}")
+
+        if status in {"accepted", "running"}:
+            assert response.status_code == 409
+            assert await db_session.scalar(select(Printer.id).where(Printer.id == printer_id)) == printer_id
+            assert await db_session.scalar(select(PrinterOperation.id).where(PrinterOperation.id == row.id)) == row.id
+        else:
+            assert response.status_code == 200
+            assert await db_session.scalar(select(PrinterOperation.id).where(PrinterOperation.id == row.id)) is None
 
     # ========================================================================
     # File download endpoint — non-ASCII filename regression (#1245)

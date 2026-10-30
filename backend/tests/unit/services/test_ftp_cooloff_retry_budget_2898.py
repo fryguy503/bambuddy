@@ -137,7 +137,11 @@ class TestConnectHonoursTheOptOut:
         _arm()
         with caplog.at_level(logging.WARNING, logger=LOGGER):
             BambuFTPClient(IP, "12345678").connect()
+            first_deadline = BambuFTPClient._handshake_blocked_until[IP]
             _arm()  # a later handshake failure pushes the deadline out
+            # Two immediate calls can share one Windows clock tick. Make the
+            # simulated later failure later, independently of clock precision.
+            BambuFTPClient._handshake_blocked_until[IP] = first_deadline + 1.0
             BambuFTPClient(IP, "12345678").connect()
 
         warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]

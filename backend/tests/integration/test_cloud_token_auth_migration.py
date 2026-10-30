@@ -257,7 +257,7 @@ async def test_preset_miss_logs_at_debug_but_faults_stay_at_warning(
     # Phase 1 would otherwise short-circuit the cloud call on a warm cache.
     monkeypatch.setattr(cloud_routes, "_filament_cache", {})
 
-    with caplog.at_level(logging.DEBUG, logger="backend.app.api.routes.cloud"):
+    with caplog.at_level(logging.DEBUG, logger=cloud_routes.logger.name):
         result = await cloud_routes.get_filament_info(setting_ids=["GFL05"], db=db_session, current_user=None)
 
     records = [r for r in caplog.records if "Failed to get cloud preset" in r.getMessage()]

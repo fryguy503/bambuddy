@@ -1,0 +1,1143 @@
+{
+  "schema_version": 2,
+  "device_id": "reference-six-tools",
+  "model_id": "simulator",
+  "name": "SDK development simulator",
+  "revision": "1",
+  "capabilities": [],
+  "resources": [
+    {
+      "id": "tool:0",
+      "kind": "tool",
+      "label": "Tool 0",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "hotends": [
+          "hotend:0"
+        ],
+        "extruders": [
+          "extruder:0"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "hotend:0",
+      "kind": "hotend",
+      "label": "Hotend 0",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "extruder:0",
+      "kind": "extruder",
+      "label": "Extruder 0",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "dock:0",
+      "kind": "dock",
+      "label": "Dock 0",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "accepts": [
+          "tool:0"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "heater:0",
+      "kind": "heater",
+      "label": "Tool heater 0",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "heats": [
+          "hotend:0"
+        ]
+      },
+      "properties": {
+        "temperature": {
+          "label": "Temperature",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": false,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": null,
+          "parameter": null,
+          "description": null
+        },
+        "target": {
+          "label": "Target",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 400
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": true,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": "heater.set_target",
+          "parameter": "target",
+          "description": null
+        }
+      },
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "tool:1",
+      "kind": "tool",
+      "label": "Tool 1",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "hotends": [
+          "hotend:1"
+        ],
+        "extruders": [
+          "extruder:1"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "hotend:1",
+      "kind": "hotend",
+      "label": "Hotend 1",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "extruder:1",
+      "kind": "extruder",
+      "label": "Extruder 1",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "dock:1",
+      "kind": "dock",
+      "label": "Dock 1",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "accepts": [
+          "tool:1"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "heater:1",
+      "kind": "heater",
+      "label": "Tool heater 1",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "heats": [
+          "hotend:1"
+        ]
+      },
+      "properties": {
+        "temperature": {
+          "label": "Temperature",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": false,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": null,
+          "parameter": null,
+          "description": null
+        },
+        "target": {
+          "label": "Target",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 420
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": true,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": "heater.set_target",
+          "parameter": "target",
+          "description": null
+        }
+      },
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "tool:2",
+      "kind": "tool",
+      "label": "Tool 2",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "hotends": [
+          "hotend:2"
+        ],
+        "extruders": [
+          "extruder:2"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "hotend:2",
+      "kind": "hotend",
+      "label": "Hotend 2",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "extruder:2",
+      "kind": "extruder",
+      "label": "Extruder 2",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "dock:2",
+      "kind": "dock",
+      "label": "Dock 2",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "accepts": [
+          "tool:2"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "heater:2",
+      "kind": "heater",
+      "label": "Tool heater 2",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "heats": [
+          "hotend:2"
+        ]
+      },
+      "properties": {
+        "temperature": {
+          "label": "Temperature",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": false,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": null,
+          "parameter": null,
+          "description": null
+        },
+        "target": {
+          "label": "Target",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 440
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": true,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": "heater.set_target",
+          "parameter": "target",
+          "description": null
+        }
+      },
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "tool:3",
+      "kind": "tool",
+      "label": "Tool 3",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "hotends": [
+          "hotend:3"
+        ],
+        "extruders": [
+          "extruder:3"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "hotend:3",
+      "kind": "hotend",
+      "label": "Hotend 3",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "extruder:3",
+      "kind": "extruder",
+      "label": "Extruder 3",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "dock:3",
+      "kind": "dock",
+      "label": "Dock 3",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "accepts": [
+          "tool:3"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "heater:3",
+      "kind": "heater",
+      "label": "Tool heater 3",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "heats": [
+          "hotend:3"
+        ]
+      },
+      "properties": {
+        "temperature": {
+          "label": "Temperature",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": false,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": null,
+          "parameter": null,
+          "description": null
+        },
+        "target": {
+          "label": "Target",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 460
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": true,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": "heater.set_target",
+          "parameter": "target",
+          "description": null
+        }
+      },
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "tool:4",
+      "kind": "tool",
+      "label": "Tool 4",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "hotends": [
+          "hotend:4"
+        ],
+        "extruders": [
+          "extruder:4"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "hotend:4",
+      "kind": "hotend",
+      "label": "Hotend 4",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "extruder:4",
+      "kind": "extruder",
+      "label": "Extruder 4",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "dock:4",
+      "kind": "dock",
+      "label": "Dock 4",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "accepts": [
+          "tool:4"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "heater:4",
+      "kind": "heater",
+      "label": "Tool heater 4",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "heats": [
+          "hotend:4"
+        ]
+      },
+      "properties": {
+        "temperature": {
+          "label": "Temperature",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": false,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": null,
+          "parameter": null,
+          "description": null
+        },
+        "target": {
+          "label": "Target",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 480
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": true,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": "heater.set_target",
+          "parameter": "target",
+          "description": null
+        }
+      },
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "tool:5",
+      "kind": "tool",
+      "label": "Tool 5",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "hotends": [
+          "hotend:5"
+        ],
+        "extruders": [
+          "extruder:5"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "hotend:5",
+      "kind": "hotend",
+      "label": "Hotend 5",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "extruder:5",
+      "kind": "extruder",
+      "label": "Extruder 5",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {},
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "dock:5",
+      "kind": "dock",
+      "label": "Dock 5",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "accepts": [
+          "tool:5"
+        ]
+      },
+      "properties": {},
+      "metadata": {},
+      "extensions": {}
+    },
+    {
+      "id": "heater:5",
+      "kind": "heater",
+      "label": "Tool heater 5",
+      "parent_id": null,
+      "roles": [],
+      "capabilities": [],
+      "relations": {
+        "heats": [
+          "hotend:5"
+        ]
+      },
+      "properties": {
+        "temperature": {
+          "label": "Temperature",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": false,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": null,
+          "parameter": null,
+          "description": null
+        },
+        "target": {
+          "label": "Target",
+          "value_schema": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "unit": "degC",
+          "readable": true,
+          "writable": true,
+          "read_permission": "printers:read",
+          "write_permission": null,
+          "operation_id": "heater.set_target",
+          "parameter": "target",
+          "description": null
+        }
+      },
+      "metadata": {},
+      "extensions": {}
+    }
+  ],
+  "operations": [
+    {
+      "id": "heater.set_target",
+      "label": "Set heater target",
+      "description": null,
+      "namespace": "core",
+      "resource_kinds": [
+        "heater"
+      ],
+      "resource_ids": [],
+      "parameters_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      "resource_parameters_schemas": {},
+      "result_schema": {
+        "type": "boolean"
+      },
+      "permission": "printers:control",
+      "additional_permissions": [],
+      "asynchronous": false,
+      "cancellable": false,
+      "idempotent": false,
+      "timeout_seconds": 30.0,
+      "confirmation": null,
+      "extensions": {}
+    },
+    {
+      "id": "job.start",
+      "label": "Start simulated job",
+      "description": null,
+      "namespace": "core",
+      "resource_kinds": [],
+      "resource_ids": [],
+      "parameters_schema": {
+        "$defs": {
+          "JobArtifact": {
+            "additionalProperties": false,
+            "properties": {
+              "uri": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "title": "Uri",
+                "type": "string"
+              },
+              "format": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Format",
+                "type": "string"
+              },
+              "media_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Media Type"
+              },
+              "filename": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Filename"
+              },
+              "size_bytes": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Size Bytes"
+              },
+              "sha256": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Sha256"
+              },
+              "storage_resource_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Storage Resource Id"
+              },
+              "metadata": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/JsonValue"
+                },
+                "title": "Metadata",
+                "type": "object"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ],
+            "title": "JobArtifact",
+            "type": "object"
+          },
+          "JsonValue": {},
+          "MaterialBinding": {
+            "additionalProperties": false,
+            "description": "The material source and physical components assigned to one job input.",
+            "properties": {
+              "input_id": {
+                "minLength": 1,
+                "title": "Input Id",
+                "type": "string"
+              },
+              "tool_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
+                "title": "Tool Id",
+                "type": "string"
+              },
+              "source_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Source Id"
+              },
+              "slot_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Slot Id"
+              },
+              "hotend_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Hotend Id"
+              },
+              "extruder_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Extruder Id"
+              },
+              "material": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/JsonValue"
+                },
+                "title": "Material",
+                "type": "object"
+              },
+              "required_mass_grams": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Required Mass Grams"
+              },
+              "required_length_mm": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Required Length Mm"
+              },
+              "extensions": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/JsonValue"
+                },
+                "title": "Extensions",
+                "type": "object"
+              }
+            },
+            "required": [
+              "input_id",
+              "tool_id"
+            ],
+            "title": "MaterialBinding",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Job Id",
+            "type": "string"
+          },
+          "artifact": {
+            "$ref": "#/$defs/JobArtifact"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "bindings": {
+            "items": {
+              "$ref": "#/$defs/MaterialBinding"
+            },
+            "title": "Bindings",
+            "type": "array"
+          },
+          "selected_tool_ids": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
+              "type": "string"
+            },
+            "title": "Selected Tool Ids",
+            "type": "array"
+          },
+          "build_surface_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Build Surface Id"
+          },
+          "plate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plate Id"
+          },
+          "options": {
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
+            "title": "Options",
+            "type": "object"
+          },
+          "extensions": {
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
+            "title": "Extensions",
+            "type": "object"
+          }
+        },
+        "required": [
+          "job_id",
+          "artifact"
+        ],
+        "title": "JobRequest",
+        "type": "object"
+      },
+      "resource_parameters_schemas": {},
+      "result_schema": {
+        "type": "boolean"
+      },
+      "permission": "printers:files",
+      "additional_permissions": [],
+      "asynchronous": false,
+      "cancellable": false,
+      "idempotent": false,
+      "timeout_seconds": 30.0,
+      "confirmation": null,
+      "extensions": {}
+    },
+    {
+      "id": "job.stop",
+      "label": "Stop simulated job",
+      "description": null,
+      "namespace": "core",
+      "resource_kinds": [],
+      "resource_ids": [],
+      "parameters_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "resource_parameters_schemas": {},
+      "result_schema": {
+        "type": "boolean"
+      },
+      "permission": "printers:control",
+      "additional_permissions": [],
+      "asynchronous": false,
+      "cancellable": false,
+      "idempotent": false,
+      "timeout_seconds": 30.0,
+      "confirmation": null,
+      "extensions": {}
+    },
+    {
+      "id": "job.pause",
+      "label": "Pause simulated job",
+      "description": null,
+      "namespace": "core",
+      "resource_kinds": [],
+      "resource_ids": [],
+      "parameters_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "resource_parameters_schemas": {},
+      "result_schema": {
+        "type": "boolean"
+      },
+      "permission": "printers:control",
+      "additional_permissions": [],
+      "asynchronous": false,
+      "cancellable": false,
+      "idempotent": false,
+      "timeout_seconds": 30.0,
+      "confirmation": null,
+      "extensions": {}
+    },
+    {
+      "id": "job.resume",
+      "label": "Resume simulated job",
+      "description": null,
+      "namespace": "core",
+      "resource_kinds": [],
+      "resource_ids": [],
+      "parameters_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "resource_parameters_schemas": {},
+      "result_schema": {
+        "type": "boolean"
+      },
+      "permission": "printers:control",
+      "additional_permissions": [],
+      "asynchronous": false,
+      "cancellable": false,
+      "idempotent": false,
+      "timeout_seconds": 30.0,
+      "confirmation": null,
+      "extensions": {}
+    },
+    {
+      "id": "telemetry.refresh",
+      "label": "Refresh simulator state",
+      "description": null,
+      "namespace": "core",
+      "resource_kinds": [],
+      "resource_ids": [],
+      "parameters_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "resource_parameters_schemas": {},
+      "result_schema": {
+        "type": "boolean"
+      },
+      "permission": "printers:control",
+      "additional_permissions": [],
+      "asynchronous": false,
+      "cancellable": false,
+      "idempotent": false,
+      "timeout_seconds": 30.0,
+      "confirmation": null,
+      "extensions": {}
+    }
+  ],
+  "configuration_schema": {
+    "type": "object",
+    "properties": {
+      "tool_count": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 64,
+        "default": 6,
+        "title": "Simulated tools"
+      }
+    },
+    "additionalProperties": false
+  },
+  "extensions": {
+    "bambuddy:development_only": true
+  }
+}

@@ -1,6 +1,7 @@
 from datetime import datetime
+from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.schemas.printer_location import normalize_location_name
@@ -27,30 +28,14 @@ def _mask_url_login(url: str | None) -> str | None:
 
 
 class PrinterBase(BaseModel):
+    plugin_id: str = Field(default="bambu", min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_.-]*$")
+
     name: str = Field(..., min_length=1, max_length=100)
-    serial_number: str = Field(..., min_length=1, max_length=50)
-
-    @field_validator("serial_number")
-    @classmethod
-    def _normalize_serial_number(cls, v: str) -> str:
-        """Uppercase and trim the serial number.
-
-        Bambu serial numbers are uppercase alphanumeric, and the MQTT report
-        topic ``device/<serial>/report`` is case-sensitive. A serial entered
-        in the wrong case (or with stray whitespace) connects and subscribes
-        without error but never receives a message — the printer publishes to
-        the correctly-cased topic, so every status field stays unknown (#1465).
-        Normalising on input makes the subscribed topic always match.
-        """
-        normalized = v.strip().upper()
-        if not normalized:
-            raise ValueError("serial_number must not be blank")
-        return normalized
+    serial_number: str = Field(default="", max_length=128, validate_default=True)
 
     ip_address: str = Field(
-        ...,
+        default="",
         max_length=253,
-        pattern=r"^(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)$",
     )
     model: str | None = None
     location: str | None = None  # Group/location name
@@ -64,10 +49,48 @@ class PrinterBase(BaseModel):
 
 
 class PrinterCreate(PrinterBase):
+    @field_validator("plugin_id")
+    @classmethod
+    def _installed_plugin(cls, value: str) -> str:
+        from backend.app.printers.registry import get_plugin
+
+        get_plugin(value)
+        return value
+
+    @field_validator("serial_number")
+    @classmethod
+    def _normalize_serial_number(cls, v: str, info: ValidationInfo) -> str:
+        """Uppercase and trim the serial number.
+
+        Bambu serial numbers are uppercase alphanumeric, and the MQTT report
+        topic ``device/<serial>/report`` is case-sensitive. A serial entered
+        in the wrong case (or with stray whitespace) connects and subscribes
+        without error but never receives a message — the printer publishes to
+        the correctly-cased topic, so every status field stays unknown (#1465).
+        Normalising on input makes the subscribed topic always match.
+        """
+        from backend.app.printers.registry import get_plugin
+
+        normalized = get_plugin(info.data.get("plugin_id", "bambu")).normalize_serial_number(v)
+        return normalized
+
+    # Provider credentials/options are input-only; ordinary readers never see them.
+    plugin_options: dict | None = None
     # access_code lives on the input shapes only — never on the default
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
     # connect to the printer's MQTT and bypass Bambuddy's RBAC.
-    access_code: str = Field(..., min_length=1, max_length=20)
+    access_code: str = Field(default="", max_length=2048)
+
+    @model_validator(mode="after")
+    def _provider_configuration(self):
+        from backend.app.printers.contracts import PrinterConfig
+        from backend.app.printers.registry import get_plugin
+
+        plugin = get_plugin(self.plugin_id)
+        if not self.serial_number and not plugin.connection_fields().get("serial_number", {}).get("required", False):
+            self.serial_number = f"{self.plugin_id}:{uuid4()}"
+        plugin.validate_config(PrinterConfig.from_printer(self))
+        return self
 
     # Input only, not on PrinterBase: SQLite never enforced the column width,
     # so a stored location may be longer, and the response must still read it.
@@ -89,9 +112,9 @@ class PrinterUpdate(IgnoresNullForRequiredColumns):
     ip_address: str | None = Field(
         default=None,
         max_length=253,
-        pattern=r"^(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)$",
     )
     access_code: str | None = None
+    plugin_options: dict | None = None
     model: str | None = None
     location: str | None = None
     _location = field_validator("location")(normalize_location_name)
@@ -113,7 +136,7 @@ class PrinterUpdate(IgnoresNullForRequiredColumns):
 class PrinterResponse(PrinterBase):
     id: int
     is_active: bool
-    nozzle_count: int = 1  # 1 or 2, auto-detected from MQTT
+    nozzle_count: int = 1  # Detected tool count; topology and IDs come from the device descriptor.
     # Whether the model is sold with both Standard and High Flow nozzles, so a
     # K-profile's flow type is a real choice rather than a meaningless field.
     # Derived from the model, not from nozzle_count — see
@@ -152,6 +175,7 @@ class PrinterResponseWithSecret(PrinterResponse):
     """
 
     access_code: str
+    plugin_options: dict | None = None
 
     @field_validator("external_camera_url", "external_camera_snapshot_url", mode="after")
     @classmethod
@@ -517,6 +541,7 @@ class PrinterDiagnosticResult(BaseModel):
 
 
 class DiagnosticRequest(BaseModel):
+    plugin_id: str = "bambu"
     """Pre-save (Add Printer) connection diagnostic request.
 
     serial_number + access_code are optional: when both are present the

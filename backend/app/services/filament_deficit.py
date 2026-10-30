@@ -294,8 +294,8 @@ async def _get_printer_backup_context(
     accounting), so an offline printer is never treated as backup-capable.
     """
     try:
+        from backend.app.printers.models import is_dual_nozzle_model
         from backend.app.services.printer_manager import printer_manager
-        from backend.app.utils.printer_models import is_dual_nozzle_model
     except ImportError:
         return False, {}, False
 

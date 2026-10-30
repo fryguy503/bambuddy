@@ -2,6 +2,7 @@ import type { KProfileWriteResult } from '../utils/kprofileWrite';
 import type { BambuCatalogColor } from '../utils/colors';
 import type { ArchivePlatesResponse, LibraryFilePlatesResponse } from '../types/plates';
 import { batched, byField, byId } from './batch';
+import type { PrinterPlugin, SdkJobRequest } from '../printer-plugins/types';
 
 const API_BASE = '/api/v1';
 
@@ -147,7 +148,7 @@ async function postForBlob(endpoint: string, data: unknown, signal?: AbortSignal
   return response.blob();
 }
 
-async function request<T>(
+export async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
@@ -435,6 +436,8 @@ export interface PrinterLocationUpdate {
 
 export interface Printer {
   id: number;
+  plugin_id?: string;
+  plugin_options?: Record<string, unknown> | null;
   name: string;
   serial_number: string;
   ip_address: string;
@@ -444,7 +447,7 @@ export interface Printer {
   access_code?: string;
   model: string | null;
   location: string | null;  // Group/location name
-  nozzle_count: number;  // 1 or 2, auto-detected from MQTT
+  nozzle_count: number;  // Detected tool count; stable IDs come from the device descriptor.
   // Model is sold with both Standard and High Flow nozzles, so a K-profile's
   // flow type is a real choice. Derived from the model, not the nozzle count —
   // only the A-series has a single variant.
@@ -766,6 +769,8 @@ export interface PrinterStatus {
 
 export interface PrinterCreate {
   name: string;
+  plugin_id?: string;
+  plugin_options?: Record<string, unknown> | null;
   serial_number: string;
   ip_address: string;
   access_code: string;
@@ -2761,6 +2766,10 @@ export interface DiscoveredTasmotaDevice {
 
 // Print Queue types
 export interface PrintQueueItem {
+  sdk_job?: SdkJobRequest | null;
+  tool_ids?: string[] | null;
+  material_bindings?: Record<string, string> | null;
+  job_options?: Record<string, unknown> | null;
   id: number;
   printer_id: number | null;  // null = unassigned
   target_model: string | null;  // Target printer model for model-based assignment
@@ -2932,6 +2941,10 @@ export interface PrintBatch {
 }
 
 export interface PrintQueueItemCreate {
+  sdk_job?: SdkJobRequest | null;
+  tool_ids?: string[];
+  material_bindings?: Record<string, string>;
+  job_options?: Record<string, unknown>;
   printer_id?: number | null;  // null = unassigned
   target_model?: string | null;  // Target printer model (mutually exclusive with printer_id)
   target_location?: string | null;  // Target location filter (only used with target_model)
@@ -3028,6 +3041,10 @@ export interface PrintBatchDispatchRequest {
 }
 
 export interface PrintQueueItemUpdate {
+  sdk_job?: SdkJobRequest | null;
+  tool_ids?: string[];
+  material_bindings?: Record<string, string>;
+  job_options?: Record<string, unknown>;
   printer_id?: number | null;  // null = unassign
   // A deliberate filament substitution in the mapping (#2799); see PrintModal.
   skip_filament_check?: boolean;
@@ -5249,6 +5266,7 @@ export const api = {
     }),
 
   // Printers
+  getPrinterPlugins: () => request<PrinterPlugin[]>('/printer-plugins'),
   getPrinters: () => request<Printer[]>('/printers/'),
   getPrinter: (id: number) => request<Printer>(`/printers/${id}`),
   createPrinter: (data: PrinterCreate) =>
@@ -7604,6 +7622,7 @@ export const api = {
     request<PrinterDiagnosticResult>(`/printers/${printerId}/diagnostic`),
   diagnoseConnection: (body: {
     ip_address: string;
+    plugin_id?: string;
     serial_number?: string;
     access_code?: string;
   }) =>
@@ -8906,6 +8925,7 @@ export interface BatchThumbnailResponse {
 // Discovery types
 export interface DiscoveredPrinter {
   serial: string;
+  plugin_id?: string;
   name: string;
   ip_address: string;
   model: string | null;
@@ -8929,30 +8949,33 @@ export interface SubnetScanStatus {
   total: number;
 }
 
-// Discovery API
+// Discovery API. Explicit plugin identity keeps vendor probes separated.
+const discoveryPath = (path: string, pluginId?: string) => pluginId
+  ? `${path}${path.includes('?') ? '&' : '?'}plugin_id=${encodeURIComponent(pluginId)}` : path;
+
 export const discoveryApi = {
-  getInfo: () => request<DiscoveryInfo>('/discovery/info'),
+  getInfo: (pluginId?: string) => request<DiscoveryInfo>(discoveryPath('/discovery/info', pluginId)),
 
-  startDiscovery: (duration: number = 10) =>
-    request<DiscoveryStatus>(`/discovery/start?duration=${duration}`, { method: 'POST' }),
+  startDiscovery: (duration: number = 10, pluginId?: string) =>
+    request<DiscoveryStatus>(discoveryPath(`/discovery/start?duration=${duration}`, pluginId), { method: 'POST' }),
 
-  stopDiscovery: () =>
-    request<DiscoveryStatus>('/discovery/stop', { method: 'POST' }),
+  stopDiscovery: (pluginId?: string) =>
+    request<DiscoveryStatus>(discoveryPath('/discovery/stop', pluginId), { method: 'POST' }),
 
-  getDiscoveredPrinters: () =>
-    request<DiscoveredPrinter[]>('/discovery/printers'),
+  getDiscoveredPrinters: (pluginId?: string) =>
+    request<DiscoveredPrinter[]>(discoveryPath('/discovery/printers', pluginId)),
 
   // Subnet scanning (for Docker environments)
-  startSubnetScan: (subnet: string, timeout: number = 1.0) =>
-    request<SubnetScanStatus>('/discovery/scan', {
+  startSubnetScan: (subnet: string, timeout: number = 1.0, pluginId?: string) =>
+    request<SubnetScanStatus>(discoveryPath('/discovery/scan', pluginId), {
       method: 'POST',
       body: JSON.stringify({ subnet, timeout }),
     }),
 
-  getScanStatus: () => request<SubnetScanStatus>('/discovery/scan/status'),
+  getScanStatus: (pluginId?: string) => request<SubnetScanStatus>(discoveryPath('/discovery/scan/status', pluginId)),
 
-  stopSubnetScan: () =>
-    request<SubnetScanStatus>('/discovery/scan/stop', { method: 'POST' }),
+  stopSubnetScan: (pluginId?: string) =>
+    request<SubnetScanStatus>(discoveryPath('/discovery/scan/stop', pluginId), { method: 'POST' }),
 };
 
 // Virtual Printer types

@@ -35,6 +35,8 @@ class TestPrinterManager:
     def mock_printer(self):
         """Create a mock Printer object."""
         printer = MagicMock()
+        printer.plugin_id = "bambu"
+        printer.plugin_options = None
         printer.id = 1
         printer.ip_address = "192.168.1.100"
         printer.serial_number = "00M09A123456789"
@@ -243,7 +245,7 @@ class TestPrinterManager:
     @pytest.mark.asyncio
     async def test_connect_printer_creates_client(self, manager, mock_printer):
         """Verify connecting creates an MQTT client."""
-        with patch("backend.app.services.printer_manager.BambuMQTTClient") as MockClient:
+        with patch("backend.app.printers.bambu.mqtt.BambuMQTTClient") as MockClient:
             mock_instance = MagicMock()
             mock_instance.state = MagicMock()
             mock_instance.state.connected = True
@@ -261,7 +263,7 @@ class TestPrinterManager:
         """Verify connecting disconnects existing client first."""
         manager._clients[mock_printer.id] = mock_client
 
-        with patch("backend.app.services.printer_manager.BambuMQTTClient") as MockClient:
+        with patch("backend.app.printers.bambu.mqtt.BambuMQTTClient") as MockClient:
             new_client = MagicMock()
             new_client.state = MagicMock()
             new_client.state.connected = True
@@ -274,7 +276,7 @@ class TestPrinterManager:
     @pytest.mark.asyncio
     async def test_connect_printer_returns_false_on_failure(self, manager, mock_printer):
         """Verify returns False when connection fails."""
-        with patch("backend.app.services.printer_manager.BambuMQTTClient") as MockClient:
+        with patch("backend.app.printers.bambu.mqtt.BambuMQTTClient") as MockClient:
             mock_instance = MagicMock()
             mock_instance.state = MagicMock()
             mock_instance.state.connected = False
@@ -666,7 +668,7 @@ class TestPrinterManager:
     @pytest.mark.asyncio
     async def test_test_connection_success(self, manager):
         """Verify test_connection returns success on connection."""
-        with patch("backend.app.services.printer_manager.BambuMQTTClient") as MockClient:
+        with patch("backend.app.printers.bambu.mqtt.BambuMQTTClient") as MockClient:
             mock_instance = MagicMock()
             mock_instance.state = MagicMock()
             mock_instance.state.connected = True
@@ -684,7 +686,7 @@ class TestPrinterManager:
     @pytest.mark.asyncio
     async def test_test_connection_failure(self, manager):
         """Verify test_connection returns failure on connection error."""
-        with patch("backend.app.services.printer_manager.BambuMQTTClient") as MockClient:
+        with patch("backend.app.printers.bambu.mqtt.BambuMQTTClient") as MockClient:
             mock_instance = MagicMock()
             mock_instance.state = MagicMock()
             mock_instance.state.connected = False
@@ -712,7 +714,7 @@ class TestPrinterManager:
         import asyncio
         import time
 
-        with patch("backend.app.services.printer_manager.BambuMQTTClient") as MockClient:
+        with patch("backend.app.printers.bambu.mqtt.BambuMQTTClient") as MockClient:
             mock_instance = MagicMock()
             mock_instance.state = MagicMock()
             mock_instance.state.connected = False  # not connected at probe start
@@ -757,7 +759,7 @@ class TestPrinterManager:
         import threading
         import time
 
-        with patch("backend.app.services.printer_manager.BambuMQTTClient") as MockClient:
+        with patch("backend.app.printers.bambu.mqtt.BambuMQTTClient") as MockClient:
             asyncio_thread_id = threading.get_ident()
             disconnect_thread_ids: list[int] = []
             disconnect_blocked_for: list[float] = []

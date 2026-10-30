@@ -281,7 +281,7 @@ async def get_metrics(
     lines.append("# TYPE bambuddy_chamber_temp_celsius gauge")
     for printer in printers:
         # Only report chamber temp for models that have a real sensor
-        if not supports_chamber_temp(printer.model):
+        if not supports_chamber_temp(printer.model, plugin_id=printer.plugin_id):
             continue
         status = all_statuses.get(printer.id)
         temp = status.temperatures.get("chamber", 0) if status else 0

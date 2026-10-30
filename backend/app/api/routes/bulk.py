@@ -19,7 +19,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.api.routes.firmware import FirmwareUpdateInfo, _checks_enabled, _not_checked, _printer_update_info
+from backend.app.api.routes.firmware import (
+    FirmwareUpdateInfo,
+    _checks_enabled,
+    _not_checked,
+    _printer_update_info,
+    _supports_firmware,
+)
 from backend.app.api.routes.ha_sensors import _card_sensors, _reading
 from backend.app.api.routes.library import _folders_by_archive
 from backend.app.api.routes.print_queue import _QUEUE_ITEM_LOADS, _enrich_response
@@ -47,12 +53,12 @@ from backend.app.models.printer_ha_sensor import PrinterHASensor
 from backend.app.models.slot_preset import SlotPresetMapping
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.user import User
+from backend.app.printers.firmware import get_firmware_service
 from backend.app.schemas.library import FolderResponse
 from backend.app.schemas.print_queue import PrintQueueItemResponse
 from backend.app.schemas.printer import PrinterStatus
 from backend.app.schemas.printer_ha_sensor import PrinterHASensorReading
 from backend.app.schemas.smart_plug import SmartPlugResponse
-from backend.app.services.firmware_check import get_firmware_service
 from backend.app.utils.id_list import parse_id_list
 
 router = APIRouter(prefix="/bulk", tags=["bulk"])
@@ -179,8 +185,10 @@ async def check_printers_firmware(
     ordered = [printers[i] for i in wanted if i in printers]
     if not await _checks_enabled(db):
         return [_not_checked(p) for p in ordered]
-    firmware_service = get_firmware_service()
-    return [await _printer_update_info(firmware_service, p) for p in ordered]
+    return [
+        await _printer_update_info(get_firmware_service(p), p) if _supports_firmware(p) else _not_checked(p)
+        for p in ordered
+    ]
 
 
 @router.get("/printer-queues", response_model=dict[int, list[PrintQueueItemResponse]])

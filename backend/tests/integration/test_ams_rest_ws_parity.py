@@ -156,3 +156,21 @@ async def test_rest_survives_the_shapes_websocket_already_tolerated(async_client
     assert [unit["id"] for unit in body["ams"]] == [0]
     assert body["ams"][0]["temp"] is None
     assert [vt["id"] for vt in body["vt_tray"]] == [254]
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.parametrize("idle_state", ["IDLE", "FINISH", "FAILED"])
+async def test_rest_hides_stale_plate_for_inactive_print(async_client: AsyncClient, printer_factory, idle_state):
+    printer = await printer_factory()
+    state = PrinterState(connected=True, state=idle_state, gcode_file="/Metadata/plate_4.gcode")
+    with patch("backend.app.api.routes.printers.printer_manager") as manager:
+        manager.get_status.return_value = state
+        manager.is_awaiting_plate_clear.return_value = True
+        manager.get_drying_targets.return_value = {}
+        response = await async_client.get(f"/api/v1/printers/{printer.id}/status")
+    assert response.status_code == 200
+    assert response.json()["current_plate_id"] is None
+    assert response.json()["awaiting_plate_clear"] is True
+    # WebSocket behavior stays compatible with its historical snapshot.
+    assert printer_state_to_dict(state)["current_plate_id"] == 4

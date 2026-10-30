@@ -46,6 +46,30 @@ def stop_print_by_user(printer_id: int, *, mark_when_unsent: bool = False) -> bo
     return sent
 
 
+async def stop_print_by_user_async(printer_id: int, *, mark_when_unsent: bool = False) -> bool:
+    """Stop through API2 when a provider exposes standardized job controls."""
+    from backend.app.printers.api import PrinterConnectionAdapter, execute_host_command
+
+    client = printer_manager.get_client(printer_id)
+    if not isinstance(client, PrinterConnectionAdapter) or "stop_print" in client._plugin.operations:
+        return stop_print_by_user(printer_id, mark_when_unsent=mark_when_unsent)
+    # Mark before yielding: the provider may report cancellation inside invoke.
+    # The queue also requires this mark when the transport cannot send a stop.
+    should_mark = mark_when_unsent or not _known_idle(printer_id)
+    from backend.app.main import _user_stopped_printers
+
+    marked_before = printer_id in _user_stopped_printers
+    if should_mark:
+        mark_stopped_by_user(printer_id)
+    sent = False
+    try:
+        sent = bool(await execute_host_command(client, "stop_print"))
+        return sent
+    finally:
+        if not sent and not mark_when_unsent and not marked_before:
+            _user_stopped_printers.discard(printer_id)
+
+
 def _known_idle(printer_id: int) -> bool:
     """The printer reports a state with no print loaded.
 

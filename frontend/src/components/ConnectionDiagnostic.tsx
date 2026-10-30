@@ -97,6 +97,7 @@ export function DiagnosticChecklist({ result }: { result: PrinterDiagnosticResul
 
 type Connection = {
   ip_address: string;
+  plugin_id?: string;
   serial_number?: string;
   access_code?: string;
 };

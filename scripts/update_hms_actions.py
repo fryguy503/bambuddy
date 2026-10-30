@@ -3,7 +3,7 @@ import json
 
 import requests
 
-HMS_ACTIONS_JSON_PATH = "backend/app/data/hms_actions.json"
+HMS_ACTIONS_JSON_PATH = "backend/app/printers/bambu/data/hms_actions.json"
 HMS_REQUEST_URL = "https://e.bambulab.com/hms/GetActionImage.php"
 
 HMS_ID_TO_ACTION_NAME_MAP: dict[int, str] = {

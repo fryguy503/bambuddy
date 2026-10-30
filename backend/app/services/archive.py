@@ -291,7 +291,7 @@ class ThreeMFParser:
                     key = meta.get("key")
                     value = meta.get("value")
                     if key == "printer_model_id" and value:
-                        from backend.app.utils.printer_models import normalize_printer_model_id
+                        from backend.app.printers.models import normalize_printer_model_id
 
                         normalized = normalize_printer_model_id(value)
                         if normalized:
@@ -518,7 +518,7 @@ class ThreeMFParser:
             if "sliced_for_model" not in self.metadata:
                 match = re.search(r";\s*printer_model\s*=\s*(.+)", header, re.IGNORECASE)
                 if match:
-                    from backend.app.utils.printer_models import normalize_printer_model
+                    from backend.app.printers.models import normalize_printer_model
 
                     raw_model = match.group(1).strip()
                     self.metadata["sliced_for_model"] = normalize_printer_model(raw_model)
@@ -605,7 +605,7 @@ class ThreeMFParser:
 
             # Printer model (extract and normalize)
             if "printer_model" in data:
-                from backend.app.utils.printer_models import normalize_printer_model
+                from backend.app.printers.models import normalize_printer_model
 
                 self.metadata["sliced_for_model"] = normalize_printer_model(data["printer_model"])
 

@@ -77,7 +77,7 @@ class PrintLogEntry(Base):
     # What describes one print and today still lives on the archive, which
     # the archive redesign moves here. Written alongside the archive's own
     # columns for now; read from the archive until each part moves over.
-    subtask_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    subtask_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     billing_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     cost_center_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     wallet_charge_skipped: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

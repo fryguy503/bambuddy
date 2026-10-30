@@ -26,7 +26,7 @@ from backend.app.api.routes._spoolman_helpers import (
     BAMBU_LAST_DRIED_HOURS_KEY,
     BAMBU_LAST_DRIED_TEMP_KEY,
 )
-from backend.app.services.bambu_mqtt import DryingCycleEnd
+from backend.app.printers.state import DryingCycleEnd
 from backend.app.utils.local_time import utcnow_naive
 
 logger = logging.getLogger(__name__)

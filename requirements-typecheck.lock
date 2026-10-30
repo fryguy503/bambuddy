@@ -38,6 +38,8 @@ attrs==26.1.0
     # via
     #   -r requirements.lock
     #   aiohttp
+    #   jsonschema
+    #   referencing
 basedpyright==1.40.2
     # via -r requirements-typecheck.txt
 bcrypt==5.0.0
@@ -120,6 +122,12 @@ iniconfig==2.3.1
     # via
     #   -r requirements.lock
     #   pytest
+jsonschema==4.26.0
+    # via -r requirements.lock
+jsonschema-specifications==2025.9.1
+    # via
+    #   -r requirements.lock
+    #   jsonschema
 kiwisolver==1.5.1
     # via
     #   -r requirements.lock
@@ -233,8 +241,18 @@ pyyaml==6.0.3
     # via -r requirements.lock
 qrcode==8.2
     # via -r requirements.lock
+referencing==0.37.0
+    # via
+    #   -r requirements.lock
+    #   jsonschema
+    #   jsonschema-specifications
 reportlab==5.0.1
     # via -r requirements.lock
+rpds-py==2026.9.1
+    # via
+    #   -r requirements.lock
+    #   jsonschema
+    #   referencing
 ruff==0.17.0
     # via -r requirements.lock
 six==1.17.0
@@ -261,6 +279,7 @@ typing-extensions==4.16.0
     #   pydantic-core
     #   pyopenssl
     #   pytest-asyncio
+    #   referencing
     #   sqlalchemy
     #   starlette
     #   typing-inspection

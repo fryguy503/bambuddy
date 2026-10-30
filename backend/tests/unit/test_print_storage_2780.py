@@ -296,7 +296,7 @@ class TestTheGateUsesThePerPrintUrlOnly:
         the sticky field, the case above starts failing -- and so does this."""
         import inspect
 
-        from backend.app.services import print_storage
+        from backend.app.printers.bambu import storage as print_storage
 
         source = inspect.getsource(print_storage.print_file_reachable_over_ftp)
         assert "current_project_url" in source

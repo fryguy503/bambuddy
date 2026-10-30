@@ -25,7 +25,7 @@ async def execute_action(
     printer_name = await _get_printer_name(printer_id)
 
     if action in ("pause", "pause_and_off"):
-        _pause_print(printer_id)
+        await _pause_print_async(printer_id)
 
     if action == "pause_and_off":
         await _turn_off_linked_plugs(printer_id)
@@ -49,6 +49,18 @@ def _pause_print(printer_id: int) -> None:
         return
     if not client.pause_print():
         logger.warning("Obico pause: pause_print() returned False for printer %s", printer_id)
+
+
+async def _pause_print_async(printer_id: int) -> None:
+    from backend.app.printers.api import PrinterConnectionAdapter, execute_host_command
+    from backend.app.services.printer_manager import printer_manager
+
+    client = printer_manager.get_client(printer_id)
+    if not isinstance(client, PrinterConnectionAdapter) or "pause_print" in client._plugin.operations:
+        _pause_print(printer_id)
+        return
+    if not await execute_host_command(client, "pause_print"):
+        logger.warning("Obico pause: the provider did not accept pause for printer %s", printer_id)
 
 
 async def _turn_off_linked_plugs(printer_id: int) -> None:

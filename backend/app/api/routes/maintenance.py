@@ -20,6 +20,7 @@ from backend.app.core.printer_scope import PrinterScope
 from backend.app.models.maintenance import MaintenanceHistory, MaintenanceType, PrinterMaintenance
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
+from backend.app.printers.models import get_rod_type
 from backend.app.schemas.maintenance import (
     MaintenanceHistoryResponse,
     MaintenanceStatus,
@@ -32,7 +33,6 @@ from backend.app.schemas.maintenance import (
     PrinterMaintenanceUpdate,
 )
 from backend.app.services.notification_service import notification_service
-from backend.app.utils.printer_models import get_rod_type
 
 logger = logging.getLogger(__name__)
 

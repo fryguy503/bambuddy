@@ -112,6 +112,8 @@ ALLOWED = {
     "services/print_control.py",
     "services/printer_manager.py",
     "services/bambu_mqtt.py",
+    "printers/bambu/mqtt.py",
+    "printers/bambu/device.py",
     "main.py",
 }
 

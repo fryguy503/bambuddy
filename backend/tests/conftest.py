@@ -286,7 +286,13 @@ def reset_auth_enabled_cache():
 
 
 @pytest.fixture(autouse=True)
-def disconnect_printers_registered_during_a_test():
+def printer_plugin_data_isolation(monkeypatch, tmp_path):
+    """Package tests and ordinary provider lookups never read an install's store."""
+    monkeypatch.setattr(settings, "printer_plugin_dir", tmp_path / "printer-plugins")
+
+
+@pytest.fixture(autouse=True)
+def disconnect_printers_registered_during_a_test(printer_plugin_data_isolation):
     """Give every test an empty ``printer_manager`` singleton.
 
     ``POST /api/v1/printers`` really calls ``connect_printer``, so a test that
@@ -303,13 +309,21 @@ def disconnect_printers_registered_during_a_test():
     test. ``disconnect_printer`` also clears model/printer-info caches and stops
     any paho thread owned by the leaked client.
     """
+    from backend.app.printers import api as printer_api
     from backend.app.services.printer_manager import printer_manager
 
-    for printer_id in list(printer_manager._clients):
-        printer_manager.disconnect_printer(printer_id)
+    def clear_printers():
+        # Provider bindings intentionally survive a disconnect in production,
+        # including disabled printers. The per-test database does not survive,
+        # so its routing identity must be forgotten before ids can be reused.
+        printer_ids = set(printer_manager._clients) | set(printer_manager._configs) | set(printer_api._bindings)
+        for printer_id in printer_ids:
+            printer_manager.disconnect_printer(printer_id)
+            printer_manager.forget_printer(printer_id)
+
+    clear_printers()
     yield
-    for printer_id in list(printer_manager._clients):
-        printer_manager.disconnect_printer(printer_id)
+    clear_printers()
 
 
 @pytest.fixture(scope="session")

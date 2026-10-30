@@ -1,38 +1,13 @@
-export function getPrinterImage(model: string | null | undefined): string {
-  if (!model) return '/img/printers/default.png';
-  const m = model.toLowerCase().replace(/\s+/g, '');
-  if (m.includes('x1e')) return '/img/printers/x1e.png';
-  if (m.includes('x1c') || m.includes('x1carbon')) return '/img/printers/x1c.png';
-  if (m.includes('x1')) return '/img/printers/x1c.png';
-  if (m.includes('x2d') || m === 'n6') return '/img/printers/x2d.png';
-  if (m.includes('h2dpro') || m.includes('h2d-pro')) return '/img/printers/h2dpro.png';
-  if (m.includes('h2d')) return '/img/printers/h2d.png';
-  if (m.includes('h2c')) return '/img/printers/h2c.png';
-  if (m.includes('h2s')) return '/img/printers/h2d.png';
-  if (m.includes('p2s')) return '/img/printers/p2s.png';
-  if (m.includes('p1s')) return '/img/printers/p1s.png';
-  if (m.includes('p1p')) return '/img/printers/p1p.png';
-  if (m.includes('a2l') || m === 'n9') return '/img/printers/a2l.png';
-  if (m.includes('a1mini')) return '/img/printers/a1mini.png';
-  if (m.includes('a1')) return '/img/printers/a1.png';
-  return '/img/printers/default.png';
+import { findPrinterModel, getPrinterPluginCatalog } from '../printer-plugins/catalog';
+import type { PrinterPlugin } from '../printer-plugins/types';
+
+export function getPrinterImage(
+  model: string | null | undefined,
+  pluginId = 'bambu',
+  plugins: readonly PrinterPlugin[] = getPrinterPluginCatalog(),
+): string {
+  return findPrinterModel(model, pluginId, plugins)?.image_url ?? '/img/printers/default.png';
 }
-
-// Ceiling for every chamber-temperature target the UI accepts (manual set,
-// preheat filament map, per-item preheat override, chamber quick-select
-// presets). Mirrors backend MAX_CHAMBER_TEMP_C in
-// backend/app/utils/printer_models.py — keep the two in sync. The H2 series
-// (H2C / H2D / H2D Pro / H2S) and X2D heat the chamber to 65 °C; X1E tops out
-// at 60 and its firmware clamps anything higher.
-export const MAX_CHAMBER_TEMP_C = 65;
-
-// G-code interchange families (#2578). Mirrors backend GCODE_COMPAT_FAMILIES
-// in backend/app/utils/printer_models.py — keep the two in sync. A sliced 3MF
-// may target a different model ONLY within its family; everything else is
-// exact-match only.
-const GCODE_COMPAT_FAMILIES: ReadonlyArray<ReadonlySet<string>> = [
-  new Set(['X1', 'X1C', 'X1E', 'P1P', 'P1S']),
-];
 
 /** True when G-code sliced for one model may be dispatched to the other.
  *  Unknown/missing metadata on either side returns true (can't validate). */
@@ -45,7 +20,8 @@ export function isGcodeCompatible(
   const a = norm(slicedForModel);
   const b = norm(targetModel);
   if (a === b) return true;
-  return GCODE_COMPAT_FAMILIES.some((family) => family.has(a) && family.has(b));
+  const sourceGroup = findPrinterModel(slicedForModel)?.gcode_compatibility_group;
+  return !!sourceGroup && sourceGroup === findPrinterModel(targetModel)?.gcode_compatibility_group;
 }
 
 export function getWifiStrength(rssi: number): { labelKey: string; color: string; bars: number } {

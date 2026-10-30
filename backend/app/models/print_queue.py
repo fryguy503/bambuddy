@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, false, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -136,6 +136,12 @@ class PrintQueueItem(Base):
     # exactly as before the migration.
     preheat_override: Mapped[str] = mapped_column(String(10), default="inherit", server_default="inherit")
     preheat_chamber_target_override: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # API2 plans use opaque resource IDs. Legacy vendor mappings remain input
+    # compatibility fields and are never guessed for another printer plugin.
+    tool_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    material_bindings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    job_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    sdk_job: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Status: pending, printing, completed, failed, skipped, cancelled
     status: Mapped[str] = mapped_column(String(20), default="pending")

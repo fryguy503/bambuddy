@@ -46,9 +46,16 @@ def _clear_print_state():
         d.clear()
 
 
-async def _start(test_engine, printer_id: int, subtask_id: str, last_dispatch: str | None = None) -> None:
+async def _start(
+    test_engine,
+    printer_id: int,
+    subtask_id: str,
+    last_dispatch: str | None = None,
+    event_data: dict | None = None,
+    state_override=None,
+) -> None:
     session_maker = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
-    state = MagicMock(
+    state = state_override or MagicMock(
         current_project_url=f"ftp://{SUBTASK}.gcode.3mf",
         sdcard=True,
         sdcard_reported=True,
@@ -99,7 +106,10 @@ async def _start(test_engine, printer_id: int, subtask_id: str, last_dispatch: s
         from backend.app.main import on_print_start
 
         await on_print_start(
-            printer_id, {"filename": DISPATCH, "subtask_name": SUBTASK, "raw_data": {"subtask_id": subtask_id}}
+            printer_id,
+            event_data
+            if event_data is not None
+            else {"filename": DISPATCH, "subtask_name": SUBTASK, "raw_data": {"subtask_id": subtask_id}},
         )
 
 

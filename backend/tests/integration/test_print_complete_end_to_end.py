@@ -87,7 +87,14 @@ async def queued_print(db_session, printer_factory):
     return {"printer": printer.id, "user": user.id, "center": center.id, "archive": archive.id, "item": item.id}
 
 
-async def _complete(test_engine, printer_id: int, status: str, name: str = "part", extra: dict | None = None):
+async def _complete(
+    test_engine,
+    printer_id: int,
+    status: str,
+    name: str = "part",
+    extra: dict | None = None,
+    event_data: dict | None = None,
+):
     maker = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     tasks_before = set(asyncio.all_tasks())
     with (
@@ -110,7 +117,9 @@ async def _complete(test_engine, printer_id: int, status: str, name: str = "part
         plug.on_print_complete = AsyncMock()
         await main_module.on_print_complete(
             printer_id,
-            {
+            event_data
+            if event_data is not None
+            else {
                 "status": status,
                 "filename": f"{name}.gcode",
                 "subtask_name": name,

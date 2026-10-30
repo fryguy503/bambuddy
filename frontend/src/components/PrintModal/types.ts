@@ -314,6 +314,8 @@ export interface PrintOptionsProps {
   /** Show the dual-nozzle-only options (nozzle offset calibration). Default false.
    *  Pass true when at least one selected printer is dual-nozzle. */
   showDualNozzleOptions?: boolean;
+  /** Device-specific options are supplied by the plugin's job.start schema. */
+  genericDevice?: boolean;
 }
 
 /**

@@ -58,7 +58,7 @@ async def _connect(manager):
     """Run ``connect_printer`` against a fake MQTT client, return that client."""
     created = MagicMock()
     created.state = PrinterState()
-    with patch("backend.app.services.printer_manager.BambuMQTTClient", return_value=created):
+    with patch("backend.app.printers.bambu.mqtt.BambuMQTTClient", return_value=created):
         await manager.connect_printer(_printer())
     return created
 

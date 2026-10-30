@@ -1,0 +1,326 @@
+{
+  "schema_version": 2,
+  "device_id": "reference-six-tools",
+  "descriptor_revision": "1",
+  "sequence": 1,
+  "observed_at": "2026-10-30T17:21:05.236317Z",
+  "connected": true,
+  "status": "idle",
+  "job_id": null,
+  "job": null,
+  "resources": [
+    {
+      "resource_id": "tool:0",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "hotend:0",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "extruder:0",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "dock:0",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "heater:0",
+      "available": true,
+      "status": null,
+      "properties": {
+        "temperature": {
+          "value": 20,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        },
+        "target": {
+          "value": 0,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        }
+      },
+      "extensions": {}
+    },
+    {
+      "resource_id": "tool:1",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "hotend:1",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "extruder:1",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "dock:1",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "heater:1",
+      "available": true,
+      "status": null,
+      "properties": {
+        "temperature": {
+          "value": 20,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        },
+        "target": {
+          "value": 0,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        }
+      },
+      "extensions": {}
+    },
+    {
+      "resource_id": "tool:2",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "hotend:2",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "extruder:2",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "dock:2",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "heater:2",
+      "available": true,
+      "status": null,
+      "properties": {
+        "temperature": {
+          "value": 20,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        },
+        "target": {
+          "value": 0,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        }
+      },
+      "extensions": {}
+    },
+    {
+      "resource_id": "tool:3",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "hotend:3",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "extruder:3",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "dock:3",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "heater:3",
+      "available": true,
+      "status": null,
+      "properties": {
+        "temperature": {
+          "value": 20,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        },
+        "target": {
+          "value": 0,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        }
+      },
+      "extensions": {}
+    },
+    {
+      "resource_id": "tool:4",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "hotend:4",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "extruder:4",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "dock:4",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "heater:4",
+      "available": true,
+      "status": null,
+      "properties": {
+        "temperature": {
+          "value": 20,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        },
+        "target": {
+          "value": 0,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        }
+      },
+      "extensions": {}
+    },
+    {
+      "resource_id": "tool:5",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "hotend:5",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "extruder:5",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "dock:5",
+      "available": true,
+      "status": null,
+      "properties": {},
+      "extensions": {}
+    },
+    {
+      "resource_id": "heater:5",
+      "available": true,
+      "status": null,
+      "properties": {
+        "temperature": {
+          "value": 20,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        },
+        "target": {
+          "value": 0,
+          "unit": "degC",
+          "observed_at": "2026-10-30T17:21:05.236317Z",
+          "valid_until": null,
+          "quality": "known",
+          "source": null
+        }
+      },
+      "extensions": {}
+    }
+  ],
+  "extensions": {}
+}

@@ -1,0 +1,9 @@
+{
+  "operation_id": "heater.set_target",
+  "resource_id": "heater:5",
+  "parameters": {
+    "target": 450
+  },
+  "request_id": "reference-request",
+  "idempotency_key": null
+}

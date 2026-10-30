@@ -12,7 +12,6 @@ import {
   CALIBRATION_MODE_ACTIVE,
   CALIBRATION_MODE_INACTIVE,
 } from '../../utils/calibrationMode';
-import { MAX_CHAMBER_TEMP_C } from '../../utils/printer';
 
 type OptionConfig = {
   key: keyof PrintOptionsType;
@@ -36,6 +35,7 @@ export function PrintOptionsPanel({
   onChange,
   defaultExpanded = false,
   showDualNozzleOptions = false,
+  genericDevice = false,
 }: PrintOptionsProps) {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
@@ -53,7 +53,7 @@ export function PrintOptionsPanel({
     { key: 'confirm_outcome', label: t('settings.defaultConfirmOutcome'), desc: t('settings.defaultConfirmOutcomeDesc') },
   ];
 
-  const visibleOptions = printOptionsConfig.filter(o => !o.dualNozzleOnly || showDualNozzleOptions);
+  const visibleOptions = printOptionsConfig.filter(o => genericDevice ? o.key === 'confirm_outcome' : !o.dualNozzleOnly || showDualNozzleOptions);
 
   const handleToggle = (key: keyof PrintOptionsType, value: boolean) => {
     onChange({ ...options, [key]: value });
@@ -82,7 +82,7 @@ export function PrintOptionsPanel({
     if (Number.isNaN(parsed)) return;
     onChange({
       ...options,
-      preheat_chamber_target_override: Math.max(0, Math.min(MAX_CHAMBER_TEMP_C, parsed)),
+      preheat_chamber_target_override: Math.max(0, parsed),
     });
   };
 
@@ -191,7 +191,6 @@ export function PrintOptionsPanel({
                 <input
                   type="number"
                   min={0}
-                  max={MAX_CHAMBER_TEMP_C}
                   step={1}
                   value={options.preheat_chamber_target_override ?? ''}
                   onChange={(e) => handlePreheatTarget(e.target.value)}

@@ -3,6 +3,11 @@
  */
 
 import { http, HttpResponse } from 'msw';
+import { BAMBU_PLUGIN } from '../../printer-plugins/bambu/catalog';
+import { setPrinterPluginCatalog } from '../../printer-plugins/catalog';
+
+const BUNDLED_PRINTER_PLUGINS = [BAMBU_PLUGIN];
+setPrinterPluginCatalog(BUNDLED_PRINTER_PLUGINS);
 
 // Sample data
 const mockSmartPlugs = [
@@ -138,6 +143,10 @@ const bulkHandlers = [
 ];
 
 export const handlers = [
+  http.get('/api/v1/printer-plugins', () => HttpResponse.json(BUNDLED_PRINTER_PLUGINS)),
+  http.get('/api/v1/printer-plugins/management', () => HttpResponse.json({ plugins: [], load_errors: {}, policy: { restart_required_on_changes: true, trust_mode: 'administrator-installed-code' } })),
+  http.get('/api/v1/printers/:id/device', () => HttpResponse.json({ detail: 'Resource description is unavailable' }, { status: 404 })),
+  http.get('/api/v1/printers/:id/device-state', () => HttpResponse.json({ detail: 'Resource snapshot is unavailable' }, { status: 404 })),
   ...bulkHandlers,
   // ========================================================================
   // Smart Plugs

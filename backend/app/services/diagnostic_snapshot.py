@@ -55,7 +55,7 @@ def _serialize(result: Any) -> Any:
 
 
 async def _run_connection_for(printer) -> dict:
-    from backend.app.services.printer_diagnostic import run_connection_diagnostic
+    from backend.app.printers.diagnostic import run_connection_diagnostic
 
     base = {"printer_id": printer.id, "printer_name": printer.name}
     progress: dict[str, Any] = {}

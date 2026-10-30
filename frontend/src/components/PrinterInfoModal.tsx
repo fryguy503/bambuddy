@@ -6,6 +6,7 @@ import { CopyButton } from './CopyButton';
 import { formatDateOnly } from '../utils/date';
 import { getPrinterImage, getWifiStrength } from '../utils/printer';
 import type { Printer, PrinterStatus } from '../api/client';
+import { usePrinterPlugins } from '../hooks/usePrinterPlugins';
 
 interface PrinterInfoModalProps {
   printer: Printer;
@@ -16,6 +17,7 @@ interface PrinterInfoModalProps {
 
 export function PrinterInfoModal({ printer, status, totalPrintHours, onClose }: PrinterInfoModalProps) {
   const { t } = useTranslation();
+  const { data: printerPlugins = [] } = usePrinterPlugins();
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -195,7 +197,7 @@ export function PrinterInfoModal({ printer, status, totalPrintHours, onClose }: 
           {/* Printer Image */}
           <div className="flex justify-center mb-4">
             <img
-              src={getPrinterImage(printer.model)}
+              src={getPrinterImage(printer.model, printer.plugin_id, printerPlugins)}
               alt={printer.model ?? printer.name}
               className="h-24 object-contain"
             />

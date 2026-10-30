@@ -666,7 +666,7 @@ async def capture_camera_image(
         if image_data is None:
             import tempfile
 
-            from backend.app.services.camera import capture_camera_frame
+            from backend.app.printers.camera import capture_camera_frame
 
             fd, tmp_name = tempfile.mkstemp(suffix=".jpg")
             os.close(fd)
@@ -674,7 +674,9 @@ async def capture_camera_image(
             tmp_path.chmod(0o600)
 
             try:
-                success = await capture_camera_frame(ip_address, access_code, model, tmp_path, timeout=10)
+                success = await capture_camera_frame(
+                    ip_address, access_code, model, tmp_path, timeout=10, printer_id=printer_id
+                )
                 if success:
                     with open(tmp_path, "rb") as f:
                         image_data = f.read()

@@ -27,6 +27,9 @@ greenlet>=3.0.0
 
 # Pydantic
 pydantic>=2.0.0
+# Printer addon manifests, capability schemas and compatibility ranges.
+jsonschema>=4.26.0,<5
+packaging>=24,<27
 # 2.14.2 patches GHSA-4xgf-cpjx-pc3j (NestedSecretsSettingsSource follows
 # symlinks out of secrets_dir). Bambuddy does not use that source — pin
 # is precautionary so the audit stays clean.

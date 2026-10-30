@@ -6,6 +6,10 @@ filament check) and its nozzle choice (that printer's nozzle rack). On
 another printer they mean something else, so they go with the old printer;
 the next dispatch works them out again. What the user chose for the print
 itself (plate, AMS on or off, filament overrides, print options) stays.
+
+SDK resource IDs and provider-specific job options belong to the selected
+device. Reassignment clears them unless the caller supplies a replacement plan
+that validates against the destination descriptor.
 """
 
 from __future__ import annotations
@@ -18,6 +22,10 @@ PRINTER_RESOLVED_DEFAULTS: dict[str, Any] = {
     "skip_filament_check": False,
     "nozzle_mapping": None,
     "nozzle_rack_choice": None,
+    "tool_ids": None,
+    "material_bindings": None,
+    "job_options": None,
+    "sdk_job": None,
 }
 
 

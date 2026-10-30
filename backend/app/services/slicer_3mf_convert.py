@@ -58,7 +58,7 @@ def extract_source_printer_model(zip_bytes: bytes) -> str | None:
     :func:`is_dual_nozzle_model` matches against (the raw field is
     ``"Bambu Lab H2D"``, not ``"H2D"``).
     """
-    from backend.app.utils.printer_models import normalize_printer_model
+    from backend.app.printers.models import normalize_printer_model
 
     try:
         with zipfile.ZipFile(BytesIO(zip_bytes), "r") as zf:

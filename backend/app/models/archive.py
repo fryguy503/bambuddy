@@ -87,7 +87,7 @@ class PrintArchive(Base):
     # archive row across a backend restart during a long-running print (#972):
     # if the same subtask_id reappears after restart, we know it's the same
     # print and keep the original row instead of cancel-then-create.
-    subtask_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    subtask_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # Durable Bambuddy UUID for billing idempotency. Unlike subtask_id, this is
     # not constrained by printer firmware and is replaced for every reprint.
     billing_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

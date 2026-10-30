@@ -5854,6 +5854,23 @@ async def _run_migrations(conn):
     await _safe_execute(conn, f"ALTER TABLE print_log_entries ADD COLUMN wear_cost {float_type}")
     await _safe_execute(conn, f"ALTER TABLE print_archives ADD COLUMN wear_cost {float_type}")
 
+    # Printer plugins: preserve existing printers as the bundled Bambu provider.
+    # Same DDL on SQLite and PostgreSQL; the server default also covers older
+    # integrations that insert a printer without specifying its provider.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN plugin_id VARCHAR(64) NOT NULL DEFAULT 'bambu'")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN plugin_options JSON")
+    for column in ("tool_ids", "material_bindings", "job_options", "sdk_job"):
+        await _safe_execute(conn, f"ALTER TABLE print_queue ADD COLUMN {column} JSON")
+    if not is_sqlite():
+        # SQLite never enforces VARCHAR widths. Other providers need space for
+        # opaque identities and optional tokens, rather than Bambu's LAN code.
+        await _safe_execute(conn, "ALTER TABLE printers ALTER COLUMN serial_number TYPE VARCHAR(128)")
+        await _safe_execute(conn, "ALTER TABLE printers ALTER COLUMN access_code TYPE VARCHAR(2048)")
+        # SDK job identities are opaque provider IDs shared by archive/run
+        # reconciliation. Preserve their full admitted 256-character value.
+        await _safe_execute(conn, "ALTER TABLE print_archives ALTER COLUMN subtask_id TYPE VARCHAR(256)")
+        await _safe_execute(conn, "ALTER TABLE print_log_entries ALTER COLUMN subtask_id TYPE VARCHAR(256)")
+
     # Migration: when each spool was last dried, at what temperature and for
     # how long (#2863). Nullable: no spool has a drying record until one ends.
     datetime_type = "DATETIME" if is_sqlite() else "TIMESTAMP"
@@ -5922,7 +5939,7 @@ async def _run_migrations(conn):
     double = "REAL" if is_sqlite() else "DOUBLE PRECISION"
     stamp = "DATETIME" if is_sqlite() else "TIMESTAMP"
     for column, kind in (
-        ("subtask_id", "VARCHAR(64)"),
+        ("subtask_id", "VARCHAR(256)"),
         ("billing_run_id", "VARCHAR(36)"),
         ("cost_center_id", "INTEGER"),
         ("wallet_charge_skipped", "BOOLEAN"),

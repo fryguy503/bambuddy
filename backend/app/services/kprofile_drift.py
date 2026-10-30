@@ -23,11 +23,11 @@ import time
 from dataclasses import dataclass
 
 from backend.app.core.database import async_session
+from backend.app.printers.models import is_dual_nozzle_model
 from backend.app.services.printer_manager import printer_manager
 from backend.app.services.slot_kprofile import find_slot_kprofile_for_extruder
 from backend.app.services.slot_nozzle import resolve_slot_nozzle
 from backend.app.services.spool_filament_preset import printer_safe_filament_id
-from backend.app.utils.printer_models import is_dual_nozzle_model
 
 logger = logging.getLogger(__name__)
 

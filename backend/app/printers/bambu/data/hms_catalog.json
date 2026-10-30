@@ -11,7 +11,7 @@
    "26A": 202511162200,
    "31B": 202511162200
   },
-  "extra": "backend/app/data/hms_catalog_extra.json"
+  "extra": "backend/app/printers/bambu/data/hms_catalog_extra.json"
  },
  "hms": {
   "0300010000010001": "The heatbed temperature is abnormal; the heater may have a short circuit.",

@@ -42,6 +42,11 @@ from backend.app.models.local_preset import LocalPreset
 from backend.app.models.printer import Printer
 from backend.app.models.slot_preset import SlotPresetMapping
 from backend.app.models.user import User
+from backend.app.printers.models import (
+    PRINTER_MODEL_MAP,
+    normalize_printer_model,
+    normalize_printer_model_id,
+)
 from backend.app.schemas.slicer import PresetRef
 from backend.app.schemas.slicer_presets import (
     LoadedSpoolPreset,
@@ -69,11 +74,6 @@ from backend.app.services.slicer_api import (
     SlicerApiError,
     SlicerApiService,
     SlicerApiUnavailableError,
-)
-from backend.app.utils.printer_models import (
-    PRINTER_MODEL_MAP,
-    normalize_printer_model,
-    normalize_printer_model_id,
 )
 from backend.app.utils.slicer_strings import first_slicer_string, slicer_strings
 
@@ -918,7 +918,8 @@ async def list_loaded_spools(
             LoadedSpoolPrinter(
                 id=printer.id,
                 name=printer.name,
-                model=normalize_printer_model_id(printer.model) or normalize_printer_model(printer.model),
+                model=normalize_printer_model_id(printer.model, plugin_id=printer.plugin_id)
+                or normalize_printer_model(printer.model, plugin_id=printer.plugin_id),
                 ams=units,
                 external=external,
                 external_holders=len(holders),

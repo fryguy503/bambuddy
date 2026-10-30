@@ -62,6 +62,9 @@ class Settings(BaseSettings):
 
     # Paths
     base_dir: Path = _data_dir  # For backwards compatibility
+    # Independently managed printer packages persist with application data.
+    # An explicit PRINTER_PLUGIN_DIR can place this store on a separate volume.
+    printer_plugin_dir: Path | None = None
     # `app_dir` is where the source code is checked out — distinct from `base_dir`
     # on native installs where DATA_DIR is set to a sibling like INSTALL_PATH/data.
     # Use this when you need the working tree (requirements.txt, frontend/, etc.)

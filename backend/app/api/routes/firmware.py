@@ -1,7 +1,7 @@
 """
 Firmware Update API Routes
 
-Check for firmware updates from Bambu Lab.
+Check for firmware updates through the configured printer addon.
 Also provides endpoints for uploading firmware to printers via SD card.
 """
 
@@ -23,12 +23,14 @@ from backend.app.core.printer_scope import PrinterScope
 from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
 from backend.app.models.user import User
-from backend.app.services.firmware_check import get_firmware_service
-from backend.app.services.firmware_update import (
+from backend.app.printers.api import bind_printer
+from backend.app.printers.firmware import (
     FirmwareUploadStatus,
+    get_firmware_service,
     get_firmware_update_service,
     get_upload_state,
 )
+from backend.app.printers.registry import plugin_for
 from backend.app.services.printer_manager import printer_manager
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,19 @@ class LatestFirmwareInfo(BaseModel):
     version: str
     download_url: str
     release_notes: str | None = None
+
+
+async def _printer_or_404(printer_id: int, db: AsyncSession) -> Printer:
+    result = await db.execute(select(Printer).where(Printer.id == printer_id))
+    printer = result.scalar_one_or_none()
+    if printer is None:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    bind_printer(printer)
+    return printer
+
+
+def _supports_firmware(printer: Printer) -> bool:
+    return "firmware" in plugin_for(printer).model_capabilities(printer.model)
 
 
 async def _checks_enabled(db: AsyncSession) -> bool:
@@ -122,8 +137,6 @@ async def check_firmware_updates(
     Note: This does not require cloud authentication - it uses public
     firmware information from bambulab.com.
     """
-    firmware_service = get_firmware_service()
-
     # Get all printers from database
     result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
     printers = [p for p in result.scalars().all() if printer_scope.allows(p.id)]
@@ -135,6 +148,10 @@ async def check_firmware_updates(
     updates_available = 0
 
     for printer in printers:
+        if not _supports_firmware(printer):
+            updates.append(_not_checked(printer))
+            continue
+        firmware_service = get_firmware_service(printer)
         # Get current firmware version from MQTT state
         current_version = None
         mqtt_client = printer_manager.get_client(printer.id)
@@ -174,18 +191,11 @@ async def check_printer_firmware(
     """
     Check for firmware update for a specific printer.
     """
-    firmware_service = get_firmware_service()
+    printer = await _printer_or_404(printer_id, db)
 
-    # Get printer from database
-    result = await db.execute(select(Printer).where(Printer.id == printer_id))
-    printer = result.scalar_one_or_none()
-
-    if not printer:
-        raise HTTPException(status_code=404, detail="Printer not found")
-
-    if not await _checks_enabled(db):
+    if not await _checks_enabled(db) or not _supports_firmware(printer):
         return _not_checked(printer)
-    return await _printer_update_info(firmware_service, printer)
+    return await _printer_update_info(get_firmware_service(printer), printer)
 
 
 async def _printer_update_info(firmware_service, printer: Printer) -> FirmwareUpdateInfo:
@@ -211,6 +221,7 @@ async def _printer_update_info(firmware_service, printer: Printer) -> FirmwareUp
 
 @router.get("/latest", response_model=list[LatestFirmwareInfo])
 async def get_all_latest_firmware(
+    plugin_id: str = "bambu",
     _: User | None = RequirePermissionIfAuthEnabled(Permission.FIRMWARE_READ),
 ):
     """
@@ -219,7 +230,7 @@ async def get_all_latest_firmware(
     This endpoint fetches the latest available firmware versions from
     Bambu Lab's official firmware download page.
     """
-    firmware_service = get_firmware_service()
+    firmware_service = get_firmware_service(plugin_id=plugin_id)
     versions = await firmware_service.get_all_latest_versions()
 
     return [
@@ -290,7 +301,8 @@ async def prepare_firmware_upload(
     Call this before starting a firmware upload to ensure the operation
     can succeed.
     """
-    update_service = get_firmware_update_service()
+    printer = await _printer_or_404(printer_id, db)
+    update_service = get_firmware_update_service(printer)
     result = await update_service.prepare_update(printer_id, db, target_version=version)
     return FirmwareUploadPrepareResponse(**result)
 
@@ -315,7 +327,8 @@ async def start_firmware_upload(
     printer's screen (Settings > Firmware).
     """
     # First check prerequisites
-    update_service = get_firmware_update_service()
+    printer = await _printer_or_404(printer_id, db)
+    update_service = get_firmware_update_service(printer)
     prepare_result = await update_service.prepare_update(printer_id, db, target_version=version)
 
     if not prepare_result["can_proceed"]:
@@ -349,12 +362,14 @@ async def start_firmware_upload(
 @router.get("/updates/{printer_id}/upload/status", response_model=FirmwareUploadStatusResponse)
 async def get_firmware_upload_status(
     printer_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.FIRMWARE_READ),
 ):
     """
     Get the current status of a firmware upload operation (poll for progress).
     """
-    state = get_upload_state(printer_id)
+    printer = await _printer_or_404(printer_id, db)
+    state = get_upload_state(printer_id, plugin_id=plugin_for(printer).id)
     return FirmwareUploadStatusResponse(
         status=state.status.value,
         progress=state.progress,

@@ -3,9 +3,9 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PlainSerializer, model_validator
 
+from backend.app.printers.sdk.domain import ResourceId
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.utils.local_time import to_naive_utc
-from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C
 
 
 # Custom serializer to ensure UTC datetimes have Z suffix
@@ -83,6 +83,10 @@ class QueueVariantCreate(BaseModel):
 
 
 class PrintQueueItemCreate(BaseModel):
+    tool_ids: list[ResourceId] | None = None
+    material_bindings: dict[str, ResourceId] | None = None
+    job_options: dict | None = None
+    sdk_job: dict | None = None
     printer_id: int | None = None  # None = unassigned, user assigns later
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
     target_location: str | None = None  # Target location filter (only used with target_model)
@@ -124,7 +128,7 @@ class PrintQueueItemCreate(BaseModel):
     # preheat_enabled setting; 'on' / 'off' force the decision. The chamber
     # target falls through: this override → max(filament-map[loaded tray]) → 0.
     preheat_override: Literal["inherit", "on", "off"] = "inherit"
-    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=MAX_CHAMBER_TEMP_C)
+    preheat_chamber_target_override: int | None = Field(default=None, ge=0)
     # Auto-print G-code injection
     gcode_injection: bool = False
     # Batch: create multiple copies (creates a batch if > 1)
@@ -153,6 +157,10 @@ class PrintQueueItemCreate(BaseModel):
 
 
 class PrintQueueItemUpdate(IgnoresNullForRequiredColumns):
+    tool_ids: list[ResourceId] | None = None
+    material_bindings: dict[str, ResourceId] | None = None
+    job_options: dict | None = None
+    sdk_job: dict | None = None
     __orm_table__ = "print_queue"
     printer_id: int | None = None
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
@@ -178,7 +186,7 @@ class PrintQueueItemUpdate(IgnoresNullForRequiredColumns):
     nozzle_offset_cali: TriState | None = None
     confirm_outcome: bool | None = None
     preheat_override: Literal["inherit", "on", "off"] | None = None
-    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=MAX_CHAMBER_TEMP_C)
+    preheat_chamber_target_override: int | None = Field(default=None, ge=0)
     # Auto-print G-code injection
     gcode_injection: bool | None = None
     cost_center_id: int | None = None
@@ -213,6 +221,10 @@ class ColorSubstitution(BaseModel):
 
 
 class PrintQueueItemResponse(BaseModel):
+    tool_ids: list[ResourceId] | None = None
+    material_bindings: dict[str, ResourceId] | None = None
+    job_options: dict | None = None
+    sdk_job: dict | None = None
     id: int
     printer_id: int | None  # None = unassigned
     target_model: str | None = None  # Target printer model for model-based assignment
@@ -378,6 +390,10 @@ class PrintQueueReorder(BaseModel):
 
 
 class PrintQueueBulkUpdate(IgnoresNullForRequiredColumns):
+    tool_ids: list[ResourceId] | None = None
+    material_bindings: dict[str, ResourceId] | None = None
+    job_options: dict | None = None
+    sdk_job: dict | None = None
     """Bulk update multiple queue items with the same values."""
 
     __orm_table__ = "print_queue"
@@ -399,7 +415,7 @@ class PrintQueueBulkUpdate(IgnoresNullForRequiredColumns):
     nozzle_offset_cali: TriState | None = None
     confirm_outcome: bool | None = None
     preheat_override: Literal["inherit", "on", "off"] | None = None
-    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=MAX_CHAMBER_TEMP_C)
+    preheat_chamber_target_override: int | None = Field(default=None, ge=0)
     # Auto-print G-code injection
     gcode_injection: bool | None = None
     cost_center_id: int | None = None

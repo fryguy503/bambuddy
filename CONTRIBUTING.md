@@ -149,6 +149,11 @@ docker compose -f docker-compose.test.yml run --rm frontend-test
 
 ## Making Changes
 
+For printer integrations, use the [printer plugin API](docs/printer-plugins.md).
+Bambu support is the bundled adapter; new printer packages register through
+the versioned `bambuddy.printers` entry point rather than adding vendor logic
+to core services.
+
 1. **Create a branch** from `dev` for your changes:
    ```bash
    git checkout dev

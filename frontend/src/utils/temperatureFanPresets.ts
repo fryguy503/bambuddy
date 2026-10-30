@@ -10,7 +10,6 @@
  * is not part of the configurable triple.
  */
 
-import { MAX_CHAMBER_TEMP_C } from './printer';
 
 export type PresetTriple = readonly [number, number, number];
 
@@ -23,14 +22,14 @@ export interface PresetCategory {
   key: 'nozzle_temp_presets' | 'bed_temp_presets' | 'chamber_temp_presets' | 'fan_speed_presets';
   defaults: PresetTriple;
   lo: number;
-  hi: number;
+  hi?: number;
   unit: 'C' | '%';
 }
 
 export const PRESET_CATEGORIES: readonly PresetCategory[] = [
-  { key: 'nozzle_temp_presets', defaults: NOZZLE_TEMP_DEFAULTS, lo: 0, hi: 320, unit: 'C' },
-  { key: 'bed_temp_presets', defaults: BED_TEMP_DEFAULTS, lo: 0, hi: 140, unit: 'C' },
-  { key: 'chamber_temp_presets', defaults: CHAMBER_TEMP_DEFAULTS, lo: 0, hi: MAX_CHAMBER_TEMP_C, unit: 'C' },
+  { key: 'nozzle_temp_presets', defaults: NOZZLE_TEMP_DEFAULTS, lo: 0, unit: 'C' },
+  { key: 'bed_temp_presets', defaults: BED_TEMP_DEFAULTS, lo: 0, unit: 'C' },
+  { key: 'chamber_temp_presets', defaults: CHAMBER_TEMP_DEFAULTS, lo: 0, unit: 'C' },
   { key: 'fan_speed_presets', defaults: FAN_SPEED_DEFAULTS, lo: 0, hi: 100, unit: '%' },
 ];
 
@@ -43,7 +42,7 @@ export function parsePresetTriple(
   raw: string | undefined | null,
   fallback: PresetTriple,
   lo: number,
-  hi: number,
+  hi?: number,
 ): [number, number, number] {
   if (!raw) return [...fallback];
   try {
@@ -51,7 +50,7 @@ export function parsePresetTriple(
     if (
       Array.isArray(parsed) &&
       parsed.length === 3 &&
-      parsed.every((n) => Number.isInteger(n) && n >= lo && n <= hi)
+      parsed.every((n) => Number.isInteger(n) && n >= lo && (hi === undefined || n <= hi))
     ) {
       return parsed as [number, number, number];
     }
