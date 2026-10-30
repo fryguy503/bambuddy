@@ -1,3 +1,7 @@
 # Force CRLF line endings for Windows batch files so cmd.exe can parse them
 # regardless of the user's core.autocrlf setting.
 *.bat text eol=crlf
+
+# Printer package checksums must match the same text bytes on every platform.
+/backend/app/printers/bambu/**/*.py text eol=lf
+/backend/app/printers/bambu/**/*.json text eol=lf
