@@ -5,3 +5,9 @@
 # Printer package checksums must match the same text bytes on every platform.
 /backend/app/printers/bambu/**/*.py text eol=lf
 /backend/app/printers/bambu/**/*.json text eol=lf
+
+# Independently distributed Anycubic payload uses the same canonical bytes.
+/plugins/anycubic/payload/**/*.py text eol=lf
+/plugins/anycubic/payload/**/*.json text eol=lf
+/plugins/anycubic/payload/LICENSE text eol=lf
+/packages/anycubic/*.bbp binary
