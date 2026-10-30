@@ -199,6 +199,25 @@ def test_manifest_compatibility_negotiates_core_api_python_and_dependencies():
             check_manifest_compatibility(manifest, **options)
 
 
+def test_anonymous_job_observations_require_sdk_2_1_but_existing_v2_plugins_remain_compatible():
+    from backend.app.printers.sdk import SDK_API_VERSION
+
+    manifest = PluginManifest(
+        plugin_id="observer",
+        name="Observer",
+        version="1.0.0",
+        publisher_id="example",
+        entrypoint="plugin:Factory",
+        requires_api=">=2.1.0,<3.0.0",
+    )
+    assert SDK_API_VERSION == "2.1.0"
+    with pytest.raises(SDKValidationError, match="unsupported printer API"):
+        check_manifest_compatibility(manifest, core_version="1.3.1b1", api_version="2.0.0")
+    check_manifest_compatibility(manifest, core_version="1.3.1b1")
+    manifest.requires_api = ">=2.0.0,<3.0.0"
+    check_manifest_compatibility(manifest, core_version="1.3.1b1")
+
+
 @pytest.mark.parametrize("path", ["../evil.py", "nested/../evil.py", "/absolute.py", "C:/evil.py", "nested\\evil.py"])
 def test_manifest_inventory_rejects_unsafe_paths(path):
     with pytest.raises(ValidationError):

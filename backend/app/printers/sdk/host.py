@@ -11,6 +11,8 @@ from inspect import Parameter, signature
 from threading import RLock
 from typing import Any
 
+from pydantic import model_validator
+
 from backend.app.printers.sdk.domain import DeviceEvent, DeviceSnapshot, JobProgress, OperationError, SDKModel
 from backend.app.printers.sdk.jobs import JobArtifact, material_inventory
 
@@ -159,7 +161,13 @@ def state_for_host(config, plugin, state):
         remaining_time=int((job.remaining_seconds or 0) / 60) if job else 0,
         layer_num=job.layer or 0 if job else 0,
         total_layers=job.total_layers or 0 if job else 0,
-        status_name=job.phase if job and job.phase else phase,
+        # Only a more specific phase overrides the host's human-readable state.
+        # Raw PAUSE/RUNNING labels otherwise bypass its normal status formatter.
+        status_name=(
+            job.phase
+            if job and job.phase and job.phase.casefold() not in {phase.casefold(), host_phase.casefold()}
+            else None
+        ),
         plugin_id=config.plugin_id,
         device_snapshot=snapshot,
     )
@@ -186,6 +194,12 @@ class JobEventData(SDKModel):
     artifact: JobArtifact | None = None
     snapshot: DeviceSnapshot | None = None
     error: OperationError | None = None
+
+    @model_validator(mode="after")
+    def _require_job_identity(self):
+        if self.job.job_id is None or not self.job.job_id.strip():
+            raise ValueError("Job lifecycle events require a stable nonempty job ID")
+        return self
 
 
 class HostEventBridge:
@@ -237,6 +251,11 @@ class HostEventBridge:
                 snapshot = validate_snapshot(descriptor, DeviceSnapshot.model_validate(event.data))
             elif event.event in {"job.started", "job.progress", "job.completed", "job.failed", "job.cancelled"}:
                 job_data = JobEventData.model_validate(event.data)
+                # Retain a runtime guard even for previously constructed or
+                # copied Pydantic instances, which may bypass revalidation.
+                job_id = job_data.job.job_id
+                if job_id is None or not job_id.strip():
+                    raise SDKValidationError("Job lifecycle events require a stable nonempty job ID")
                 tools = {item.id for item in descriptor.resources if item.kind == "tool"}
                 if not set(job_data.job.active_tool_ids).issubset(tools):
                     raise SDKValidationError("Job event references an unknown tool")
