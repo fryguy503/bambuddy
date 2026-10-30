@@ -33,7 +33,7 @@ being treated as an S1. Combo bundles use the underlying printer model.
 | External camera | Existing configured external camera support |
 | LAN files | Native catalog and model-matched sliced `.gcode` upload, progress and catalog confirmation; never starts printing |
 | Queue dispatch and print submission | Model-matched raw G-code, native ACE mapping and capability-gated settings; physical acceptance pending |
-| Print history | Raw G-code snapshot and matched native job outcome; no inferred Bambu filament accounting |
+| Print history | Raw G-code snapshot, sliced estimates, matched outcome and completed-print built-in inventory usage |
 | ACE drying | Per-unit temperature, hours/minutes, reported remaining time and stop |
 | ACE material controls | Native material/color edits for writable slots; load/unload/stop while idle |
 | Manual controls | Reported chamber light/fans, idle XYZ jog/home, capability-gated short E pulses |
@@ -293,8 +293,34 @@ job's no-replay record. Another batch copy needs the original library file.
 Native print settings are stored separately from Bambu options. Bambu heat
 soak, G-code injection, nozzle/rack mappings, cost-center billing, automatic
 power-off and outcome confirmation are not offered for native jobs. Native
-filament consumption is not guessed from Bambu callbacks. Existing queue
+filament consumption uses the native assignment snapshot described below. Existing queue
 review, ownership and printer-scope permissions still apply.
+
+### Sliced estimates and spool usage
+
+Anycubic Slicer Next raw exports carry normal-mode time and filament usage
+comments. Bambuddy reads those into the existing library and queue estimates,
+preserving original tool indexes for multi-filament files. Missing, invalid or
+conflicting estimates remain unknown. A total weight is never divided across
+tools without their own usage values. Existing queued sources and retained
+native history copies are refreshed in small batches without re-uploading or
+starting a print.
+
+Before submitting a new queued print, Bambuddy records each tool's physical ACE
+slot, assigned built-in inventory spool and sliced grams. A matched successful
+completion deducts those estimates through the shared inventory usage writer,
+in the same transaction as completion. Usage history and costs use the existing
+inventory workflow. Repeated terminal reports and restart recovery cannot
+charge the same job twice.
+
+The deducted weight is a slicer estimate, not a measured ACE weight or a change
+to the printer's RFID remaining percentage. Failed, cancelled or uncertain
+prints are not charged their full planned amount. Missing/deleted assignments,
+assignment changes during printing (including changing away and back), and
+inventory-mode changes prevent uncertain attribution; the result is retained
+in the archive metadata. Spoolman reporting is not included in this path.
+Older prints without a print-start assignment snapshot are not retroactively
+charged. These cases need manual inventory adjustment when appropriate.
 
 The queue uses the same native connection state as the printer card. An online
 S1 does not require a smart plug. Connected, idle printers awaiting native

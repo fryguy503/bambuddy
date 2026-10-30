@@ -23,6 +23,7 @@ from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
+from backend.app.services.ams_assignment_lock import get_ams_assignment_lock
 from backend.app.services.archive import _copy_and_fsync
 from backend.app.services.finance_budget import release_budget_reservation
 from backend.app.services.print_batch import refresh_batches_after
@@ -30,7 +31,7 @@ from backend.app.services.printer_manager import printer_manager
 
 from .client import AnycubicMQTTClient
 from .files import MAX_GCODE_BYTES
-from .printing import inspect_print_file
+from .printing import inspect_print_file, merge_estimates
 from .protocol import AnycubicError, task_id
 from .transfers import transfers
 
@@ -88,6 +89,21 @@ async def _event(method, **fields):
         await method(**fields)
     except Exception:
         logger.debug("Native queue notification could not be delivered")
+
+
+async def _notify_usage(session_factory, item_ids):
+    """Refresh the shared inventory UI only after usage has been committed."""
+    async with session_factory() as db:
+        rows = await db.execute(
+            select(PrintQueueItem.printer_id, PrintQueueItem.anycubic_dispatch).where(PrintQueueItem.id.in_(item_ids))
+        )
+        for printer_id, raw in rows.all():
+            result = journal(raw).get("usage_result")
+            if isinstance(result, dict) and result.get("usage"):
+                await _event(
+                    ws_manager.broadcast,
+                    message={"type": "spool_usage_logged", "printer_id": printer_id, "usage": result["usage"]},
+                )
 
 
 async def _known_failure(scheduler, db, item, message):
@@ -173,8 +189,10 @@ async def _snapshot(db, item, printer, dispatch_id):
 
     await asyncio.to_thread(copy)
     artifact = await asyncio.to_thread(inspect_print_file, target, filename, printer.model)
-    metadata = dict(library.file_metadata or {}) if library else {}
+    metadata = merge_estimates(library.file_metadata if library else None, artifact.estimates)
     metadata.update(printer_type="anycubic", sliced_for_model=artifact.file.model)
+    if library is not None:
+        library.file_metadata = metadata
     archive = PrintArchive(
         printer_id=printer.id,
         filename=filename,
@@ -188,7 +206,8 @@ async def _snapshot(db, item, printer, dispatch_id):
         created_by_id=item.created_by_id,
         project_id=item.project_id,
         library_file_id=item.library_file_id,
-        print_time_seconds=item.print_time_seconds,
+        print_time_seconds=artifact.estimates.get("print_time_seconds"),
+        filament_used_grams=artifact.estimates.get("filament_used_grams"),
     )
     db.add(archive)
     await db.flush()
@@ -235,11 +254,17 @@ async def dispatch(scheduler, db, item, printer):
             "source_library_file_id": item.library_file_id,
             "source_filename": archive.filename,
             "model": artifact.file.model,
+            "estimates": artifact.estimates,
         }
         claim = await db.execute(
             update(PrintQueueItem)
             .where(PrintQueueItem.id == item.id, PrintQueueItem.status == "pending")
-            .values(anycubic_dispatch=json.dumps(record), archive_id=None, waiting_reason=None)
+            .values(
+                anycubic_dispatch=json.dumps(record),
+                archive_id=None,
+                waiting_reason=None,
+                print_time_seconds=artifact.estimates.get("print_time_seconds"),
+            )
             .execution_options(synchronize_session=False)
         )
         await db.commit()
@@ -295,7 +320,11 @@ async def dispatch(scheduler, db, item, printer):
         options = json.loads(item.anycubic_options or "{}")
         now = datetime.now(timezone.utc)
         record.update(state="submitting", submitted_at=now.isoformat())
-        async with _lock(printer.id):
+        async with _lock(printer.id), get_ams_assignment_lock(printer.id):
+            from .usage import capture_usage
+
+            record["usage_snapshot"] = await capture_usage(db, printer, artifact, options)
+            archive.extra_data = {**(archive.extra_data or {}), "anycubic_usage_snapshot": record["usage_snapshot"]}
             claim = await db.execute(
                 update(PrintQueueItem)
                 .where(PrintQueueItem.id == item.id, PrintQueueItem.status == "pending")
@@ -475,6 +504,21 @@ async def _observe(db, item, state):
             )
             if archive is not None:
                 archive.status, archive.completed_at = outcome, now
+                if outcome == "completed":
+                    from .usage import complete_usage
+
+                    record["usage_result"] = await complete_usage(
+                        db, item.printer_id, archive, record.get("usage_snapshot")
+                    )
+                else:
+                    record["usage_result"] = {"state": "skipped", "reason": "partial_print"}
+                archive.extra_data = {**(archive.extra_data or {}), "anycubic_usage": record["usage_result"]}
+                await db.execute(
+                    update(PrintQueueItem)
+                    .where(PrintQueueItem.id == item.id)
+                    .values(anycubic_dispatch=json.dumps(record))
+                    .execution_options(synchronize_session=False)
+                )
             if outcome == "completed" and record.get("source_library_file_id") is not None:
                 library = await db.get(LibraryFile, record["source_library_file_id"])
                 if library is not None:
@@ -513,12 +557,12 @@ async def _observe(db, item, state):
 
 
 async def observe_status(printer_id, state, *, session_factory=None):
-    """Observe native job transitions without Bambu archival or spool callbacks."""
+    """Observe native jobs and their inventory usage without Bambu callbacks."""
     if not state.connected:
         return
     factory = session_factory or database.async_session
     changed = []
-    async with _lock(printer_id), factory() as db:
+    async with _lock(printer_id), get_ams_assignment_lock(printer_id), factory() as db:
         plate_needed = _plate_observation(printer_id, state)
         if plate_needed:
             await db.execute(update(Printer).where(Printer.id == printer_id).values(awaiting_plate_clear=True))
@@ -536,11 +580,15 @@ async def observe_status(printer_id, state, *, session_factory=None):
             if plate_needed:
                 _plate_active.pop(printer_id, None)
     if changed:
+        await _notify_usage(factory, changed)
         await refresh_batches_after(changed)
 
 
 async def reconcile(scheduler, session_factory):
     """Restart recovery: never turn a durable submission marker back into pending."""
+    from .estimates import hydrate_queue_estimates
+
+    await hydrate_queue_estimates(session_factory)
     async with session_factory() as db:
         rows = await db.execute(
             select(PrintQueueItem.printer_id)
@@ -553,7 +601,7 @@ async def reconcile(scheduler, session_factory):
     for printer_id in printer_ids:
         # Share the observer's lock and re-read inside it: a poll must not
         # overwrite the completion that arrived while it waited for the DB.
-        async with _lock(printer_id), session_factory() as db:
+        async with _lock(printer_id), get_ams_assignment_lock(printer_id), session_factory() as db:
             rows = await db.execute(
                 select(PrintQueueItem).where(
                     PrintQueueItem.printer_id == printer_id, PrintQueueItem.anycubic_dispatch.is_not(None)
@@ -589,4 +637,5 @@ async def reconcile(scheduler, session_factory):
                         observed.append(item.id)
             await db.commit()
     if observed:
+        await _notify_usage(session_factory, observed)
         await refresh_batches_after(observed)

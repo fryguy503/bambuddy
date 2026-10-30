@@ -209,9 +209,16 @@ async def record_assignment(db, printer_id: int, ams_id: int, tray_id: int, spoo
     restart the state is empty until the printer reports RUNNING again, and a
     runout leaves it paused, so the row alone holds the print's start spools.
     ``PrinterState`` takes the new entry only once the assignment commits; one
-    that fails must not split the print. Best-effort: an assignment must never
-    fail because of this.
+    that fails must not split the print. The Bambu session update is best-effort.
+    A native journal must retain assignment ambiguity in the same transaction;
+    a concurrent journal conflict may require retrying that assignment.
     """
+    # Native queue journals keep their own attribution context. Record an
+    # ambiguity before the generic session early-return; it must commit with
+    # the assignment, and a failed CAS must not be swallowed as best-effort.
+    from backend.app.services.anycubic.usage import invalidate_assignment
+
+    await invalidate_assignment(db, printer_id, ams_id, tray_id)
     try:
         from backend.app.models.active_print_session import ActivePrintSession
         from backend.app.services.printer_manager import printer_manager

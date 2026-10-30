@@ -64,7 +64,7 @@ async def validate_source(printer, library_file, archive, options, *, target_mod
             400, "This Anycubic print does not support Bambu preheat, injection, plates or archive options"
         )
     normalized = options_dict(options)
-    from .printing import inspect_print_file
+    from .printing import inspect_print_file, merge_estimates
 
     stored_path = Path(library_file.file_path)
     path = stored_path if stored_path.is_absolute() else settings.base_dir / stored_path
@@ -84,4 +84,5 @@ async def validate_source(printer, library_file, archive, options, *, target_mod
             raise HTTPException(400, "The selected ACE box does not belong to this printer model")
     elif len(tools) != 1:
         raise HTTPException(400, "A multi-filament G-code file requires ACE mapping")
+    library_file.file_metadata = merge_estimates(library_file.file_metadata, artifact.estimates)
     return normalized

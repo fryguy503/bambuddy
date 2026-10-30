@@ -2603,6 +2603,17 @@ async def upload_file(
                 logger.warning("Failed to parse 3MF: %s", e)
 
         elif ext == ".gcode":
+            if anycubic_model:
+                from backend.app.services.anycubic.printing import inspect_print_file, merge_estimates
+                from backend.app.services.anycubic.protocol import AnycubicError
+
+                try:
+                    artifact = await asyncio.to_thread(inspect_print_file, file_path, filename, anycubic_model)
+                    metadata = merge_estimates(metadata, artifact.estimates)
+                except (AnycubicError, OSError) as error:
+                    # Upload admission remains independent of optional metadata;
+                    # native queue validation still inspects the actual source.
+                    logger.debug("Native G-code estimates unavailable: %s", error)
             # Extract embedded thumbnail from gcode
             try:
                 thumbnail_data = extract_gcode_thumbnail(file_path)

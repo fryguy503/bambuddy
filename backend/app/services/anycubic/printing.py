@@ -7,7 +7,7 @@ LAN_SendRemotePrint serializer. A serialized request is not print acceptance.
 import hashlib
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .files import MAX_LINE_BYTES, GcodeArtifact, validate_gcode
@@ -22,6 +22,88 @@ OPTION_FEATURES = {
 OPTION_KEYS = {*OPTION_FEATURES, "use_ace", "filament_mapping"}
 _FIELD = re.compile(r";\s*(filament_type|filament_colou?r|filament used \[mm\])\s*=\s*(.*)", re.I)
 _TOOL = re.compile(rb"(?:N\d+\s+)?T(\d+)(?=\s|;|\*|$)", re.I)
+_ESTIMATE = re.compile(
+    r";\s*(filament used \[g\]|total filament used \[g\]|estimated printing time \(normal mode\))\s*=\s*(.*)",
+    re.I,
+)
+_DURATION = re.compile(r"(?:(\d+)d\s*)?(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s\s*)?", re.I)
+ESTIMATES_VERSION = 1
+ESTIMATE_KEYS = frozenset(
+    {
+        "print_time_seconds",
+        "filament_used_grams",
+        "filament_used_mm",
+        "filament_slots",
+        "anycubic_tool_usage",
+        "anycubic_estimates_version",
+        "anycubic_estimates_sha256",
+        "anycubic_estimates_error",
+    }
+)
+
+
+def merge_estimates(existing: dict | None, estimates: dict) -> dict:
+    """Replace derived values without retaining stale amounts or unrelated edits."""
+    return {**{key: value for key, value in (existing or {}).items() if key not in ESTIMATE_KEYS}, **estimates}
+
+
+def _amounts(value: str | None) -> list[float] | None:
+    if value is None:
+        return None
+    try:
+        values = [float(part.strip()) for part in value.split(",")]
+    except ValueError:
+        return None
+    if not 1 <= len(values) <= 256 or any(not math.isfinite(amount) or amount < 0 for amount in values):
+        return None
+    return values if math.isfinite(sum(values)) else None
+
+
+def _estimates(artifact: GcodeArtifact, optional: dict, lengths: list[float] | None, filaments) -> dict:
+    result: dict = {"anycubic_estimates_version": ESTIMATES_VERSION, "anycubic_estimates_sha256": artifact.sha256}
+    duration = optional.get("estimated printing time (normal mode)")
+    if duration and (match := _DURATION.fullmatch(duration)) and any(match.groups()):
+        try:
+            seconds = sum(
+                int(value or 0) * factor for value, factor in zip(match.groups(), (86400, 3600, 60, 1), strict=True)
+            )
+            if 0 <= seconds <= (1 << 31) - 1:
+                result["print_time_seconds"] = seconds
+        except ValueError:
+            pass  # Optional malformed/oversized estimates remain unknown.
+    if lengths is not None and math.isfinite(sum(lengths)):
+        result["filament_used_mm"] = sum(lengths)
+    grams = _amounts(optional.get("filament used [g]"))
+    total_values = _amounts(optional.get("total filament used [g]"))
+    if "filament used [g]" in optional and grams is None:
+        return result
+    if "total filament used [g]" in optional and (total_values is None or len(total_values) != 1):
+        return result
+    total = total_values[0] if total_values else None
+    if grams is not None:
+        if total is not None and not math.isclose(
+            sum(grams), total, rel_tol=0, abs_tol=0.005 * (len(grams) + 1) + 1e-9
+        ):
+            return result
+        result["filament_used_grams"] = total if total is not None else sum(grams)
+        tools = {entry.tool for entry in filaments}
+        if any(tool >= len(grams) for tool in tools) or any(
+            value > 0 and tool not in tools for tool, value in enumerate(grams)
+        ):
+            return result  # An aggregate can be displayed without inventing a physical-tool allocation.
+        result["anycubic_tool_usage"] = [{"tool": entry.tool, "grams": grams[entry.tool]} for entry in filaments]
+        result["filament_slots"] = [
+            {
+                "slot_id": entry.tool + 1,
+                "used_g": grams[entry.tool],
+                "type": entry.material_type,
+                "color": "#" + "".join(f"{component:02X}" for component in entry.color),
+            }
+            for entry in filaments
+        ]
+    elif total is not None:
+        result["filament_used_grams"] = total
+    return result
 
 
 def rgba(value):
@@ -44,6 +126,7 @@ class PrintArtifact:
     file: GcodeArtifact
     md5: str
     filaments: tuple[PrintFilament, ...]
+    estimates: dict = field(default_factory=dict)
 
     def public(self):
         return {
@@ -58,7 +141,7 @@ class PrintArtifact:
 def inspect_print_file(path: Path, filename: str, model: str | None = None) -> PrintArtifact:
     """Read the complete file, retaining original zero-based slicer tool IDs."""
     artifact = validate_gcode(path, filename, model)
-    fields, tools = {}, set()
+    fields, tools, optional = {}, set(), {}
     md5, sha256, size = hashlib.md5(usedforsecurity=False), hashlib.sha256(), 0
     with path.open("rb") as stream:
         while line := stream.readline(MAX_LINE_BYTES + 1):
@@ -74,7 +157,11 @@ def inspect_print_file(path: Path, filename: str, model: str | None = None) -> P
                 tools.add(int(match[1]))
             if not stripped.startswith(b";"):
                 continue
-            match = _FIELD.fullmatch(stripped.decode("utf-8-sig"))
+            decoded = stripped.decode("utf-8-sig")
+            if estimate := _ESTIMATE.fullmatch(decoded):
+                key, value = estimate[1].lower(), estimate[2].strip()
+                optional[key] = None if len(value) > 16384 or key in optional and optional[key] != value else value
+            match = _FIELD.fullmatch(decoded)
             if not match:
                 continue
             key, value = match[1].lower(), match[2].strip()
@@ -89,6 +176,7 @@ def inspect_print_file(path: Path, filename: str, model: str | None = None) -> P
     if not 1 <= len(materials) <= 256 or not 1 <= len(colors) <= 256:
         raise AnycubicError("Export G-code with filament_type and filament_colour metadata")
     used = set(range(max(len(materials), len(colors))))
+    amounts = None
     if "filament used [mm]" in fields:
         try:
             amounts = [float(part.strip()) for part in fields["filament used [mm]"].split(",")]
@@ -113,7 +201,7 @@ def inspect_print_file(path: Path, filename: str, model: str | None = None) -> P
         ):
             raise AnycubicError("A used filament has no valid sliced material type")
         result.append(PrintFilament(tool, material, rgba(colors[tool])))
-    return PrintArtifact(artifact, md5.hexdigest(), tuple(result))
+    return PrintArtifact(artifact, md5.hexdigest(), tuple(result), _estimates(artifact, optional, amounts, result))
 
 
 def validate_options(options):

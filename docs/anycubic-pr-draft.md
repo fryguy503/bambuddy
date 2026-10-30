@@ -34,8 +34,15 @@ by unique upload filename and, when available, native task ID. Stock S1 LAN
 reports with a `-1` task sentinel can confirm the exact submitted filename;
 conflicting assigned task IDs remain blocked. Ambiguous starts hold the printer
 across restart until observed or explicitly resolved; they are never replayed.
-A raw G-code history snapshot is stored independently of Bambu archival and
-filament accounting. Native billing, automatic power-off, outcome confirmation,
+A raw G-code history snapshot is stored independently of Bambu archival.
+Native sliced time and weight populate the existing queue estimates, including
+a bounded refresh of older queued files. A matched successful completion charges
+explicit per-tool grams to unchanged built-in inventory assignments captured
+before submission, using the shared atomic usage writer and usage history.
+The charge commits with the native completion journal so duplicate reports and
+restart recovery cannot deduct twice. Partial prints, changed assignments,
+Spoolman reporting and older jobs without a start snapshot are not guessed.
+Native billing, automatic power-off, outcome confirmation,
 model load balancing and cross-model alternatives are not enabled. Queue tests
 use isolated fixtures. The operator has reported a queued print running; a
 read-only S1 check observed its unique upload filename, running progress and

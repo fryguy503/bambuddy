@@ -165,6 +165,8 @@ async def _validate_item_vendor(db, item, values):
     if native is not None:
         values.update(_NATIVE_NEUTRAL_OPTIONS)
         values["anycubic_options"] = json.dumps(native)
+        if library is not None:
+            values["print_time_seconds"] = (library.file_metadata or {}).get("print_time_seconds")
     elif "anycubic_options" in values:
         values["anycubic_options"] = None
     return native
@@ -667,6 +669,10 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
             journal = json.loads(item.anycubic_dispatch or "{}")
             response.library_file_name = journal.get("source_filename")
             response.sliced_for_model = journal.get("model")
+            estimates = journal.get("estimates")
+            if isinstance(estimates, dict):
+                response.print_time_seconds = estimates.get("print_time_seconds")
+                response.filament_used_grams = estimates.get("filament_used_grams")
             source_id = journal.get("source_library_file_id")
             if type(source_id) is int:
                 response.anycubic_source_library_file_id = source_id
