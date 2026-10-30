@@ -33,7 +33,7 @@ export function PluginManagementPanel() {
     <p className="text-sm text-bambu-gray">Printer support can be updated separately from Bambuddy. Package activation takes effect after a restart.</p>
     <form className="space-y-3 rounded border border-bambu-dark-tertiary p-3" onSubmit={event => { event.preventDefault(); stage.mutate(); }}>
       <label className="block text-sm text-bambu-gray" htmlFor="printer-plugin-package">Trusted plugin package</label>
-      <input id="printer-plugin-package" type="file" accept=".zip,.bbplugin" required onChange={event => { setFile(event.target.files?.[0] || null); setStaged(null); }} className="block w-full text-sm text-white" />
+      <input id="printer-plugin-package" type="file" accept=".bbp,.zip,.bbplugin" required onChange={event => { setFile(event.target.files?.[0] || null); setStaged(null); }} className="block w-full text-sm text-white" />
       <label className="block text-sm text-bambu-gray" htmlFor="printer-plugin-checksum">Expected SHA-256 (optional)</label>
       <input id="printer-plugin-checksum" type="text" value={checksum} onChange={event => setChecksum(event.target.value)} pattern="[a-fA-F0-9]{64}" className="w-full rounded border border-bambu-dark-tertiary bg-bambu-dark px-3 py-2 text-sm text-white" />
       <p className="text-xs text-bambu-gray">Checksums verify package integrity. Only install code from authors you trust.</p>
