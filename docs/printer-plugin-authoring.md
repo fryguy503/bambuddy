@@ -112,6 +112,14 @@ device descriptor, state snapshot, image URL or operation result.
 
 ## Typed device events
 
+Providers with an additional durable plate-clear gate can declare the optional
+`job.clear_plate` operation. The shared `/printers/{id}/clear-plate` endpoint
+checks its declared permissions and invokes it before releasing the host gate.
+It must return a successful receipt; a rejection or unfinished operation retains
+the host hold. Providers without this operation retain the ordinary offline
+plate-clear acknowledgement. Keep printer-specific confirmation rules inside
+the provider operation.
+
 API2 plugins opt in by declaring an optional named `on_event` parameter on
 `create_connection`. Core passes only callback names supported by a fixed
 signature. Accepting `**callbacks` alone retains the legacy callback contract;
