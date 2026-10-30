@@ -576,6 +576,7 @@ export function PrinterSelector({
             <button
               type="button"
               onClick={() => handlePrinterClick(printer.id)}
+              aria-pressed={selected}
               disabled={disabled}
               className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-colors ${
                 disabled

@@ -52,7 +52,7 @@ function SlotContents({ tray }: { tray?: AMSTray }) {
         <span className="text-[10px] font-normal text-white truncate">{tray.tray_type}</span>
       </span>
       {/* Spaces keep the button's accessible name readable ("A1 PLA 80%"). */}
-      {tray.remain >= 0 && <> <span className="text-[10px] font-normal text-bambu-gray">{tray.remain}%</span></>}
+      {tray.remain != null && tray.remain >= 0 && <> <span className="text-[10px] font-normal text-bambu-gray">{tray.remain}%</span></>}
     </span>
   );
 }

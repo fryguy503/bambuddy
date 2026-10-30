@@ -17,6 +17,7 @@ and the dispatch endpoint has nothing to do. ``has_targets`` tells callers
 which kind of batch they are looking at.
 """
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -58,6 +59,7 @@ CLONED_SETTING_COLUMNS = (
     "project_id",
     "batch_id",
     "ams_mapping",
+    "anycubic_options",
     "filament_overrides",
     "plate_id",
     "print_time_seconds",
@@ -525,6 +527,17 @@ def _clone_queue_item(source: PrintQueueItem, *, position: int, created_by_id: i
     )
     for column in CLONED_SETTING_COLUMNS:
         setattr(clone, column, getattr(source, column))
+    if source.anycubic_options:
+        clone.archive_id = None
+    # Native intent detaches cascading source FKs to preserve the no-replay
+    # journal if a library file or archive is later purged. A fresh run gets
+    # the original library source again, never the old dispatch intent.
+    if source.anycubic_options and not source.library_file_id and source.anycubic_dispatch:
+        record = json.loads(source.anycubic_dispatch)
+        source_id = record.get("source_library_file_id")
+        if type(source_id) is int:
+            clone.library_file_id = source_id
+            clone.archive_id = None
     # A printer the scheduler picked for a model-based job (or one with
     # printer alternatives) was that run's pick, not the user's: each copy
     # waits for any printer of the model again.
@@ -598,6 +611,15 @@ async def dispatch_remaining(
         if source is None:
             stranded.append(plate)
             continue
+
+        if source.anycubic_options and source.library_file_id is None:
+            from backend.app.models.library import LibraryFile
+
+            record = json.loads(source.anycubic_dispatch or "{}")
+            source_id = record.get("source_library_file_id")
+            native_source = await db.get(LibraryFile, source_id) if type(source_id) is int else None
+            if native_source is None or native_source.deleted_at is not None:
+                raise BatchDispatchError("Restore or upload the original Anycubic G-code before queuing another copy")
 
         wanted = plate.remaining
         if limit is not None:

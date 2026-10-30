@@ -215,6 +215,8 @@ async def create_virtual_printer(
         target_printer = result.scalar_one_or_none()
         if not target_printer or not printer_scope.allows(target_printer.id):
             return _target_missing(body.target_printer_id)
+        if target_printer.printer_type == "anycubic":
+            return JSONResponse(status_code=409, content={"detail": "Bambu virtual printers require a Bambu target"})
 
     # Validate bind_ip uniqueness (against all enabled VPs)
     if body.bind_ip:
@@ -438,6 +440,8 @@ async def update_virtual_printer(
         target_printer = result.scalar_one_or_none()
         if not target_printer or not printer_scope.allows(target_printer.id):
             return _target_missing(body.target_printer_id)
+        if target_printer.printer_type == "anycubic":
+            return JSONResponse(status_code=409, content={"detail": "Bambu virtual printers require a Bambu target"})
         vp.target_printer_id = body.target_printer_id
         # Auto-inherit model from target printer in proxy mode (unless user explicitly set model)
         if body.model is None and vp.mode == "proxy" and target_printer.model:

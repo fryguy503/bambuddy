@@ -34,13 +34,14 @@ interface AssignSpoolModalProps {
     emptyKind?: 'physical' | 'reset' | null;
   };
   spoolmanEnabled?: boolean;
+  printerType?: 'bambu' | 'anycubic';
 }
 
 function spoolSummary(spool: InventorySpool): string {
   return [spool.brand, spool.material, spool.subtype].filter(Boolean).join(' ');
 }
 
-export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, trayInfo, spoolmanEnabled }: AssignSpoolModalProps) {
+export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, trayInfo, spoolmanEnabled, printerType = 'bambu' }: AssignSpoolModalProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -170,7 +171,7 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
       const toastKey = newAssignment.pending_config
         ? 'inventory.assignPendingInsert'
         : 'inventory.assignSuccess';
-      showToast(t(toastKey), 'success');
+      showToast(t(printerType === 'anycubic' ? 'common.success' : toastKey), 'success');
       setMismatch(null);
       onClose();
     },

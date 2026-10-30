@@ -5,7 +5,7 @@
  * pre-#1625 location at 0b43ac0d:frontend/src/contexts/ToastContext.tsx).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { act, screen, fireEvent } from '@testing-library/react';
+import { act, screen, fireEvent, within } from '@testing-library/react';
 import { render } from '../utils';
 
 function emit(detail: Record<string, unknown>) {
@@ -100,9 +100,39 @@ describe('Dispatch toast (inside ToastContext)', () => {
     emit({ type: 'queue_item_uploading', queue_item_id: 7, printer_id: 1, printer_name: 'H2D-1', file_name: 'job.3mf', total_bytes: 100 });
     emit({ type: 'queue_item_failed', queue_item_id: 7, reason: 'upload_failed' });
     expect(screen.getByTestId('dispatch-toast-status-7')).toHaveTextContent(/failed/i);
+    expect(screen.getByText('Upload to printer failed')).toBeInTheDocument();
+    expect(screen.queryByText('upload_failed')).not.toBeInTheDocument();
 
     act(() => { vi.advanceTimersByTime(3501); });
     expect(screen.queryByTestId('dispatch-toast-wrapper')).toBeNull();
+  });
+
+  it('keeps the generic fallback for an unknown failure code', () => {
+    render(<div />);
+    emit({ type: 'queue_item_uploading', queue_item_id: 7, file_name: 'job.gcode', total_bytes: 100 });
+    emit({ type: 'queue_item_failed', queue_item_id: 7, reason: 'unknown_native_code' });
+    expect(screen.getByText('Dispatch failed')).toBeInTheDocument();
+    expect(screen.queryByText('unknown_native_code')).not.toBeInTheDocument();
+  });
+
+  it('shows the native failure message instead of replacing it with a generic failure', () => {
+    const reason = 'The printer acknowledged the upload; refresh its file list to confirm it';
+    render(<div />);
+    emit({ type: 'queue_item_uploading', queue_item_id: 7, file_name: 'job.gcode', total_bytes: 100 });
+    emit({ type: 'queue_item_failed', queue_item_id: 7, reason });
+    expect(screen.getByText(reason)).toHaveAttribute('title', reason);
+    expect(screen.queryByText('Dispatch failed')).not.toBeInTheDocument();
+  });
+
+  it('renders a human-readable failure as escaped text rather than markup', () => {
+    const reason = 'Upload rejected: <img src=x onerror=alert(1)>';
+    render(<div />);
+    emit({ type: 'queue_item_uploading', queue_item_id: 7, file_name: 'job.gcode', total_bytes: 100 });
+    emit({ type: 'queue_item_failed', queue_item_id: 7, reason });
+    const job = screen.getByTestId('dispatch-toast-job-7');
+    expect(within(job).getByText(reason)).toHaveAttribute('title', reason);
+    expect(job.querySelector('img')).toBeNull();
+    expect(job.innerHTML).toContain('&lt;img');
   });
 
   it('collapse hides job rows but keeps the header visible', () => {

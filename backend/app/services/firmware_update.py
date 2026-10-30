@@ -139,6 +139,9 @@ class FirmwareUpdateService:
         if not printer:
             result["errors"].append("Printer not found")
             return result
+        if getattr(printer, "printer_type", "bambu") == "anycubic":
+            result["errors"].append("Firmware upload is not supported for Anycubic printers")
+            return result
 
         # Check printer is connected
         mqtt_client = printer_manager.get_client(printer_id)
@@ -267,6 +270,10 @@ class FirmwareUpdateService:
         if not printer:
             state.status = FirmwareUploadStatus.ERROR
             state.error = "Printer not found"
+            return False
+        if getattr(printer, "printer_type", "bambu") == "anycubic":
+            state.status = FirmwareUploadStatus.ERROR
+            state.error = "Firmware upload is not supported for Anycubic printers"
             return False
 
         # Get printer model

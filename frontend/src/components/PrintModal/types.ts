@@ -58,6 +58,8 @@ export interface PrintModalProps {
    * plate preview reads from it.
    */
   variantFiles?: VariantCandidate[];
+  /** Every native file is queued in this order, rather than offered as an alternative. */
+  nativeQueueFiles?: VariantCandidate[];
 }
 
 /**
@@ -328,6 +330,7 @@ export interface ScheduleOptionsProps {
   timeFormat?: 'system' | '12h' | '24h';
   /** Whether the user has permission to control printers (for auto power off) */
   canControlPrinter?: boolean;
+  showAutoOff?: boolean;
   /** Show stagger options (only when multiple printers selected in queue mode) */
   showStagger?: boolean;
   /** Number of selected printers (for stagger preview) */

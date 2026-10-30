@@ -21,12 +21,18 @@ from backend.app.schemas.kprofile import (
     KProfileNoteResponse,
     KProfilesResponse,
 )
+from backend.app.services.anycubic import AnycubicMQTTClient
 from backend.app.services.bambu_mqtt import CALI_ACK_UNCONFIRMED, KProfileReadError
 from backend.app.services.printer_manager import printer_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/printers/{printer_id}/kprofiles", tags=["kprofiles"])
+
+
+def _require_kprofile_support(printer: Printer) -> None:
+    if getattr(printer, "printer_type", "bambu") == "anycubic":
+        raise HTTPException(400, "Bambu K-profiles are not supported for Anycubic printers")
 
 
 @router.get("/", response_model=KProfilesResponse)
@@ -48,8 +54,12 @@ async def get_kprofiles(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
+    _require_kprofile_support(printer)
+
     # Get MQTT client for printer
     client = printer_manager.get_client(printer_id)
+    if isinstance(client, AnycubicMQTTClient):
+        raise HTTPException(400, "Bambu K-profiles are not supported for Anycubic printers")
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
 
@@ -113,8 +123,12 @@ async def set_kprofile(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
+    _require_kprofile_support(printer)
+
     # Get MQTT client for printer
     client = printer_manager.get_client(printer_id)
+    if isinstance(client, AnycubicMQTTClient):
+        raise HTTPException(400, "Bambu K-profiles are not supported for Anycubic printers")
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
 
@@ -268,8 +282,12 @@ async def set_kprofiles_batch(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
+    _require_kprofile_support(printer)
+
     # Get MQTT client for printer
     client = printer_manager.get_client(printer_id)
+    if isinstance(client, AnycubicMQTTClient):
+        raise HTTPException(400, "Bambu K-profiles are not supported for Anycubic printers")
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
 
@@ -325,8 +343,12 @@ async def delete_kprofile(
     if not printer:
         raise HTTPException(404, "Printer not found")
 
+    _require_kprofile_support(printer)
+
     # Get MQTT client for printer
     client = printer_manager.get_client(printer_id)
+    if isinstance(client, AnycubicMQTTClient):
+        raise HTTPException(400, "Bambu K-profiles are not supported for Anycubic printers")
     if not client or not client.state.connected:
         raise HTTPException(400, "Printer not connected")
 

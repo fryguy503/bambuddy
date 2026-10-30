@@ -81,6 +81,44 @@ function barsLeftToRight(): string[] {
 }
 
 describe('QueueTimelineView job ordering', () => {
+  it('keeps an unconfirmed native dispatch visible without borrowing progress or forecasting successors', () => {
+    render(
+      <QueueTimelineView
+        queueItems={[
+          { ...running, anycubic_dispatch_state: 'unknown' },
+          pending(1, 'Next job', 1, HOUR),
+        ]}
+        printers={printers}
+        printerStatuses={{ 1: { progress: 37, remaining_time: 30, state: 'RUNNING' } }}
+        sjfEnabled={false}
+        onItemClick={() => {}}
+        t={(key: string) => key}
+      />,
+    );
+    expect(barsLeftToRight()).toEqual(['Running now']);
+    const bar = screen.getByRole('button', { name: /Running now/ });
+    expect(bar).not.toHaveTextContent('37%');
+    expect(bar.title).not.toContain('37%');
+  });
+
+  it('uses reconciled native progress to forecast its successors', () => {
+    render(
+      <QueueTimelineView
+        queueItems={[
+          { ...running, anycubic_dispatch_state: 'running' },
+          pending(1, 'Next job', 1, HOUR),
+        ]}
+        printers={printers}
+        printerStatuses={{ 1: { progress: 37, remaining_time: 30, state: 'RUNNING' } }}
+        sjfEnabled={false}
+        onItemClick={() => {}}
+        t={(key: string) => key}
+      />,
+    );
+    expect(barsLeftToRight()).toEqual(['Running now', 'Next job']);
+    expect(screen.getByRole('button', { name: /Running now/ })).toHaveTextContent('37%');
+  });
+
   it('chains by queue position when SJF is off', () => {
     renderTimeline(false);
     expect(barsLeftToRight()).toEqual(['Running now', 'Long job', 'Short job', 'Medium job']);

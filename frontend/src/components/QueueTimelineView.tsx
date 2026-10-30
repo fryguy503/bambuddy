@@ -5,6 +5,7 @@ import { compareQueueOrder, queueLaneKey } from '../utils/queueOrder';
 import { isBusyOnlyWaitingReason } from '../utils/waitingReason';
 import type { PrintQueueItem, Printer } from '../api/client';
 import { queueItemThumbnailUrl } from '../utils/queueItemThumbnail';
+import { canUseQueuePrinterProgress } from '../utils/queueProgress';
 import { Button } from './Button';
 
 /** Gantt-style 24h-rolling timeline. One horizontal swimlane per printer
@@ -109,7 +110,8 @@ export function QueueTimelineView({
 
     for (const item of queueItems) {
       if (item.status === 'printing') {
-        const status = item.printer_id != null ? printerStatuses[item.printer_id] : undefined;
+        const confirmed = canUseQueuePrinterProgress(item);
+        const status = confirmed && item.printer_id != null ? printerStatuses[item.printer_id] : undefined;
         const start = parseUTCDate(item.started_at) || new Date();
         let endTime: Date;
         if (status?.remaining_time != null && status.remaining_time > 0) {
@@ -129,8 +131,10 @@ export function QueueTimelineView({
           type: 'printing',
         });
         const lk = queueLaneKey(item);
-        lanesWithActive.add(lk);
-        chainEndByLane.set(lk, Math.max(chainEndByLane.get(lk) ?? nowMs, endTime.getTime()));
+        if (confirmed) {
+          lanesWithActive.add(lk);
+          chainEndByLane.set(lk, Math.max(chainEndByLane.get(lk) ?? nowMs, endTime.getTime()));
+        }
       } else if (item.status === 'pending') {
         // Skip un-committed pending shapes — staged items and blocked items
         // won't auto-dispatch, so a bar would lie. An item merely waiting its

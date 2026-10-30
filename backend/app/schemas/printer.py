@@ -1,9 +1,11 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.schemas.printer_location import normalize_location_name
+from backend.app.utils.anycubic_models import get_model as get_anycubic_model
 
 
 def _mask_url_login(url: str | None) -> str | None:
@@ -27,12 +29,14 @@ def _mask_url_login(url: str | None) -> str | None:
 
 
 class PrinterBase(BaseModel):
+    printer_type: Literal["bambu", "anycubic"] = "bambu"
+    tls_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     name: str = Field(..., min_length=1, max_length=100)
     serial_number: str = Field(..., min_length=1, max_length=50)
 
     @field_validator("serial_number")
     @classmethod
-    def _normalize_serial_number(cls, v: str) -> str:
+    def _normalize_serial_number(cls, v: str, info) -> str:
         """Uppercase and trim the serial number.
 
         Bambu serial numbers are uppercase alphanumeric, and the MQTT report
@@ -42,7 +46,8 @@ class PrinterBase(BaseModel):
         the correctly-cased topic, so every status field stays unknown (#1465).
         Normalising on input makes the subscribed topic always match.
         """
-        normalized = v.strip().upper()
+        # Anycubic's paired device ID is case-sensitive and is not a Bambu SN.
+        normalized = v.strip() if info.data.get("printer_type") == "anycubic" else v.strip().upper()
         if not normalized:
             raise ValueError("serial_number must not be blank")
         return normalized
@@ -67,7 +72,22 @@ class PrinterCreate(PrinterBase):
     # access_code lives on the input shapes only — never on the default
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
     # connect to the printer's MQTT and bypass Bambuddy's RBAC.
-    access_code: str = Field(..., min_length=1, max_length=20)
+    access_code: str = Field(default="", max_length=20)
+
+    @model_validator(mode="after")
+    def _validate_provider_credentials(self):
+        if self.printer_type == "anycubic":
+            model = get_anycubic_model(self.model)
+            if model is None:
+                raise ValueError("Unsupported Anycubic LAN printer model")
+            self.model = model.name
+            if not self.tls_fingerprint:
+                raise ValueError("Review the Anycubic LAN certificate before adding the printer")
+            self.access_code = ""
+            self.auto_archive = False
+        elif not self.access_code:
+            raise ValueError("A Bambu LAN access code is required")
+        return self
 
     # Input only, not on PrinterBase: SQLite never enforced the column width,
     # so a stored location may be longer, and the response must still read it.
@@ -85,6 +105,8 @@ class PlateDetectionROI(BaseModel):
 
 class PrinterUpdate(IgnoresNullForRequiredColumns):
     __orm_table__ = "printers"
+    printer_type: Literal["bambu", "anycubic"] | None = None
+    tls_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     name: str | None = None
     ip_address: str | None = Field(
         default=None,
@@ -213,7 +235,7 @@ class AMSTray(BaseModel):
     tray_sub_brands: str | None = None  # Full name like "PLA Basic", "PETG HF"
     tray_id_name: str | None = None  # Bambu filament ID like "A00-Y2" (can decode to color)
     tray_info_idx: str | None = None  # Filament preset ID like "GFA00"
-    remain: int = 0
+    remain: int | None = 0
     k: float | None = None  # Pressure advance value (from tray or K-profile lookup)
     cali_idx: int | None = None  # Calibration index for K-profile lookup
     tag_uid: str | None = None  # RFID tag UID (any tag)
@@ -227,6 +249,18 @@ class AMSTray(BaseModel):
     # True for a non-RFID spool the firmware can't identify — the UI shows "?" rather
     # than "Empty" (#2527). None when the bitmask was unavailable (→ state-based fallback).
     exists: bool | None = None
+
+
+class AnycubicDryingStatus(BaseModel):
+    status: int | None = None
+    target_temp: float | None = None
+    duration_minutes: float | None = None
+    remaining_minutes: float | None = None
+
+
+class AnycubicSlotUpdate(BaseModel):
+    material: str = Field(min_length=1, max_length=64)
+    color: str = Field(pattern=r"^[0-9a-fA-F]{6}$")
 
 
 class AMSUnit(BaseModel):
@@ -248,6 +282,7 @@ class AMSUnit(BaseModel):
     dry_target_temp: int | None = None  # Active-cycle target °C (Bambu doesn't echo this)
     dry_filament: str | None = None  # Active-cycle filament name we sent
     module_type: str = ""  # "ams", "ams_f1", "n3f", "n3s"
+    anycubic_drying: AnycubicDryingStatus | None = None
 
 
 class NozzleInfoResponse(BaseModel):
@@ -357,6 +392,7 @@ class NextPause(BaseModel):
 
 
 class PrinterStatus(BaseModel):
+    anycubic_controls: dict | None = None
     id: int
     name: str
     connected: bool

@@ -18,6 +18,8 @@ import { type TimeFormat, formatDuration, formatRelativeTime } from '../utils/da
 import type { PrintQueueItem, Permission } from '../api/client';
 import { Button } from './Button';
 import { ColorSubstitutionNotes } from './ColorSubstitutionNotes';
+import { AnycubicDispatchHold } from './AnycubicDispatchHold';
+import { hasAnycubicDispatchHold } from '../utils/anycubicPrint';
 import { queueItemDisplayName } from '../utils/queueItemName';
 
 const STATUS_CONFIG = {
@@ -58,6 +60,7 @@ export function CompactHistoryRow({
   const config = STATUS_CONFIG[item.status as keyof typeof STATUS_CONFIG] || STATUS_CONFIG.cancelled;
   const StatusIcon = config.icon;
   const displayName = queueItemDisplayName(item);
+  const nativeHeld = hasAnycubicDispatchHold(item);
 
   const thumbnailUrl = queueItemThumbnailUrl(item);
 
@@ -101,7 +104,7 @@ export function CompactHistoryRow({
             variant="ghost"
             size="sm"
             onClick={onRequeue}
-            disabled={!hasPermission('queue:create')}
+            disabled={nativeHeld || !hasPermission('queue:create')}
             title={!hasPermission('queue:create') ? t('queue.permissions.noRequeue') : t('queue.actions.requeue')}
             className="text-bambu-green hover:text-bambu-green/80 hover:bg-bambu-green/10 p-1.5"
           >
@@ -111,7 +114,7 @@ export function CompactHistoryRow({
             variant="ghost"
             size="sm"
             onClick={onRemove}
-            disabled={!canModify('queue', 'delete', item.created_by_id)}
+            disabled={nativeHeld || !canModify('queue', 'delete', item.created_by_id)}
             title={!canModify('queue', 'delete', item.created_by_id) ? t('queue.permissions.noRemove') : t('common.remove')}
             className="p-1.5"
           >
@@ -120,6 +123,7 @@ export function CompactHistoryRow({
         </div>
       </div>
 
+      <AnycubicDispatchHold item={item} canResolve={canModify('queue', 'update', item.created_by_id)} />
       {/* Meta row — printer / filament / duration / user. Indented under the
           thumbnail so it lines up with the name. */}
       <div className="mt-1 ml-[3.25rem] flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-bambu-gray">

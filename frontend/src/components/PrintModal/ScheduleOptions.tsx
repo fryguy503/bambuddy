@@ -26,6 +26,7 @@ export function ScheduleOptionsPanel({
   dateFormat = 'system',
   timeFormat = 'system',
   canControlPrinter = true,
+  showAutoOff = true,
   showStagger = false,
   printerCount = 0,
   hasGcodeSnippets = false,
@@ -268,7 +269,7 @@ export function ScheduleOptionsPanel({
       </div>
 
       {/* Auto power off */}
-      <div className="flex items-center gap-2">
+      {showAutoOff && <div className="flex items-center gap-2">
         <input
           type="checkbox"
           id="autoOffAfter"
@@ -281,7 +282,7 @@ export function ScheduleOptionsPanel({
           <Power className="w-3.5 h-3.5" />
           {t('printModal.autoOffAfter')}
         </label>
-      </div>
+      </div>}
 
       {/* G-code injection */}
       {hasGcodeSnippets && (

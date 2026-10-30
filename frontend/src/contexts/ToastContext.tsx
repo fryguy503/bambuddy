@@ -400,6 +400,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   <div className="mt-3 space-y-2 max-h-64 overflow-y-auto pr-1">
                     {toast.dispatchData.jobs.map((job) => {
                       const uploadDoneAwaitingPrinter = isAwaitingPrinter(job);
+                      // Existing senders use translated reason codes; native
+                      // dispatch can supply a human-readable failure message.
+                      const failReason = job.failReason?.trim();
+                      const failureText = failReason && /\s/.test(failReason)
+                        ? failReason
+                        : t(`dispatchToast.failed.${failReason}`, { defaultValue: t('dispatchToast.failed.generic') });
                       const barColorByStatus: Record<DispatchJobStatus, string> = {
                         processing: 'bg-bambu-green',
                         completed: 'bg-green-500',
@@ -449,8 +455,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                               </div>
                             ) : null
                           ) : job.status === 'failed' && job.failReason ? (
-                            <div className="text-[11px] text-red-400 truncate">
-                              {t(`dispatchToast.failed.${job.failReason}`, { defaultValue: t('dispatchToast.failed.generic') })}
+                            <div className="text-[11px] text-red-400 truncate" title={failureText}>
+                              {failureText}
                             </div>
                           ) : null}
                           <div className="mt-1 h-1.5 w-full rounded bg-white/10 overflow-hidden">

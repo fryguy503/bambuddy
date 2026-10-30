@@ -434,6 +434,8 @@ export interface PrinterLocationUpdate {
 }
 
 export interface Printer {
+  printer_type?: 'bambu' | 'anycubic';
+  tls_fingerprint?: string | null;
   id: number;
   name: string;
   serial_number: string;
@@ -498,7 +500,7 @@ export interface AMSTray {
   tray_sub_brands: string | null;  // Full name like "PLA Basic", "PETG HF"
   tray_id_name: string | null;  // Bambu filament ID like "A00-Y2" (can decode to color)
   tray_info_idx: string | null;  // Filament preset ID like "GFA00" - maps to cloud setting_id
-  remain: number;
+  remain: number | null;
   k: number | null;  // Pressure advance value (from tray or K-profile lookup)
   cali_idx: number | null;  // Calibration index for K-profile lookup
   tag_uid: string | null;  // RFID tag UID (any tag)
@@ -527,6 +529,45 @@ export interface AMSUnit {
   dry_target_temp: number | null; // Active-cycle target °C (Bambu does not echo)
   dry_filament: string | null;    // Active-cycle filament name we sent
   module_type: string;    // "ams", "ams_f1", "n3f", "n3s"
+  anycubic_drying?: { status: number | null; target_temp: number | null; duration_minutes: number | null; remaining_minutes: number | null } | null;
+}
+
+export interface AnycubicDryingControl {
+  id: number;
+  temp_min: number;
+  temp_max: number;
+  duration_min: number;
+  duration_max: number;
+  duration_limits: { temperature: number; max_minutes: number }[];
+  start_ready: boolean;
+  stop_ready: boolean;
+}
+
+export interface AnycubicSlotControl {
+  box_id: number; slot_id: number; configure: boolean; feed: boolean; feed_stop?: boolean; rfid_locked: boolean;
+}
+
+export interface AnycubicControlCapabilities {
+  ready: boolean; nozzle_max: number; bed_max: number; fans: string[]; speed_modes: number[];
+  reported_fans?: string[];
+  ace_drying?: AnycubicDryingControl[]; ace_slots?: AnycubicSlotControl[];
+  chamber_light?: boolean; motion?: boolean; extruder_pulse?: boolean; extrusion_stop?: boolean;
+  print_options?: string[];
+  print_ready?: boolean;
+}
+
+export interface AnycubicPrintOptions {
+  use_ace: boolean;
+  auto_leveling: boolean;
+  vibration_compensation: boolean;
+  flow_calibration: boolean;
+  timelapse: boolean;
+  filament_mapping: { tool: number; box_id: number; slot_id: number }[];
+}
+
+export interface AnycubicPrintRequirements {
+  model: string;
+  tools: { tool: number; type: string; color: string }[];
 }
 
 export interface ScheduledDrying {
@@ -634,6 +675,7 @@ export interface UsbCamera {
 }
 
 export interface PrinterStatus {
+  anycubic_controls?: AnycubicControlCapabilities | null;
   id: number;
   name: string;
   connected: boolean;
@@ -765,6 +807,8 @@ export interface PrinterStatus {
 }
 
 export interface PrinterCreate {
+  printer_type?: 'bambu' | 'anycubic';
+  tls_fingerprint?: string | null;
   name: string;
   serial_number: string;
   ip_address: string;
@@ -785,6 +829,13 @@ export interface PrinterCreate {
   plate_detection_enabled?: boolean;
   plate_detection_roi?: PlateDetectionROI;
   wear_cost_per_hour?: number | null;
+}
+
+export interface AnycubicDiscovery {
+  serial_number: string;
+  model: string;
+  model_id: string;
+  tls_fingerprint: string;
 }
 
 // Plate Detection
@@ -2761,6 +2812,9 @@ export interface DiscoveredTasmotaDevice {
 
 // Print Queue types
 export interface PrintQueueItem {
+  anycubic_options?: AnycubicPrintOptions | null;
+  anycubic_dispatch_state?: string | null;
+  anycubic_source_library_file_id?: number | null;
   id: number;
   printer_id: number | null;  // null = unassigned
   target_model: string | null;  // Target printer model for model-based assignment
@@ -2932,6 +2986,7 @@ export interface PrintBatch {
 }
 
 export interface PrintQueueItemCreate {
+  anycubic_options?: AnycubicPrintOptions | null;
   printer_id?: number | null;  // null = unassigned
   target_model?: string | null;  // Target printer model (mutually exclusive with printer_id)
   target_location?: string | null;  // Target location filter (only used with target_model)
@@ -3028,6 +3083,7 @@ export interface PrintBatchDispatchRequest {
 }
 
 export interface PrintQueueItemUpdate {
+  anycubic_options?: AnycubicPrintOptions | null;
   printer_id?: number | null;  // null = unassign
   // A deliberate filament substitution in the mapping (#2799); see PrintModal.
   skip_filament_check?: boolean;
@@ -3039,7 +3095,7 @@ export interface PrintQueueItemUpdate {
   require_previous_success?: boolean;
   auto_off_after?: boolean;
   manual_start?: boolean;
-  ams_mapping?: number[];
+  ams_mapping?: number[] | null;
   plate_id?: number | null;  // Plate ID for multi-plate 3MF files
   // Print options
   bed_levelling?: CalibrationMode;
@@ -5251,6 +5307,10 @@ export const api = {
   // Printers
   getPrinters: () => request<Printer[]>('/printers/'),
   getPrinter: (id: number) => request<Printer>(`/printers/${id}`),
+  discoverAnycubic: (ipAddress: string, printerId?: number) =>
+    request<AnycubicDiscovery>(`/printers/${printerId == null ? '' : `${printerId}/`}anycubic/discover?${new URLSearchParams({ ip_address: ipAddress })}`, {
+      method: 'POST',
+    }),
   createPrinter: (data: PrinterCreate) =>
     request<Printer>('/printers/', {
       method: 'POST',
@@ -5400,6 +5460,13 @@ export const api = {
     }),
 
   // AMS Drying Control
+  startAnycubicDrying: (printerId: number, boxId: number, temperature: number, durationMinutes: number) =>
+    request<{ success: boolean; queued: boolean; message: string }>(`/printers/${printerId}/drying/start?${new URLSearchParams({ ams_id: String(boxId), temp: String(temperature), duration_minutes: String(durationMinutes) })}`, { method: 'POST' }),
+  setAnycubicSlot: (printerId: number, boxId: number, slotId: number, material: string, color: string) => request<{ success: boolean }>(`/printers/${printerId}/anycubic/slots/${boxId}/${slotId}`, { method: 'POST', body: JSON.stringify({ material, color }) }),
+  feedAnycubicSlot: (printerId: number, boxId: number, slotId: number, operation: 'load' | 'unload' | 'stop') => request<{ success: boolean }>(`/printers/${printerId}/anycubic/slots/${boxId}/${slotId}/${operation}`, { method: 'POST' }),
+  jogAnycubicAxis: (printerId: number, axis: 'x' | 'y' | 'z', distance: number) => request<{ success: boolean }>(`/printers/${printerId}/anycubic/jog?${new URLSearchParams({ axis, distance: String(distance) })}`, { method: 'POST' }),
+  pulseAnycubicExtruder: (printerId: number, direction: 0 | 1) => request<{ success: boolean }>(`/printers/${printerId}/anycubic/extruder-pulse?direction=${direction}`, { method: 'POST' }),
+  stopAnycubicExtruder: (printerId: number) => request<{ success: boolean }>(`/printers/${printerId}/anycubic/extruder-stop`, { method: 'POST' }),
   startDrying: (printerId: number, amsId: number, temp: number, duration: number, filament: string = '', rotateTray: boolean = false) =>
     request<{ status: string; ams_id: number; temp: number; duration: number }>(
       `/printers/${printerId}/drying/start?ams_id=${amsId}&temp=${temp}&duration=${duration}&filament=${encodeURIComponent(filament)}&rotate_tray=${rotateTray}`,
@@ -6471,6 +6538,35 @@ export const api = {
     );
   },
 
+  listAnycubicFiles: (printerId: number, path = '/', page = 1) =>
+    request<AnycubicFileCatalog>(`/printers/${printerId}/anycubic/files?${new URLSearchParams({ path, page: String(page) })}`),
+  getAnycubicTransfer: (printerId: number, id: string) =>
+    request<AnycubicTransfer>(`/printers/${printerId}/anycubic/files/uploads/${encodeURIComponent(id)}`),
+  cancelAnycubicTransfer: (printerId: number, id: string) =>
+    request<AnycubicTransfer>(`/printers/${printerId}/anycubic/files/uploads/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  uploadAnycubicFile: (printerId: number, file: File, progress?: (percent: number) => void): Promise<AnycubicTransfer> =>
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/printers/${printerId}/anycubic/files/upload`);
+      xhr.withCredentials = true;
+      xhr.timeout = 300000;
+      if (authToken) xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+      xhr.upload.onprogress = event => { if (event.lengthComputable) progress?.(Math.round(event.loaded * 100 / event.total)); };
+      xhr.onload = () => {
+        try {
+          const result = JSON.parse(xhr.responseText);
+          if (xhr.status >= 200 && xhr.status < 300) resolve(result);
+          else reject(new Error(typeof result.detail === 'string' ? result.detail : `HTTP ${xhr.status}`));
+        } catch { reject(new Error('File transfer returned an invalid response')); }
+      };
+      xhr.onerror = () => reject(new Error('Transfer interrupted; check the printer file list before retrying'));
+      xhr.ontimeout = () => reject(new Error('Transfer timed out; check the printer file list before retrying'));
+      xhr.onabort = () => reject(new Error('Transfer interrupted; check the printer file list before retrying'));
+      const body = new FormData();
+      body.append('file', file);
+      xhr.send(body);
+    }),
+
   // MakerWorld URL-paste import flow.
   getMakerworldStatus: () =>
     request<MakerworldStatus>('/makerworld/status'),
@@ -6695,6 +6791,9 @@ export const api = {
     const qs = opts?.skipFilamentCheck ? '?skip_filament_check=true' : '';
     return request<PrintQueueItem>(`/queue/${id}/start${qs}`, { method: 'POST' });
   },
+  resolveAnycubicQueueItem: (id: number) => request<PrintQueueItem>(`/queue/${id}/resolve-anycubic`, {
+    method: 'POST', body: JSON.stringify({ acknowledge_not_printing: true }),
+  }),
   /**
    * Clear the `require_previous_success` gate for a printer after the user
    * resolves the failure. Acknowledges any failed/aborted predecessors and
@@ -7975,6 +8074,7 @@ export const api = {
     request<VariantGroup>(`/library/variant-groups/${groupId}`),
 
   getLibraryFile: (id: number) => request<LibraryFile>(`/library/files/${id}`),
+  getAnycubicPrintRequirements: (id: number) => request<AnycubicPrintRequirements>(`/library/files/${id}/anycubic-print`),
   uploadLibraryFile: async (
     file: File,
     folderId?: number | null,
@@ -8912,6 +9012,24 @@ export interface DiscoveredPrinter {
   discovered_at: string | null;
 }
 
+export interface AnycubicFileCatalog {
+  path: string;
+  page: number;
+  pages: number;
+  total: number;
+  files: { name: string; path: string; size: number | null; is_dir: boolean }[];
+}
+
+export interface AnycubicTransfer {
+  id: string;
+  printer_id: number;
+  filename: string;
+  size: number;
+  sent: number;
+  phase: 'uploading' | 'verifying' | 'completed' | 'uploaded_unverified' | 'failed' | 'unknown' | 'cancelled';
+  message: string | null;
+}
+
 export interface DiscoveryStatus {
   running: boolean;
 }
@@ -8939,20 +9057,21 @@ export const discoveryApi = {
   stopDiscovery: () =>
     request<DiscoveryStatus>('/discovery/stop', { method: 'POST' }),
 
-  getDiscoveredPrinters: () =>
-    request<DiscoveredPrinter[]>('/discovery/printers'),
+  getDiscoveredPrinters: (printerType: 'bambu' | 'anycubic' = 'bambu') =>
+    request<DiscoveredPrinter[]>(`/discovery/printers${printerType === 'anycubic' ? '?printer_type=anycubic' : ''}`),
 
   // Subnet scanning (for Docker environments)
-  startSubnetScan: (subnet: string, timeout: number = 1.0) =>
+  startSubnetScan: (subnet: string, timeout: number = 1.0, printerType: 'bambu' | 'anycubic' = 'bambu') =>
     request<SubnetScanStatus>('/discovery/scan', {
       method: 'POST',
-      body: JSON.stringify({ subnet, timeout }),
+      body: JSON.stringify({ subnet, timeout, ...(printerType === 'anycubic' ? { printer_type: printerType } : {}) }),
     }),
 
-  getScanStatus: () => request<SubnetScanStatus>('/discovery/scan/status'),
+  getScanStatus: (printerType: 'bambu' | 'anycubic' = 'bambu') =>
+    request<SubnetScanStatus>(`/discovery/scan/status${printerType === 'anycubic' ? '?printer_type=anycubic' : ''}`),
 
-  stopSubnetScan: () =>
-    request<SubnetScanStatus>('/discovery/scan/stop', { method: 'POST' }),
+  stopSubnetScan: (printerType: 'bambu' | 'anycubic' = 'bambu') =>
+    request<SubnetScanStatus>(`/discovery/scan/stop${printerType === 'anycubic' ? '?printer_type=anycubic' : ''}`, { method: 'POST' }),
 };
 
 // Virtual Printer types

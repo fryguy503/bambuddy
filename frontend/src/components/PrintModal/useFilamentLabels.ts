@@ -43,16 +43,18 @@ interface FilamentReqLike {
  * entry for the same id. Shared by the print dialog and the queue page so both
  * name a colour within the same product line.
  */
-export function useFilamentNameByIdx(): Record<string, string> {
+export function useFilamentNameByIdx(enabled = true): Record<string, string> {
   const { data: builtinFilaments } = useQuery({
     queryKey: ['builtin-filaments'],
     queryFn: () => api.getBuiltinFilaments(),
     staleTime: 5 * 60 * 1000,
+    enabled,
   });
   const { data: cloudFilamentIdMap } = useQuery({
     queryKey: ['filament-id-map'],
     queryFn: () => api.getFilamentIdMap(),
     staleTime: 5 * 60 * 1000,
+    enabled,
   });
 
   return useMemo(() => {

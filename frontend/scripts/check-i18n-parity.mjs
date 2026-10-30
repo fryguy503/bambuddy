@@ -181,6 +181,7 @@ const DE_COGNATES = [
 
 // French cognates — many UI labels overlap with English exactly.
 const FR_COGNATES = [
+  'Sport', // native Anycubic speed mode; French cognate
   'Apps',  // notifications badge for messages from connected apps — same word
   'Bambu Cloud', 'Orca Cloud',  // brand names — same in every locale
   'AMS Filament Backup',  // Bambu Lab product/firmware feature name
@@ -232,6 +233,7 @@ const FR_COGNATES = [
 
 // Italian cognates.
 const IT_COGNATES = [
+  'Sport', // native Anycubic speed mode; Italian cognate
   '{{ams}} · Slot {{slot}}',  // #2587 runout slot label — "Slot" is the IT term too
   'Bambu Cloud', 'Orca Cloud',  // brand names — same in every locale
   'AMS Filament Backup',  // Bambu Lab product/firmware feature name
@@ -382,6 +384,7 @@ const ES_COGNATES = [
 // Swedish cognates — technical UI labels that Swedish speakers use verbatim
 // from English (loanwords + acronyms + format strings). Curated, not a shortcut.
 const SV_COGNATES = [
+  'Sport', // native Anycubic speed mode; the same term in Swedish
   'MakerWorld: {{designer}}',
   'email',
   '{{printer}}: {{error}}',
@@ -449,6 +452,7 @@ const UK_COGNATES = [
 // are used untranslated by Dutch slicer users. Each entry below was
 // checked individually against the Dutch translation in #2891.
 const NL_COGNATES = [
+  'Sport', // native Anycubic speed mode; the same term in Dutch
   'Apps',  // notifications badge for messages from connected apps — same word
   '1 printer', '{{n}} printers',
   '1 week', '(25%, 50%, 75%)', 'Accent', 'AMS Filament Backup',

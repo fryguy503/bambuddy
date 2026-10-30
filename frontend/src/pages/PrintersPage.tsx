@@ -1,3 +1,5 @@
+import { AmsNameHoverCard } from '../components/AmsNameHoverCard';
+import { AnycubicPrinterControls } from '../components/AnycubicPrinterControls';
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { compareFwVersions } from '../utils/firmwareVersion';
@@ -169,9 +171,12 @@ import { formatDateOnly, formatDateTime, formatETA, formatDuration, formatDurati
 import type { Printer, PrinterCreate, PrinterStatus, AMSUnit, DiscoveredPrinter, FirmwareUpdateInfo, FirmwareUploadStatus, LinkedSpoolInfo, SpoolAssignment, HMSError, InventorySpool, SmartPlug, PrinterDiagnosticResult } from '../api/client';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
+import { AnycubicConnectionPanel } from '../components/AnycubicConnectionPanel';
+import { AnycubicAceStatus } from '../components/AnycubicAceStatus';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { BulkPrinterToolbar, type PrinterState } from '../components/BulkPrinterToolbar';
 import { FileManagerModal } from '../components/FileManagerModal';
+import { AnycubicFilesModal } from '../components/AnycubicFilesModal';
 import { useEmbeddedCameras } from '../contexts/EmbeddedCameraContext';
 import { CameraWall } from '../components/CameraWall';
 import { DEFAULT_CAM_WALL_TILE_SIZE } from '../components/camWallTileSize';
@@ -200,6 +205,7 @@ import { FeedDirectionModal } from '../components/FeedDirectionModal';
 import { plateCheckFailureText } from '../utils/plateCheck';
 import { amsHasLoadedTray, getAmsLabel, getEmptySlotKind, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, installedNozzleDiameters, isAmsHtUnit, isBambuLabSpool, trayForSlot, resolveSlotNozzleDiameter, resolveSlotExtruder, formatSlotLabel, slotPresetDescribesTray, FTS_INLET_SIDE } from '../utils/amsHelpers';
 import { MAX_CHAMBER_TEMP_C, getPrinterImage, getWifiStrength, filterCompatibleQueueItems, isPrinterCurrentlyDispatchable, IDLE_PRINTER_STATES } from '../utils/printer';
+import { ANYCUBIC_MODELS } from '../utils/anycubicModels';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
 import { Collapsible } from '../components/Collapsible';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
@@ -1739,195 +1745,7 @@ const MODELS_WITH_LEFT_AUX_FIRST: ReadonlySet<string> = new Set(['X2D']);
 //  • User-defined friendly name (editable, protected by printers:update)
 //  • AMS serial number
 //  • AMS firmware version
-export function AmsNameHoverCard({
-  ams,
-  printerId,
-  label,
-  amsLabels,
-  canEdit,
-  onSaved,
-  children,
-}: {
-  ams: import('../api/client').AMSUnit;
-  printerId: number;
-  label: string;           // auto-generated label, e.g. "AMS-A"
-  amsLabels?: Record<number, string>;
-  canEdit: boolean;
-  onSaved: () => void;
-  children: React.ReactNode;
-}) {
-  const { t } = useTranslation();
-  const [isVisible, setIsVisible] = useState(false);
-  const [position, setPosition] = useState<'top' | 'bottom'>('top');
-  const [editValue, setEditValue] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [isInputFocused, setIsInputFocused] = useState(false);
-  const triggerRef = useRef<HTMLDivElement>(null);
-  const cardRef = useRef<HTMLDivElement>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (isVisible) {
-      setEditValue(amsLabels?.[ams.id] ?? '');
-      setSaveError(null);
-      requestAnimationFrame(() => {
-        if (triggerRef.current && cardRef.current) {
-          const rect = triggerRef.current.getBoundingClientRect();
-          const spaceAbove = rect.top - 56;
-          const spaceBelow = window.innerHeight - rect.bottom;
-          setPosition(spaceAbove < cardRef.current.offsetHeight + 12 && spaceBelow > spaceAbove ? 'bottom' : 'top');
-        }
-      });
-    }
-  }, [isVisible, amsLabels, ams.id]);
-
-  const handleMouseEnter = () => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => setIsVisible(true), 80);
-  };
-  const handleMouseLeave = () => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    if (!isInputFocused) {
-      timeoutRef.current = setTimeout(() => setIsVisible(false), 200);
-    }
-  };
-  useEffect(() => () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); }, []);
-
-  const handleSave = async () => {
-    if (!canEdit) return;
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      const trimmed = editValue.trim();
-      if (trimmed) {
-        await api.saveAmsLabel(printerId, ams.id, trimmed, ams.serial_number);
-      } else {
-        await api.deleteAmsLabel(printerId, ams.id, ams.serial_number);
-      }
-      onSaved();
-      setIsVisible(false);
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleClear = async () => {
-    if (!canEdit) return;
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      await api.deleteAmsLabel(printerId, ams.id, ams.serial_number);
-      onSaved();
-      setIsVisible(false);
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <div
-      ref={triggerRef}
-      className="relative inline-block"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-    >
-      {children}
-
-      {isVisible && (
-        <div
-          ref={cardRef}
-          className={`
-            absolute left-0 z-50
-            ${position === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'}
-            animate-in fade-in-0 zoom-in-95 duration-150
-          `}
-          style={{ maxWidth: 'calc(100vw - 24px)' }}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-        >
-          <div className="w-52 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl overflow-hidden backdrop-blur-sm p-2.5 space-y-2">
-            {/* AMS auto-label */}
-            <div className="text-[length:var(--pc-t10,10px)] uppercase tracking-wider text-bambu-gray font-medium">{label}</div>
-
-            {/* Serial number */}
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[length:var(--pc-t10,10px)] tracking-wide text-bambu-gray font-medium shrink-0">
-                {t('printers.amsPopup.serialNumber')}
-              </span>
-              <span className="text-[length:var(--pc-t10,10px)] text-white font-mono truncate">{ams.serial_number || '—'}</span>
-            </div>
-
-            {/* Firmware version */}
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[length:var(--pc-t10,10px)] tracking-wide text-bambu-gray font-medium shrink-0">
-                {t('printers.amsPopup.firmwareVersion')}
-              </span>
-              <span className="text-[length:var(--pc-t10,10px)] text-white font-mono truncate">{ams.sw_ver || '—'}</span>
-            </div>
-
-            {/* Friendly name editor */}
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-[length:var(--pc-t10,10px)] text-bambu-gray font-medium shrink-0">
-                  {t('printers.amsPopup.friendlyName')}
-                </span>
-                <div className="flex-1 h-[2px] bg-bambu-dark-tertiary/50" />
-              </div>
-              <input
-                type="text"
-                value={editValue}
-                onChange={(e) => canEdit && setEditValue(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSave()}
-                onFocus={() => setIsInputFocused(true)}
-                onBlur={() => {
-                  setIsInputFocused(false);
-                  if (timeoutRef.current) clearTimeout(timeoutRef.current);
-                    timeoutRef.current = setTimeout(() => setIsVisible(false), 200);
-                }}
-                placeholder={canEdit ? t('printers.amsPopup.friendlyNamePlaceholder') : (amsLabels?.[ams.id] || '—')}
-                disabled={!canEdit}
-                title={!canEdit ? t('printers.amsPopup.noEditPermission') : undefined}
-                className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1 text-xs text-white placeholder-bambu-gray/60 focus:outline-none focus:border-bambu-green disabled:opacity-50 disabled:cursor-not-allowed"
-                maxLength={100}
-              />
-              {canEdit && (
-                <div className="space-y-1">
-                  {saveError && (
-                    <p className="text-[length:var(--pc-t10,10px)] text-red-700 dark:text-red-400 break-words">{saveError}</p>
-                  )}
-                  <div className="flex gap-1 justify-end">
-                    <button
-                      onClick={handleSave}
-                      disabled={isSaving}
-                      className="px-2 py-0.5 text-[length:var(--pc-t10,10px)] bg-bambu-green text-white rounded hover:bg-bambu-green/80 disabled:opacity-50"
-                    >
-                      {t('printers.amsPopup.save')}
-                    </button>
-                    {amsLabels?.[ams.id] && (
-                      <button
-                        onClick={handleClear}
-                        disabled={isSaving}
-                        className="px-2 py-0.5 text-[length:var(--pc-t10,10px)] bg-bambu-dark-tertiary text-bambu-gray rounded hover:bg-bambu-dark-tertiary/70 disabled:opacity-50"
-                      >
-                        {t('printers.amsPopup.clear')}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
+export { AmsNameHoverCard } from '../components/AmsNameHoverCard';
 
 // AMS drying presets from BambuStudio filament profiles (idle mode temps)
 // Format: { n3f temp, n3s temp, n3f hours, n3s hours }
@@ -2122,11 +1940,13 @@ function PrinterCard({
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { hasPermission, canModify, authEnabled, isAdmin } = useAuth();
+  const isAnycubic = printer.printer_type === 'anycubic';
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteArchives, setDeleteArchives] = useState(true);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showFileManager, setShowFileManager] = useState(false);
+  const [anycubicInitialFile, setAnycubicInitialFile] = useState<globalThis.File | null>(null);
   const [showMQTTDebug, setShowMQTTDebug] = useState(false);
   const [showPowerOnConfirm, setShowPowerOnConfirm] = useState(false);
   const [showPowerOffConfirm, setShowPowerOffConfirm] = useState(false);
@@ -2291,7 +2111,7 @@ function PrinterCard({
     queryFn: () => firmwareApi.checkPrinterUpdate(printer.id),
     staleTime: 5 * 60 * 1000,
     refetchInterval: 5 * 60 * 1000,
-    enabled: checkPrinterFirmware && hasPermission('firmware:read'),
+    enabled: !isAnycubic && checkPrinterFirmware && hasPermission('firmware:read'),
   });
 
   // Collect unique tray_info_idx values for cloud filament info lookup
@@ -2394,6 +2214,7 @@ function PrinterCard({
   const { data: slotPresets } = useQuery({
     queryKey: ['slotPresets', printer.id],
     queryFn: () => api.getSlotPresets(printer.id),
+    enabled: !isAnycubic,
     staleTime: 2 * 60 * 1000, // 2 minutes
   });
 
@@ -2471,7 +2292,11 @@ function PrinterCard({
       cachedAmsData.current = status.ams;
     }
   }, [status?.ams]);
-  const amsData = (status?.ams && status.ams.length > 0) ? status.ams : cachedAmsData.current;
+  // Anycubic reports a complete ACE list; an empty list means the units were removed.
+  const amsData = useMemo(
+    () => isAnycubic ? (status?.ams ?? []) : (status?.ams && status.ams.length > 0) ? status.ams : cachedAmsData.current,
+    [isAnycubic, status?.ams],
+  );
   // #2532: the K-profile line only exists on slots the printer has actually
   // calibrated. The AMS units and the external-spool group are flex siblings in
   // one row, so on a card that shows a value anywhere, the slots without one
@@ -2570,6 +2395,7 @@ function PrinterCard({
   const { data: queueItems } = useQuery({
     queryKey: ['queue', printer.id, 'pending'],
     queryFn: () => api.getPrinterQueue(printer.id, 'pending'),
+    enabled: !isAnycubic,
   });
   // Filter queue items by filament compatibility (same logic as PrinterQueueWidget)
   // so the badge only shows on printers that can actually run the queued jobs.
@@ -2604,7 +2430,11 @@ function PrinterCard({
     select: (archives) => archives.find((a) => a.printer_id === printer.id),
   });
   const isPrintingOrPaused = status?.state === 'RUNNING' || status?.state === 'PAUSE';
-  const needsPlateClear = requirePlateClear && status?.awaiting_plate_clear === true;
+  // Native queue jobs always require plate acknowledgement, independently of
+  // the optional Bambu queue setting. Keep their shared release control visible.
+  const plateClearRequired = requirePlateClear || isAnycubic;
+  const needsPlateClear = plateClearRequired && status?.awaiting_plate_clear === true;
+  const plateInUse = isPrintingOrPaused || (isAnycubic && (status?.state === 'PREPARE' || status?.state === 'BUSY'));
   // Post-print outcome confirmation on the card (#1898): while the plate-clear
   // gate is up and the just-finished print asked for a verdict, offer
   // Good/Reject right where the operator releases the plate. Releasing the
@@ -2623,7 +2453,7 @@ function PrinterCard({
   // Not gated on `connected`: the plate-clear gate is Bambuddy-side state, and with
   // Auto Power Off the printer is powered down exactly when the operator clears the
   // plate. Hiding the control there left no way to release the gate (#2864).
-  const showClearPlateButton = needsPlateClear && !isPrintingOrPaused;
+  const showClearPlateButton = needsPlateClear && !plateInUse;
   const activePrintName = status?.current_print && isPrintingOrPaused
     ? formatPrintName(status.subtask_name || status.current_print || null, status.gcode_file, t, activePlateLabel)
     : null;
@@ -2639,8 +2469,8 @@ function PrinterCard({
     // Connected-only because the pill's only render site sits inside the live-status
     // panel. For a powered-down printer the plate-clear button itself carries the
     // state — see the standalone slot below the status block (#2864).
-    if (!requirePlateClear || !status?.connected) return null;
-    if (isPrintingOrPaused) {
+    if (!plateClearRequired || !status?.connected) return null;
+    if (plateInUse) {
       return {
         label: t('printers.plateStatus.inUse'),
         className: 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400',
@@ -3139,7 +2969,7 @@ function PrinterCard({
   const { data: objectsData } = useQuery({
     queryKey: ['printableObjects', printer.id],
     queryFn: () => api.getPrintableObjects(printer.id),
-    enabled: showSkipObjectsModal || isPrintingWithObjects,
+    enabled: !isAnycubic && (showSkipObjectsModal || isPrintingWithObjects),
     refetchInterval: showSkipObjectsModal ? 5000 : (isPrintingWithObjects ? 30000 : false), // 5s when modal open, 30s otherwise
   });
 
@@ -3507,7 +3337,7 @@ function PrinterCard({
   // used to check — so someone holding that but neither of these had the file
   // uploaded and then rejected by the queue, leaving it stranded. The Print
   // button below has always checked this pair.
-  const canDrop = hasPermission('library:upload') && hasPermission('queue:create');
+  const canDrop = isAnycubic ? hasPermission('printers:files') && hasPermission('printers:control') : hasPermission('library:upload') && hasPermission('queue:create');
 
   // Drives the wording alone. Shared with the PrintModal so the card's promise
   // and the modal's own "will start later" toast cannot disagree.
@@ -3515,6 +3345,7 @@ function PrinterCard({
 
   const handleCardDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
+    if (isAnycubic) return;
     dragCounterRef.current++;
     if (dragCounterRef.current === 1) setIsDraggingFile(true);
   };
@@ -3540,6 +3371,13 @@ function PrinterCard({
     const droppedFiles = Array.from(e.dataTransfer.files);
     const file = droppedFiles[0];
     if (!file) return;
+
+    if (isAnycubic) {
+      if (!file.name.toLowerCase().endsWith('.gcode')) { showToast(t('printers.anycubic.filesHelp'), 'error'); return; }
+      setAnycubicInitialFile(file);
+      setShowFileManager(true);
+      return;
+    }
 
     // Sliced files only. A plain .3mf can be sliced too (a Studio plate
     // export), which only its content tells — checked after the upload.
@@ -3809,7 +3647,7 @@ function PrinterCard({
             <Terminal className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
             {t('printers.mqttDebug')}
           </button>
-          <button
+          {!isAnycubic && <button
             className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
             onClick={() => {
               setShowDiagnostic(true);
@@ -3818,7 +3656,7 @@ function PrinterCard({
           >
             <Stethoscope className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
             {t('diagnostic.runButton')}
-          </button>
+          </button>}
           <button
             className={`w-full px-4 py-2 text-left text-sm flex items-center gap-2 ${
               hasPermission('printers:delete')
@@ -3885,7 +3723,7 @@ function PrinterCard({
               <>
                 <PrinterIcon className="w-8 h-8 mx-auto mb-2 text-bambu-green" />
                 <p className="text-sm font-medium text-bambu-green">
-                  {dropWouldQueue ? t('printers.dropToQueue') : t('printers.dropToPrint')}
+                  {isAnycubic ? t('common.upload') : dropWouldQueue ? t('printers.dropToQueue') : t('printers.dropToPrint')}
                 </p>
               </>
             ) : (
@@ -4018,7 +3856,7 @@ function PrinterCard({
                 </span>
               )}
               {/* Run connection diagnostic — offered when the printer is offline, NOT in maintenance */}
-              {printer.is_active !== false && !status?.connected && (
+              {!isAnycubic && printer.is_active !== false && !status?.connected && (
                 <button
                   onClick={() => setShowDiagnostic(true)}
                   className="flex items-center gap-1 px-2 py-1 rounded-full text-xs cursor-pointer bg-bambu-dark-tertiary text-bambu-gray hover:text-white transition-colors"
@@ -4156,7 +3994,7 @@ function PrinterCard({
                 </button>
               )}
               {/* Firmware Version Badge */}
-              {checkPrinterFirmware && firmwareInfo?.current_version && firmwareInfo?.latest_version ? (
+              {!isAnycubic && checkPrinterFirmware && firmwareInfo?.current_version && firmwareInfo?.latest_version ? (
                 <button
                   onClick={() => setShowFirmwareModal(true)}
                   className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs hover:opacity-80 transition-opacity ${
@@ -4404,11 +4242,11 @@ function PrinterCard({
                   // what rebuilds the list, so the print could never get it back.
                   // Exactly one object is the real nothing-to-skip case.
                   const objectCount = status.printable_objects_count ?? 0;
-                  const canSkipObjects = isActivePrint && objectCount !== 1 && hasPermission('printers:control');
+                  const canSkipObjects = !isAnycubic && isActivePrint && objectCount !== 1 && hasPermission('printers:control');
 
                   return (
                     <div className="p-2 bg-bambu-dark rounded-[10px] relative overflow-hidden">
-                      <button
+                      {!isAnycubic && <button
                         onClick={() => setShowSkipObjectsModal(true)}
                         disabled={!canSkipObjects}
                         className={`absolute top-2 right-2 p-1.5 rounded transition-colors z-10 ${
@@ -4432,7 +4270,7 @@ function PrinterCard({
                             {objectsData.skipped_count}
                           </span>
                         )}
-                      </button>
+                      </button>}
                       <div className="flex items-stretch gap-2">
                         <CoverImage
                           url={coverUrl}
@@ -4517,14 +4355,14 @@ function PrinterCard({
                           </div>
                         </div>
                       </div>
-                      <PrinterQueueWidget
+                      {!isAnycubic && <PrinterQueueWidget
                         printerId={printer.id}
                         printerModel={printer.model}
                         loadedFilamentTypes={loadedFilamentTypes}
                         loadedFilaments={loadedFilaments}
                         loadedVariants={loadedVariants}
                         variant="panelExtension"
-                      />
+                      />}
                     </div>
                   );
                 })()}
@@ -4553,8 +4391,11 @@ function PrinterCard({
               const rightNozzleSlot = status.nozzle_rack?.find(s => s.id === 0);
               // Single-nozzle models (H2D, H2C): use the primary nozzle (id 0)
               const singleNozzleSlot = rightNozzleSlot || leftNozzleSlot;
-              const canUseStatusControls = status.connected && hasPermission('printers:control');
-              const statusControlTitle = canUseStatusControls ? undefined : t('printers.permission.noControl');
+              const canUseStatusControls = status.connected && hasPermission('printers:control') && (!isAnycubic || status.anycubic_controls?.ready === true);
+              const statusControlTitle = canUseStatusControls ? undefined
+                : !hasPermission('printers:control') ? t('printers.permission.noControl')
+                : !status.connected ? t('printers.status.offline')
+                : t('printers.anycubic.waitingForControls');
               const statusControlClass = `relative text-center px-2 py-1.5 bg-bambu-dark rounded-lg flex-1 flex flex-col justify-center items-center transition-colors ${
                 canUseStatusControls ? 'cursor-pointer hover:bg-bambu-dark-tertiary' : 'cursor-default opacity-80'
               }`;
@@ -4563,7 +4404,7 @@ function PrinterCard({
               // the widget there is at best dead UI and at worst suggests a
               // control that does nothing. Mirrors the enclosure-door badge
               // gate above.
-              const hasChamberFan = MODELS_WITH_CHAMBER_FAN.has(printer.model ?? '');
+              const hasChamberFan = isAnycubic ? (status.anycubic_controls?.reported_fans ?? status.anycubic_controls?.fans)?.includes('chamber') === true : MODELS_WITH_CHAMBER_FAN.has(printer.model ?? '');
               // On P2S/X2D the big_fan2 fan is the dedicated chamber EXHAUST fan
               // ("Exhaust" in Bambu's naming) and is an add-on kit, not preinstalled:
               // show it only when the printer actually reports it (airduct part id 3,
@@ -4609,7 +4450,7 @@ function PrinterCard({
               const fanItems: {
                 key: string;
                 label: string;
-                value: number;
+                value: number | null;
                 Icon: typeof Fan;
                 activeClass: string;
               }[] = [
@@ -4629,13 +4470,13 @@ function PrinterCard({
                       {
                         key: 'chamber',
                         label: chamberFanLabel,
-                        value: status.big_fan2_speed ?? 0,
+                        value: isAnycubic ? status.big_fan2_speed : status.big_fan2_speed ?? 0,
                         Icon: AirVent,
                         activeClass: 'text-green-600 dark:text-green-400',
                       },
                     ]
                   : []),
-              ];
+              ].filter(item => !isAnycubic || (status.anycubic_controls?.reported_fans ?? status.anycubic_controls?.fans)?.includes(item.key));
 
               return (
                 <>
@@ -4718,9 +4559,9 @@ function PrinterCard({
                             title="Set Nozzle Temperature"
                             unit="°C"
                             customMin={0}
-                            customMax={320}
+                            customMax={isAnycubic ? status.anycubic_controls?.nozzle_max ?? 320 : 320}
                             isPending={nozzleTemperatureMutation.isPending}
-                            options={buildPresetOptions(nozzleTempPresets, 'C')}
+                            options={buildPresetOptions(nozzleTempPresets, 'C').filter(option => !isAnycubic || option.value <= (status.anycubic_controls?.nozzle_max ?? 320))}
                             onClose={() => setStatusControlMenu(null)}
                             onSubmit={(target) => nozzleTemperatureMutation.mutate({ target, nozzle: status.active_extruder ?? 0 })}
                           />
@@ -4753,9 +4594,9 @@ function PrinterCard({
                           title="Set Bed Temperature"
                           unit="°C"
                           customMin={0}
-                          customMax={140}
+                          customMax={isAnycubic ? status.anycubic_controls?.bed_max ?? 120 : 140}
                           isPending={bedTemperatureMutation.isPending}
-                          options={buildPresetOptions(bedTempPresets, 'C')}
+                          options={buildPresetOptions(bedTempPresets, 'C').filter(option => !isAnycubic || option.value <= (status.anycubic_controls?.bed_max ?? 120))}
                           onClose={() => setStatusControlMenu(null)}
                           onSubmit={(target) => bedTemperatureMutation.mutate(target)}
                         />
@@ -4857,21 +4698,22 @@ function PrinterCard({
                   </div>
                   <div className="mt-2 flex items-center gap-1.5">
                     {fanItems.map(({ key, label, value, Icon, activeClass }) => {
-                      const active = value > 0;
+                      const active = value != null && value > 0;
+                      const canUseFan = canUseStatusControls && (!isAnycubic || status.anycubic_controls?.fans.includes(key));
                       return (
                         <div
                           key={key}
                           className={`relative px-2 py-1.5 bg-bambu-dark rounded-lg flex-1 min-w-0 flex items-center justify-center gap-1 transition-colors ${
-                            canUseStatusControls ? 'cursor-pointer hover:bg-bambu-dark-tertiary' : 'cursor-default opacity-80'
+                            canUseFan ? 'cursor-pointer hover:bg-bambu-dark-tertiary' : 'cursor-default opacity-80'
                           }`}
-                          title={canUseStatusControls ? label : statusControlTitle}
-                          onClick={() => canUseStatusControls && setStatusControlMenu(statusControlMenu === `fan-${key}` ? null : `fan-${key}`)}
+                          title={canUseFan ? label : statusControlTitle || `${label}: ${t('printers.anycubic.waitingForControls')}`}
+                          onClick={() => canUseFan && setStatusControlMenu(statusControlMenu === `fan-${key}` ? null : `fan-${key}`)}
                         >
                           <Icon className={`w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] shrink-0 ${active ? activeClass : 'text-bambu-gray/50'}`} />
                           <span className={`text-[length:var(--pc-t10,10px)] leading-none ${active ? 'text-white' : 'text-bambu-gray/50'}`}>
-                            {value}%
+                            {value == null ? '—' : `${value}%`}
                           </span>
-                          {statusControlMenu === `fan-${key}` && (
+                          {canUseFan && statusControlMenu === `fan-${key}` && (
                             <IndicatorControlPopover
                               title={`Set ${label} Speed`}
                               unit="%"
@@ -4916,7 +4758,8 @@ function PrinterCard({
 
                   <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-2">
                     {/* Left: Secondary controls */}
-                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                    {isAnycubic && <AnycubicPrinterControls printerId={printer.id} controls={status.anycubic_controls} connected={status.connected} chamberLight={status.chamber_light} speed={status.speed_level} />}
+                    {!isAnycubic && <div className="flex flex-wrap items-center gap-2 min-w-0">
                       <button
                         onClick={() => chamberLightMutation.mutate(!status.chamber_light)}
                         disabled={!status.connected || chamberLightMutation.isPending || !hasPermission('printers:control')}
@@ -5238,7 +5081,7 @@ function PrinterCard({
                         </div>
                       ))()}
 
-                    </div>
+                    </div>}
 
                     {/* Right: Print Control Buttons */}
                     <div className="ml-auto flex items-center justify-end gap-2 flex-shrink-0">
@@ -5294,7 +5137,8 @@ function PrinterCard({
             })()}
 
             {/* AMS Units - 2-Column Grid Layout */}
-            {(amsData?.length > 0 || status.vt_tray.length > 0) && viewMode === 'expanded' && (() => {
+            {isAnycubic && viewMode === 'expanded' && <AnycubicAceStatus units={amsData} printerId={printer.id} printerName={printer.name} dryingControls={status.anycubic_controls?.ace_drying} slotControls={status.anycubic_controls?.ace_slots} connected={status.connected} labels={amsLabels} onLabelSaved={() => { void refetchAmsLabels(); }} getAssignment={onGetAssignment} onUnassign={onUnassignSpool} />}
+            {!isAnycubic && (amsData?.length > 0 || status.vt_tray.length > 0) && viewMode === 'expanded' && (() => {
               // Separate regular AMS (4-tray) from HT AMS (1-tray), by unit id
               const regularAms = amsData.filter(ams => !isAmsHtUnit(ams.id));
               const htAms = amsData.filter(ams => isAmsHtUnit(ams.id));
@@ -5542,7 +5386,7 @@ function PrinterCard({
                               {[0, 1, 2, 3].map((slotIdx) => {
                                 // Find tray data for this slot (may be undefined if data incomplete)
                                 const tray = trayForSlot(ams.tray, slotIdx);
-                                const hasFillLevel = tray?.tray_type && tray.remain >= 0;
+                                const hasFillLevel = tray?.tray_type && tray.remain != null && tray.remain >= 0;
                                 const isEmpty = !tray?.tray_type;
                                 const emptyKind = getEmptySlotKind(tray);
                                 // Check if this is the currently loaded tray
@@ -5588,7 +5432,7 @@ function PrinterCard({
                                 })();
                                 // If inventory says 0% but AMS reports positive remain, prefer AMS
                                 // (inventory weight_used may be stale or over-counted — #676)
-                                const resolvedInventoryFill = (inventoryFill === 0 && hasFillLevel && tray.remain > 0)
+                                const resolvedInventoryFill = (inventoryFill === 0 && hasFillLevel && (tray?.remain ?? 0) > 0)
                                   ? null : inventoryFill;
                                 const effectiveFill = spoolmanFill ?? slotSpoolFill ?? resolvedInventoryFill ?? (hasFillLevel ? tray.remain : null);
                                 const fillSource = (spoolmanFill !== null || slotSpoolFill !== null) ? 'spoolman' as const
@@ -5844,7 +5688,7 @@ function PrinterCard({
                     {htAms.map((ams) => {
                       const sideBadge = amsSideBadge(ams.id, amsExtruderMap, amsSwitchInlet, ftsInstalled);
                       const tray = ams.tray[0];
-                      const hasFillLevel = tray?.tray_type && tray.remain >= 0;
+                      const hasFillLevel = tray?.tray_type && tray.remain != null && tray.remain >= 0;
                       const isEmpty = !tray?.tray_type;
                       const emptyKind = getEmptySlotKind(tray);
                       // Check if this is the currently loaded tray
@@ -5878,7 +5722,7 @@ function PrinterCard({
                           return null;
                         })();
                         // If inventory says 0% but AMS reports positive remain, prefer AMS (#676)
-                        const htResolvedInventoryFill = (htInventoryFill === 0 && hasFillLevel && tray.remain > 0)
+                        const htResolvedInventoryFill = (htInventoryFill === 0 && hasFillLevel && (tray?.remain ?? 0) > 0)
                           ? null : htInventoryFill;
                         // Slot-assigned-only fill (when spool has no NFC tag but is slot-assigned)
                         const htSlotAssignmentForFill = spoolmanEnabled && !spoolmanLoading
@@ -6313,9 +6157,9 @@ function PrinterCard({
                                 }
                                 return null;
                               })();
-                              const extHasFillLevel = extTray.tray_type && extTray.remain >= 0;
+                              const extHasFillLevel = extTray.tray_type && extTray.remain != null && extTray.remain >= 0;
                               // If inventory says 0% but AMS reports positive remain, prefer AMS (#676)
-                              const extResolvedInventoryFill = (extInventoryFill === 0 && extHasFillLevel && extTray.remain > 0)
+                              const extResolvedInventoryFill = (extInventoryFill === 0 && extHasFillLevel && (extTray.remain ?? 0) > 0)
                                 ? null : extInventoryFill;
                               // Slot-assigned-only fill (when spool has no NFC tag but is slot-assigned)
                               const extSlotAssignmentForFill = spoolmanEnabled && !spoolmanLoading
@@ -6727,6 +6571,7 @@ function PrinterCard({
                   <PrinterIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
                   {t('common.print')}
                 </Button>
+                {isAnycubic && <Button size="sm" onClick={() => setShowFileManager(true)} disabled={!hasPermission('printers:files') || !hasPermission('printers:control')} className={footerActionButtonClass}>{t('common.upload')}</Button>}
               </div>
             </div>
         </div>
@@ -6736,16 +6581,16 @@ function PrinterCard({
         {/* Scheduled Drying Banner -- inside CardContent so it picks up the
             card's horizontal padding instead of running full-bleed into the
             rounded bottom edge. */}
-        <ScheduledDryingBanner
+        {!isAnycubic && <ScheduledDryingBanner
           printerId={printer.id}
           dryingActive={amsData.some(a => (a.dry_time ?? 0) > 0)}
           timeFormat={timeFormat}
-        />
+        />}
       </CardContent>
 
       {/* File Manager Modal */}
       {showFileManager && (
-        <FileManagerModal
+        isAnycubic ? <AnycubicFilesModal printerId={printer.id} printerName={printer.name} initialFile={anycubicInitialFile} onClose={() => { setShowFileManager(false); setAnycubicInitialFile(null); }} /> : <FileManagerModal
           printerId={printer.id}
           printerName={printer.name}
           onClose={() => setShowFileManager(false)}
@@ -6759,13 +6604,18 @@ function PrinterCard({
           onClose={() => setShowUploadForPrint(false)}
           onUploadComplete={() => {}}
           autoUpload
-          accept=".gcode,.3mf"
+          accept={isAnycubic ? '.gcode' : '.gcode,.3mf'}
           validateFile={(file) => {
+            if (isAnycubic && !file.name.toLowerCase().endsWith('.gcode')) return t('printers.anycubic.filesHelp');
             if (!mayBeSlicedFileName(file.name)) {
               return t('printers.dropNotPrintable');
             }
           }}
           onFileUploaded={(uploadedFile) => {
+            if (isAnycubic && (uploadedFile.metadata?.printer_type !== 'anycubic' || !uploadedFile.filename.toLowerCase().endsWith('.gcode'))) {
+              api.deleteLibraryFile(uploadedFile.id).catch(() => {});
+              return t('printers.anycubic.printFileUnreadable');
+            }
             if (!isSlicedLibraryFile(uploadedFile)) {
               api.deleteLibraryFile(uploadedFile.id).catch(() => {});
               return t('printers.dropNotSliced');
@@ -6791,7 +6641,7 @@ function PrinterCard({
           initialSelectedPrinterIds={[printer.id]}
           onClose={() => setPrintAfterUpload(null)}
           onSuccess={() => setPrintAfterUpload(null)}
-          cleanupLibraryAfterDispatch
+          cleanupLibraryAfterDispatch={!isAnycubic}
         />
       )}
 
@@ -7649,6 +7499,7 @@ export function AddPrinterModal({
 }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<PrinterCreate>({
+    printer_type: 'bambu',
     name: '',
     serial_number: '',
     ip_address: '',
@@ -7657,6 +7508,8 @@ export function AddPrinterModal({
     location: '',
     auto_archive: true,
   });
+  const isAnycubic = form.printer_type === 'anycubic';
+  const [certificateTrusted, setCertificateTrusted] = useState(false);
 
   // Discovery state
   const [discovering, setDiscovering] = useState(false);
@@ -7674,6 +7527,20 @@ export function AddPrinterModal({
   const [useCustomSubnet, setUseCustomSubnet] = useState(false);
   const [scanProgress, setScanProgress] = useState({ scanned: 0, total: 0 });
   const [showDiagnostic, setShowDiagnostic] = useState(false);
+  const discoveryGeneration = useRef(0);
+  const discoveryPoll = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeDiscovery = useRef<{ printerType: 'bambu' | 'anycubic'; ssdp: boolean } | null>(null);
+  const wantsSubnetScan = isAnycubic || isDocker || useCustomSubnet;
+
+  const stopDiscovery = useCallback(() => {
+    discoveryGeneration.current += 1;
+    if (discoveryPoll.current !== null) clearTimeout(discoveryPoll.current);
+    discoveryPoll.current = null;
+    const active = activeDiscovery.current;
+    activeDiscovery.current = null;
+    if (active?.ssdp) discoveryApi.stopDiscovery().catch(() => {});
+    else if (active) discoveryApi.stopSubnetScan(active.printerType).catch(() => {});
+  }, []);
 
   // Setup-time pre-flight: run the connection diagnostic on save and warn
   // (not block) when checks fail, so the user doesn't add a printer that
@@ -7708,6 +7575,10 @@ export function AddPrinterModal({
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAnycubic) {
+      if (certificateTrusted && form.tls_fingerprint && form.serial_number) onAdd(form);
+      return;
+    }
     setCheckingSave(true);
     try {
       const result = await api.diagnoseConnection({
@@ -7728,6 +7599,10 @@ export function AddPrinterModal({
   };
 
   const startDiscovery = async () => {
+    stopDiscovery();
+    const generation = discoveryGeneration.current;
+    const printerType = form.printer_type || 'bambu';
+    const current = () => generation === discoveryGeneration.current;
     setDiscoveryError('');
     setDiscovered([]);
     setDiscovering(true);
@@ -7738,7 +7613,6 @@ export function AddPrinterModal({
     // "Custom" — SSDP can't reach a printer on a different L3 segment
     // (#1564). Docker mode always uses subnet scan (multicast unavailable).
     const scanCidr = useCustomSubnet ? customSubnet.trim() : subnet;
-    const wantsSubnetScan = isDocker || useCustomSubnet;
 
     if (wantsSubnetScan && useCustomSubnet) {
       try {
@@ -7750,61 +7624,73 @@ export function AddPrinterModal({
 
     try {
       if (wantsSubnetScan) {
-        await discoveryApi.startSubnetScan(scanCidr);
-
-        // Poll for scan status and results
-        const pollInterval = setInterval(async () => {
+        activeDiscovery.current = { printerType, ssdp: false };
+        await discoveryApi.startSubnetScan(scanCidr, 1.0, printerType);
+        if (!current()) return;
+        // Recursive timeout keeps slow requests from overlapping and lets a
+        // closed dialog discard late replies from the previous manufacturer.
+        const poll = async () => {
           try {
-            const status = await discoveryApi.getScanStatus();
+            const status = await discoveryApi.getScanStatus(printerType);
+            if (!current()) return;
             setScanProgress({ scanned: status.scanned, total: status.total });
 
-            const printers = await discoveryApi.getDiscoveredPrinters();
+            const printers = await discoveryApi.getDiscoveredPrinters(printerType);
+            if (!current()) return;
             setDiscovered(printers);
 
             if (!status.running) {
-              clearInterval(pollInterval);
+              activeDiscovery.current = null;
               setDiscovering(false);
               setHasScanned(true);
+              return;
             }
           } catch (e) {
-            console.error('Failed to get scan status:', e);
+            if (!current()) return;
+            stopDiscovery();
+            setDiscoveryError(e instanceof Error ? e.message : t('printers.discovery.failedToStart'));
+            setDiscovering(false);
+            setHasScanned(true);
+            return;
           }
-        }, 500);
+          if (current()) discoveryPoll.current = setTimeout(poll, 500);
+        };
+        discoveryPoll.current = setTimeout(poll, 500);
       } else {
         // Use SSDP discovery for native installs
+        activeDiscovery.current = { printerType, ssdp: true };
         await discoveryApi.startDiscovery(10);
+        if (!current()) return;
+        const deadline = Date.now() + 10000;
 
-        // Poll for discovered printers every second
-        const pollInterval = setInterval(async () => {
+        const poll = async () => {
           try {
             const printers = await discoveryApi.getDiscoveredPrinters();
+            if (!current()) return;
             setDiscovered(printers);
           } catch (e) {
-            console.error('Failed to get discovered printers:', e);
+            if (!current()) return;
+            stopDiscovery();
+            setDiscoveryError(e instanceof Error ? e.message : t('printers.discovery.failedToStart'));
+            setDiscovering(false);
+            setHasScanned(true);
+            return;
           }
-        }, 1000);
-
-        // Stop after 10 seconds
-        setTimeout(async () => {
-          clearInterval(pollInterval);
-          try {
-            await discoveryApi.stopDiscovery();
-          } catch {
-            // Ignore stop errors
+          if (Date.now() >= deadline) {
+            await discoveryApi.stopDiscovery().catch(() => {});
+            if (!current()) return;
+            activeDiscovery.current = null;
+            setDiscovering(false);
+            setHasScanned(true);
+          } else {
+            discoveryPoll.current = setTimeout(poll, 1000);
           }
-          setDiscovering(false);
-          setHasScanned(true);
-          // Final fetch
-          try {
-            const printers = await discoveryApi.getDiscoveredPrinters();
-            setDiscovered(printers);
-          } catch (e) {
-            console.error('Failed to get final discovered printers:', e);
-          }
-        }, 10000);
+        };
+        discoveryPoll.current = setTimeout(poll, 1000);
       }
     } catch (e) {
-      console.error('Failed to start discovery:', e);
+      if (!current()) return;
+      activeDiscovery.current = null;
       setDiscoveryError(e instanceof Error ? e.message : t('printers.discovery.failedToStart'));
       setDiscovering(false);
       setHasScanned(true);
@@ -7814,6 +7700,9 @@ export function AddPrinterModal({
   // Reuse module-level mapModelCode
 
   const selectPrinter = (printer: DiscoveredPrinter) => {
+    stopDiscovery();
+    setDiscovering(false);
+    setHasScanned(false);
     // Don't pre-fill serial if it's a placeholder (unknown-*) - user needs to enter actual serial
     const serialNumber = printer.serial.startsWith('unknown-') ? '' : printer.serial;
     setForm({
@@ -7821,19 +7710,16 @@ export function AddPrinterModal({
       name: printer.name || '',
       serial_number: serialNumber,
       ip_address: printer.ip_address,
-      model: mapModelCode(printer.model),
+      model: isAnycubic ? (printer.model || 'Kobra S1') : mapModelCode(printer.model),
+      ...(isAnycubic ? { tls_fingerprint: null } : {}),
     });
+    setCertificateTrusted(false);
     // Clear discovery results after selection
     setDiscovered([]);
   };
 
   // Cleanup discovery on unmount
-  useEffect(() => {
-    return () => {
-      discoveryApi.stopDiscovery().catch(() => {});
-      discoveryApi.stopSubnetScan().catch(() => {});
-    };
-  }, []);
+  useEffect(() => stopDiscovery, [stopDiscovery]);
 
   // Close on Escape key
   useEffect(() => {
@@ -7853,6 +7739,28 @@ export function AddPrinterModal({
       <Card className="w-full max-w-md my-auto max-h-[calc(100vh-2rem)] overflow-y-auto" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
         <CardContent>
           <h2 className="text-xl font-semibold mb-4">{t('printers.addPrinter')}</h2>
+
+          <label className="block text-sm text-bambu-gray mb-4">
+            {t('printers.anycubic.manufacturer')}
+            <select
+              className="mt-1 w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white"
+              value={form.printer_type}
+              disabled={checkingSave || discovering}
+              onChange={e => {
+                const printerType = e.target.value as 'bambu' | 'anycubic';
+                stopDiscovery();
+                setDiscovered([]);
+                setHasScanned(false);
+                setDiscoveryError('');
+                setForm({ ...form, printer_type: printerType, model: printerType === 'anycubic' ? 'Kobra S1' : '', serial_number: '', access_code: '', tls_fingerprint: null, auto_archive: printerType === 'bambu' });
+                setCertificateTrusted(false);
+                setSaveWarning(null);
+              }}
+            >
+              <option value="bambu">Bambu Lab</option>
+              <option value="anycubic">Anycubic</option>
+            </select>
+          </label>
 
           {/* Discovery Section */}
           <div className="mb-4 pb-4 border-b border-bambu-dark-tertiary">
@@ -7905,7 +7813,7 @@ export function AddPrinterModal({
                 />
               )}
               <p className="mt-1 text-xs text-bambu-gray">
-                {isDocker
+                {isAnycubic ? t('printers.anycubic.scanHelp') : isDocker
                   ? t('printers.discovery.dockerNote')
                   : t('printers.discovery.customSubnetNote')}
               </p>
@@ -7922,14 +7830,14 @@ export function AddPrinterModal({
               {discovering ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  {(isDocker || useCustomSubnet) && scanProgress.total > 0
+                  {wantsSubnetScan && scanProgress.total > 0
                     ? t('printers.discovery.scanProgress', { scanned: scanProgress.scanned, total: scanProgress.total })
                     : t('printers.discovery.scanning')}
                 </>
               ) : (
                 <>
                   <Search className="w-4 h-4" />
-                  {(isDocker || useCustomSubnet) ? t('printers.discovery.scanSubnet') : t('printers.discovery.discoverNetwork')}
+                  {wantsSubnetScan ? t('printers.discovery.scanSubnet') : t('printers.discovery.discoverNetwork')}
                 </>
               )}
             </Button>
@@ -7941,9 +7849,10 @@ export function AddPrinterModal({
             {newPrinters.length > 0 && (
               <div className="mt-3 space-y-2 max-h-40 overflow-y-auto">
                 {newPrinters.map((printer) => (
-                  <div
+                  <button
+                    type="button"
                     key={printer.serial}
-                    className="flex items-center justify-between p-2 bg-bambu-dark rounded-lg hover:bg-bambu-dark-secondary cursor-pointer transition-colors"
+                    className="flex w-full items-center justify-between p-2 text-left bg-bambu-dark rounded-lg hover:bg-bambu-dark-secondary cursor-pointer transition-colors"
                     onClick={() => selectPrinter(printer)}
                   >
                     <div className="min-w-0 flex-1">
@@ -7951,27 +7860,27 @@ export function AddPrinterModal({
                         {printer.name || printer.serial}
                       </p>
                       <p className="text-xs text-bambu-gray truncate">
-                        {mapModelCode(printer.model) || t('printers.discovery.unknown')} • {printer.ip_address}
+                        {(isAnycubic ? printer.model : mapModelCode(printer.model)) || t('printers.discovery.unknown')} • {printer.ip_address}
                         {printer.serial.startsWith('unknown-') && (
                           <span className="text-yellow-500"> • {t('printers.discovery.serialRequired')}</span>
                         )}
                       </p>
                     </div>
                     <ChevronDown className="w-4 h-4 text-bambu-gray -rotate-90 flex-shrink-0 ml-2" />
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
 
             {discovering && (
               <p className="mt-2 text-sm text-bambu-gray text-center">
-                {(isDocker || useCustomSubnet) ? t('printers.discovery.scanningSubnet') : t('printers.discovery.scanningNetwork')}
+                {wantsSubnetScan ? t('printers.discovery.scanningSubnet') : t('printers.discovery.scanningNetwork')}
               </p>
             )}
 
             {hasScanned && !discovering && discovered.length === 0 && (
               <p className="mt-2 text-sm text-bambu-gray text-center">
-                {(isDocker || useCustomSubnet) ? t('printers.discovery.noPrintersFoundSubnet') : t('printers.discovery.noPrintersFoundNetwork')}
+                {wantsSubnetScan ? t('printers.discovery.noPrintersFoundSubnet') : t('printers.discovery.noPrintersFoundNetwork')}
               </p>
             )}
 
@@ -8001,10 +7910,27 @@ export function AddPrinterModal({
                 pattern="(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)"
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.ip_address}
-                onChange={(e) => setForm({ ...form, ip_address: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, ip_address: e.target.value, ...(isAnycubic ? { tls_fingerprint: null, serial_number: '' } : {}) });
+                  setCertificateTrusted(false);
+                }}
                 placeholder="192.168.1.100 or printer.local"
               />
             </div>
+            {isAnycubic && (
+              <AnycubicConnectionPanel
+                key={form.ip_address}
+                host={form.ip_address}
+                fingerprint={form.tls_fingerprint}
+                trusted={certificateTrusted}
+                serialNumber={form.serial_number || undefined}
+                onTrustChange={setCertificateTrusted}
+                onDiscovered={result => {
+                  setForm(current => ({ ...current, serial_number: result.serial_number, model: result.model, tls_fingerprint: result.tls_fingerprint }));
+                  setCertificateTrusted(false);
+                }}
+              />
+            )}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
               <input
@@ -8012,11 +7938,12 @@ export function AddPrinterModal({
                 required
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.serial_number}
+                readOnly={isAnycubic}
                 onChange={(e) => setForm({ ...form, serial_number: e.target.value })}
                 placeholder="01P00A000000000"
               />
             </div>
-            <div>
+            {!isAnycubic && <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
               <input
                 type="password"
@@ -8026,7 +7953,7 @@ export function AddPrinterModal({
                 onChange={(e) => setForm({ ...form, access_code: e.target.value })}
                 placeholder={t('printers.modal.fromPrinterSettings')}
               />
-            </div>
+            </div>}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.modal.modelOptional')}</label>
               <select
@@ -8034,6 +7961,7 @@ export function AddPrinterModal({
                 value={form.model || ''}
                 onChange={(e) => setForm({ ...form, model: e.target.value })}
               >
+                {isAnycubic ? ANYCUBIC_MODELS.map(model => <option key={model.name} value={model.name}>{model.name}</option>) : <>
                 <option value="">{t('printers.modal.selectModel')}</option>
                 <optgroup label="A1 Series">
                   <option value="A1">A1</option>
@@ -8061,6 +7989,7 @@ export function AddPrinterModal({
                 <optgroup label="X2 Series">
                   <option value="X2D">X2D</option>
                 </optgroup>
+                </>}
               </select>
             </div>
             <div>
@@ -8075,7 +8004,7 @@ export function AddPrinterModal({
               />
               <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
             </div>
-            <div className="flex items-center gap-2">
+            {!isAnycubic && <div className="flex items-center gap-2">
               <input
                 type="checkbox"
                 id="auto_archive"
@@ -8086,8 +8015,8 @@ export function AddPrinterModal({
               <label htmlFor="auto_archive" className="text-sm text-bambu-gray">
                 {t('printers.modal.autoArchiveLabel')}
               </label>
-            </div>
-            <button
+            </div>}
+            {!isAnycubic && <button
               type="button"
               onClick={() => setShowDiagnostic(true)}
               disabled={!form.ip_address.trim()}
@@ -8095,8 +8024,8 @@ export function AddPrinterModal({
             >
               <Stethoscope className="w-4 h-4" />
               {t('diagnostic.runButton')}
-            </button>
-            {saveWarning ? (
+            </button>}
+            {saveWarning && !isAnycubic ? (
               <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
@@ -8122,7 +8051,7 @@ export function AddPrinterModal({
                 <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
                   {t('common.cancel')}
                 </Button>
-                <Button type="submit" disabled={checkingSave} className="flex-1">
+                <Button type="submit" disabled={checkingSave || (isAnycubic && (!certificateTrusted || !form.tls_fingerprint || !form.serial_number))} className="flex-1">
                   {checkingSave ? t('printers.addPreflight.checking') : t('printers.addPrinter')}
                 </Button>
               </div>
@@ -8447,6 +8376,8 @@ function EditPrinterModal({
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { authEnabled, isAdmin } = useAuth();
+  const isAnycubic = printer.printer_type === 'anycubic';
+  const [certificateTrusted, setCertificateTrusted] = useState(!!printer.tls_fingerprint);
   const [form, setForm] = useState({
     name: printer.name,
     ip_address: printer.ip_address,
@@ -8456,6 +8387,7 @@ function EditPrinterModal({
     auto_archive: printer.auto_archive,
     is_active: printer.is_active,
     wear_cost_per_hour: printer.wear_cost_per_hour ? String(printer.wear_cost_per_hour) : '',
+    tls_fingerprint: printer.tls_fingerprint,
   });
   const { data: settings } = useUiSettings();
   const currency = getCurrencySymbol(settings?.currency || 'USD');
@@ -8515,6 +8447,7 @@ function EditPrinterModal({
       // Empty or 0 turns wear cost off for this printer (#694)
       wear_cost_per_hour: Number(form.wear_cost_per_hour) > 0 ? Number(form.wear_cost_per_hour) : null,
     };
+    if (isAnycubic) data.tls_fingerprint = form.tls_fingerprint;
     // Only include access_code if it was changed
     if (form.access_code) {
       data.access_code = form.access_code;
@@ -8524,6 +8457,10 @@ function EditPrinterModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAnycubic) {
+      if (certificateTrusted && form.tls_fingerprint) doSave();
+      return;
+    }
     setCheckingSave(true);
     try {
       const result = await api.diagnoseConnection({
@@ -8551,6 +8488,7 @@ function EditPrinterModal({
       <Card className="w-full max-w-md my-auto max-h-[calc(100vh-2rem)] overflow-y-auto" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
         <CardContent>
           <h2 className="text-xl font-semibold mb-4">{t('printers.editPrinter')}</h2>
+          <p className="text-sm text-bambu-gray mb-4">{t('printers.anycubic.manufacturer')}: {isAnycubic ? 'Anycubic' : 'Bambu Lab'}</p>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.name')}</label>
@@ -8571,10 +8509,27 @@ function EditPrinterModal({
                 pattern="(\d{1,3}(\.\d{1,3}){3}|[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*)"
                 className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                 value={form.ip_address}
-                onChange={(e) => setForm({ ...form, ip_address: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, ip_address: e.target.value, ...(isAnycubic ? { tls_fingerprint: null } : {}) });
+                  setCertificateTrusted(false);
+                }}
                 placeholder="192.168.1.100 or printer.local"
               />
             </div>
+            {isAnycubic && (
+              <AnycubicConnectionPanel
+                host={form.ip_address}
+                serialNumber={printer.serial_number}
+                printerId={printer.id}
+                fingerprint={form.tls_fingerprint}
+                trusted={certificateTrusted}
+                onTrustChange={setCertificateTrusted}
+                onDiscovered={result => {
+                  setForm(current => ({ ...current, model: result.model, tls_fingerprint: result.tls_fingerprint }));
+                  setCertificateTrusted(false);
+                }}
+              />
+            )}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.serialNumber')}</label>
               <input
@@ -8585,7 +8540,7 @@ function EditPrinterModal({
               />
               <p className="text-xs text-bambu-gray mt-1">{t('printers.serialCannotBeChanged')}</p>
             </div>
-            <div>
+            {!isAnycubic && <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.accessCode')}</label>
               <input
                 type="password"
@@ -8594,7 +8549,7 @@ function EditPrinterModal({
                 onChange={(e) => setForm({ ...form, access_code: e.target.value })}
                 placeholder={t('printers.accessCodePlaceholder')}
               />
-            </div>
+            </div>}
             <div>
               <label className="block text-sm text-bambu-gray mb-1">{t('printers.model')}</label>
               <select
@@ -8602,6 +8557,7 @@ function EditPrinterModal({
                 value={form.model}
                 onChange={(e) => setForm({ ...form, model: e.target.value })}
               >
+                {isAnycubic ? ANYCUBIC_MODELS.map(model => <option key={model.name} value={model.name}>{model.name}</option>) : <>
                 <option value="">{t('printers.modal.selectModel')}</option>
                 <optgroup label="A1 Series">
                   <option value="A1">A1</option>
@@ -8629,6 +8585,7 @@ function EditPrinterModal({
                 <optgroup label="X2 Series">
                   <option value="X2D">X2D</option>
                 </optgroup>
+                </>}
               </select>
             </div>
             <div>
@@ -8649,7 +8606,7 @@ function EditPrinterModal({
                 </p>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            {!isAnycubic && <div className="flex items-center gap-2">
               <input
                 type="checkbox"
                 id="edit_auto_archive"
@@ -8660,7 +8617,7 @@ function EditPrinterModal({
               <label htmlFor="edit_auto_archive" className="text-sm text-bambu-gray">
                 {t('printers.modal.autoArchiveLabel')}
               </label>
-            </div>
+            </div>}
             <div>
               <label htmlFor="edit_wear_cost" className="block text-sm text-bambu-gray mb-1">
                 {t('printers.modal.wearCostLabel', { currency })}
@@ -8733,7 +8690,7 @@ function EditPrinterModal({
                 <Button
                   type="submit"
                   className="flex-1"
-                  disabled={updateMutation.isPending || checkingSave}
+                  disabled={updateMutation.isPending || checkingSave || (isAnycubic && (!certificateTrusted || !form.tls_fingerprint))}
                 >
                   {checkingSave
                     ? t('printers.addPreflight.checking')

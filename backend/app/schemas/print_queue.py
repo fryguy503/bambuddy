@@ -3,6 +3,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PlainSerializer, model_validator
 
+from backend.app.schemas.anycubic_print import AnycubicPrintOptions
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.utils.local_time import to_naive_utc
 from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C
@@ -83,6 +84,7 @@ class QueueVariantCreate(BaseModel):
 
 
 class PrintQueueItemCreate(BaseModel):
+    anycubic_options: AnycubicPrintOptions | None = None
     printer_id: int | None = None  # None = unassigned, user assigns later
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
     target_location: str | None = None  # Target location filter (only used with target_model)
@@ -153,6 +155,7 @@ class PrintQueueItemCreate(BaseModel):
 
 
 class PrintQueueItemUpdate(IgnoresNullForRequiredColumns):
+    anycubic_options: AnycubicPrintOptions | None = None
     __orm_table__ = "print_queue"
     printer_id: int | None = None
     target_model: str | None = None  # Target printer model (mutually exclusive with printer_id)
@@ -213,6 +216,9 @@ class ColorSubstitution(BaseModel):
 
 
 class PrintQueueItemResponse(BaseModel):
+    anycubic_options: AnycubicPrintOptions | None = None
+    anycubic_dispatch_state: str | None = None
+    anycubic_source_library_file_id: int | None = None
     id: int
     printer_id: int | None  # None = unassigned
     target_model: str | None = None  # Target printer model for model-based assignment
@@ -378,6 +384,7 @@ class PrintQueueReorder(BaseModel):
 
 
 class PrintQueueBulkUpdate(IgnoresNullForRequiredColumns):
+    anycubic_options: AnycubicPrintOptions | None = None
     """Bulk update multiple queue items with the same values."""
 
     __orm_table__ = "print_queue"

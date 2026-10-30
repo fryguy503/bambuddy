@@ -2404,6 +2404,8 @@ async def _run_migrations(conn):
 
     # Migration: Add location column to printers for grouping
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN location VARCHAR(100)")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN printer_type VARCHAR(20) DEFAULT 'bambu' NOT NULL")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN tls_fingerprint VARCHAR(64)")
 
     # Migration: Add interval_type column to maintenance_types
     await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN interval_type VARCHAR(20) DEFAULT 'hours'")
@@ -3159,6 +3161,12 @@ async def _run_migrations(conn):
         await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN dispatching_at DATETIME")
     else:
         await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN dispatching_at TIMESTAMP")
+
+    # Native queue fields follow the legacy SQLite queue-table rebuild so
+    # upgrading an ancient database cannot drop the new nullable columns.
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN anycubic_options TEXT")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN anycubic_dispatch TEXT")
+    await _safe_execute(conn, "ALTER TABLE spool_assignment ADD COLUMN rfid_match BOOLEAN NOT NULL DEFAULT FALSE")
 
     # Migration: Add HA energy sensor entity columns to smart_plugs
     await _safe_execute(conn, "ALTER TABLE smart_plugs ADD COLUMN ha_power_entity VARCHAR(100)")

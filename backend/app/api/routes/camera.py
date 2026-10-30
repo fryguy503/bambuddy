@@ -1,4 +1,4 @@
-"""Camera streaming API endpoints for Bambu Lab printers."""
+"""Camera streams for Bambu Lab, Anycubic LAN and configured external cameras."""
 
 import asyncio
 import contextlib
@@ -12,6 +12,7 @@ import time
 import uuid
 import zlib
 from collections.abc import AsyncGenerator
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -35,6 +36,8 @@ from backend.app.core.permissions import Permission
 from backend.app.models.api_key import APIKey
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
+from backend.app.services.anycubic import AnycubicMQTTClient
+from backend.app.services.anycubic.camera import generate_mjpeg_stream as generate_anycubic_stream
 from backend.app.services.camera import (
     capture_camera_frame,
     close_tls_proxy,
@@ -58,6 +61,7 @@ from backend.app.services.camera_fanout import (
 )
 from backend.app.services.camera_light import camera_light
 from backend.app.services.camera_profiles import get_camera_profile
+from backend.app.services.printer_manager import printer_manager
 from backend.app.utils.ffmpeg_output import (
     FFMPEG_RTSP_LOGLEVEL,
     refuse_rtsp_redirect,
@@ -67,6 +71,58 @@ from backend.app.utils.ffmpeg_output import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["camera"])
+
+
+def _require_builtin_camera_support(printer: Printer) -> None:
+    if getattr(printer, "printer_type", "bambu") == "anycubic":
+        raise HTTPException(400, "Bambu camera diagnostics and calibration are unavailable for Anycubic printers")
+
+
+def _anycubic_camera_source(printer: Printer):
+    client = printer_manager.get_client(printer.id)
+    if not isinstance(client, AnycubicMQTTClient) or not client.state.connected or client.is_stale:
+        raise HTTPException(503, "Connect the Anycubic printer before opening its LAN camera")
+    if (
+        client.ip_address != printer.ip_address
+        or client.serial_number != printer.serial_number
+        or client.model != printer.model
+        or client.tls_fingerprint != printer.tls_fingerprint
+    ):
+        raise HTTPException(503, "The Anycubic printer connection is updating; try the camera again")
+    # A stable source key, never a bearer URL. Include identity/address/pin so
+    # edits retire the previous broadcaster before opening another upstream.
+    source = f"anycubic:{printer.ip_address}:{printer.serial_number}:{printer.tls_fingerprint}:{printer.model}"
+    return source, partial(generate_anycubic_stream, client)
+
+
+async def _anycubic_camera_snapshot(printer: Printer) -> bytes:
+    source, generate = _anycubic_camera_source(printer)
+    key = _external_fanout_key(printer.id, source, "anycubic")
+    await _retire_other_external_broadcasters(printer.id, keep=key)
+
+    def factory(event):
+        return _external_upstream(generate, printer.id, source, "anycubic", 5, event)
+
+    broadcaster = await get_or_create_broadcaster(key, factory)
+    try:
+        queue = await broadcaster.subscribe()
+    except RuntimeError:
+        broadcaster = await get_or_create_broadcaster(key, factory)
+        queue = await broadcaster.subscribe()
+
+    async def connected():
+        return False
+
+    try:
+        async with contextlib.aclosing(iter_subscriber(broadcaster, queue, is_disconnected=connected)) as frames:
+            chunk = await asyncio.wait_for(anext(frames), timeout=30)
+        start, end = chunk.find(b"\xff\xd8"), chunk.rfind(b"\xff\xd9")
+        if start < 0 or end <= start:
+            raise ValueError
+        return chunk[start : end + 2]
+    except (TimeoutError, StopAsyncIteration, ValueError):
+        raise HTTPException(503, "The Anycubic LAN camera did not provide a frame") from None
+
 
 # Grace period for a SIGTERMed ffmpeg to shut down before we SIGKILL it. Only
 # reachable when ffmpeg genuinely ignores SIGTERM: _terminate_ffmpeg drains the
@@ -144,11 +200,84 @@ _disconnect_events: dict[str, asyncio.Event] = {}
 # Track last frame time per stream_id (not just per printer_id) for stale detection
 _stream_last_frame_times: dict[str, float] = {}
 
-# A viewer id (a random id per viewer mount, sent with its stream and its
-# /camera/stop): what the frontend generates, and nothing that could forge a log
-# line. Every camera fans out now, so the subscriber guard of the stop route
-# decides; the id is accepted for the frontends that send it.
+# A viewer id identifies one browser mount across its stream renewals. Only
+# that authenticated owner's matching viewer can replace or stop its response;
+# other viewers continue sharing the same upstream camera connection.
 ViewerId = Annotated[str | None, Query(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
+_viewer_streams: dict[tuple[int, tuple, str], asyncio.Event] = {}
+
+
+def _stream_viewer_owner(opener: StreamOpener | None) -> tuple | None:
+    if opener is None or not opener.auth_on:
+        return ("anonymous",)
+    if opener.api_key_id is not None:
+        return ("api_key", opener.api_key_id, opener.api_key_prefix)
+    if opener.long_lived_user_id is not None:
+        return ("user_id", opener.long_lived_user_id)
+    if opener.username:
+        return ("user", opener.username)
+    return None
+
+
+def _stop_viewer_owners(user, api_key) -> set[tuple]:
+    if isinstance(api_key, APIKey):
+        return {("api_key", api_key.id, api_key.key_prefix)}
+    if user is None:
+        return {("anonymous",)}
+    owners = set()
+    if isinstance(getattr(user, "username", None), str):
+        owners.add(("user", user.username))
+    if type(getattr(user, "id", None)) is int:
+        owners.add(("user_id", user.id))
+    return owners
+
+
+async def _viewer_frames(frames, printer_id: int, opener: StreamOpener | None, viewer: str | None):
+    """End a superseded response promptly, without closing its shared upstream.
+
+    A plain HTTP disconnect is insufficient when an MJPEG image is renewed:
+    the browser can keep its old response alive and eventually fill every
+    HTTP/1 connection to the site. Register only when the response body starts,
+    and retain public identity fields rather than authentication tokens.
+    """
+    owner = _stream_viewer_owner(opener)
+    if not viewer or owner is None:
+        async with contextlib.aclosing(frames) as chunks:
+            async for chunk in chunks:
+                yield chunk
+        return
+    key = (printer_id, owner, viewer)
+    stopped = asyncio.Event()
+    previous = _viewer_streams.get(key)
+    _viewer_streams[key] = stopped
+    if previous is not None:
+        previous.set()
+    wake = asyncio.create_task(stopped.wait())
+    try:
+        async with contextlib.aclosing(frames) as chunks:
+            while not stopped.is_set():
+                pending = asyncio.create_task(anext(chunks))
+                try:
+                    done, _ = await asyncio.wait({pending, wake}, return_when=asyncio.FIRST_COMPLETED)
+                    if wake in done:
+                        return
+                    try:
+                        chunk = pending.result()
+                    except StopAsyncIteration:
+                        return
+                finally:
+                    if not pending.done():
+                        pending.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                        await pending
+                yield chunk
+    finally:
+        wake.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await wake
+        if _viewer_streams.get(key) is stopped:
+            _viewer_streams.pop(key, None)
+
 
 # How much of a streaming ffmpeg's stderr to retain: enough for the input
 # analysis plus a burst of errors, capped so a long-running stream can't grow it.
@@ -1254,7 +1383,10 @@ async def camera_stream(
         printer = await get_printer_or_404(printer_id, db)
 
     # Check for external camera first
-    if printer.external_camera_enabled and printer.external_camera_url:
+    native_anycubic = getattr(printer, "printer_type", "bambu") == "anycubic" and not (
+        printer.external_camera_enabled and printer.external_camera_url
+    )
+    if native_anycubic or (printer.external_camera_enabled and printer.external_camera_url):
         # NB: no `import time` / `import uuid` here, and don't reintroduce them.
         # A local import anywhere in this function makes the name function-local
         # for the WHOLE function, so the RTSP/chamber path below — which never
@@ -1262,15 +1394,16 @@ async def camera_stream(
         # without an external camera. Both are imported at module level.
         from backend.app.services.external_camera import generate_mjpeg_stream
 
+        if native_anycubic:
+            camera_url, generate_mjpeg_stream = _anycubic_camera_source(printer)
+            camera_type = "anycubic"
+        else:
+            camera_url = printer.external_camera_url or ""
+            camera_type = printer.external_camera_type or ""
+
         # Limit external camera FPS to reduce browser load
         fps = min(max(fps, 1), 15)
-        logger.info(
-            "Using external camera (%s) for printer %s at %s fps", printer.external_camera_type, printer_id, fps
-        )
-
-        camera_url = printer.external_camera_url
-        # None and "" take the same branch in generate_mjpeg_stream.
-        camera_type = printer.external_camera_type or ""
+        logger.info("Using camera (%s) for printer %s at %s fps", camera_type, printer_id, fps)
 
         # Fan-out (RC-C6), as for the printer's own camera (#1089): one upstream
         # per camera, shared by every viewer. A USB camera allows one V4L2
@@ -1290,7 +1423,7 @@ async def camera_stream(
             except Exception:
                 return True
 
-        single_reader = not printer.external_camera_snapshot_url
+        single_reader = native_anycubic or not printer.external_camera_snapshot_url
 
         def _log_external_detach(remaining: int) -> None:
             logger.info("Camera viewer detached from %s (subscribers=%d)", fanout_key, remaining)
@@ -1317,7 +1450,12 @@ async def camera_stream(
                 # When the shared upstream first started (setdefault), as for the
                 # printer's own camera; its end clears it.
                 _stream_start_times.setdefault(printer_id, time.time())
-                logger.info("Camera viewer attached to %s (subscribers=%d)", fanout_key, broadcaster.subscriber_count)
+                logger.info(
+                    "Camera viewer attached to %s (subscribers=%d, viewer=%s)",
+                    fanout_key,
+                    broadcaster.subscriber_count,
+                    viewer or "legacy",
+                )
                 try:
                     # aclosing, so a closed response unsubscribes at once, not
                     # when the generator is collected.
@@ -1346,7 +1484,7 @@ async def camera_stream(
                     logger.info("External camera viewer left printer %s", printer_id)
 
         return StreamingResponse(
-            _while_allowed(external_viewer(), opener, printer_id),
+            _viewer_frames(_while_allowed(external_viewer(), opener, printer_id), printer_id, opener, viewer),
             media_type="multipart/x-mixed-replace; boundary=frame",
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -1354,6 +1492,8 @@ async def camera_stream(
                 "Expires": "0",
             },
         )
+
+    _require_builtin_camera_support(printer)
 
     # Validate FPS - A1/P1 models max out at ~5 FPS
     if is_chamber_image_model(printer.model):
@@ -1414,9 +1554,10 @@ async def camera_stream(
         broadcaster = await get_or_create_broadcaster(fanout_key, _factory)
         queue = await broadcaster.subscribe()
     logger.info(
-        "Camera viewer attached to %s (subscribers=%d)",
+        "Camera viewer attached to %s (subscribers=%d, viewer=%s)",
         fanout_key,
         broadcaster.subscriber_count,
+        viewer or "legacy",
     )
 
     async def _is_disconnected() -> bool:
@@ -1433,17 +1574,19 @@ async def camera_stream(
     async def _generate():
         # Chamber light while this viewer watches (#1655). Held per viewer, so
         # it goes off once the last one leaves.
-        async with camera_light(printer, wait=False):
-            async for chunk in iter_subscriber(
+        async with camera_light(printer, wait=False), contextlib.aclosing(
+            iter_subscriber(
                 broadcaster,
                 queue,
                 is_disconnected=_is_disconnected,
                 on_unsubscribe=_log_detach,
-            ):
+            )
+        ) as chunks:
+            async for chunk in chunks:
                 yield chunk
 
     return StreamingResponse(
-        _while_allowed(_generate(), opener, printer_id),
+        _viewer_frames(_while_allowed(_generate(), opener, printer_id), printer_id, opener, viewer),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -1458,11 +1601,15 @@ async def stop_camera_stream(
     printer_id: int,
     _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
     viewer: ViewerId = None,
+    api_key: APIKey | None = Depends(current_api_key_if_present),
 ):
     """Stop active camera streams for a printer.
 
     Called by the frontend on viewer unmount (cam-wall tile, embedded viewer,
     popup window). Accepts both GET and POST (POST for sendBeacon compatibility).
+
+    With a viewer id, first end only this owner's matching HTTP response.
+    Its generator unsubscribes without closing anyone else's response.
 
     Reference-count guard: every viewer of a printer subscribes to the same
     fan-out broadcaster, so a force-shutdown triggered by ONE leaving viewer
@@ -1475,6 +1622,11 @@ async def stop_camera_stream(
     External cameras fan out too (RC-C6), under their own broadcaster key, so
     their viewers count the same way.
     """
+    if viewer:
+        for owner in _stop_viewer_owners(_, api_key):
+            event = _viewer_streams.get((printer_id, owner, viewer))
+            if event is not None:
+                event.set()
     remaining_subscribers = sum(get_subscriber_count(key) for key in _printer_broadcaster_keys(printer_id))
     if remaining_subscribers >= 1:
         logger.info(
@@ -1651,6 +1803,11 @@ async def _snapshot_response(printer_id: int, printer: Printer) -> Response:
             },
         )
 
+    if getattr(printer, "printer_type", "bambu") == "anycubic":
+        return Response(content=await _anycubic_camera_snapshot(printer), media_type="image/jpeg", headers=headers)
+
+    _require_builtin_camera_support(printer)
+
     # Create temporary file for the snapshot (0600 so only the app user can read it)
     fd, tmp_name = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
@@ -1703,6 +1860,7 @@ async def test_camera(
     async with database.async_session() as db:
         printer = await get_printer_or_404(printer_id, db)
 
+    _require_builtin_camera_support(printer)
     result = await test_camera_connection(
         ip_address=printer.ip_address,
         access_code=printer.access_code,
@@ -1730,6 +1888,8 @@ async def diagnose_camera_route(
     # A short session, released before the capture (RC-C10, as #2572).
     async with database.async_session() as db:
         printer = await get_printer_or_404(printer_id, db)
+
+    _require_builtin_camera_support(printer)
 
     # Look up live-stream evidence so the diagnostic can short-circuit
     # instead of fighting a viewer for the printer's single camera slot.
@@ -1798,6 +1958,7 @@ async def camera_status(
     if stream_start_time is not None:
         stream_uptime = current_time - stream_start_time
 
+    initial_grace = 20 if isinstance(printer_manager.get_client(printer_id), AnycubicMQTTClient) else 5
     return {
         "active": has_active_stream,
         "has_frames": printer_id in _last_frames,
@@ -1807,7 +1968,7 @@ async def camera_status(
         "stalled": (
             has_active_stream
             and stream_uptime is not None
-            and stream_uptime > 5  # Give 5 seconds for stream to start
+            and stream_uptime > initial_grace
             and (seconds_since_frame is None or seconds_since_frame > 10)
         ),
     }
@@ -1931,6 +2092,14 @@ async def check_plate_empty(
             printer.external_camera_enabled and printer.external_camera_url and printer.external_camera_type
         )
 
+    if not (
+        use_external
+        and printer.external_camera_enabled
+        and printer.external_camera_url
+        and printer.external_camera_type
+    ):
+        _require_builtin_camera_support(printer)
+
     if not is_plate_detection_available():
         raise HTTPException(
             status_code=503,
@@ -2047,6 +2216,14 @@ async def calibrate_plate_detection(
         use_external = bool(
             printer.external_camera_enabled and printer.external_camera_url and printer.external_camera_type
         )
+
+    if not (
+        use_external
+        and printer.external_camera_enabled
+        and printer.external_camera_url
+        and printer.external_camera_type
+    ):
+        _require_builtin_camera_support(printer)
 
     if not is_plate_detection_available():
         raise HTTPException(

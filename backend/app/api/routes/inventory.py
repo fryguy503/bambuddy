@@ -162,7 +162,7 @@ async def apply_spool_to_slot_via_mqtt(
     from backend.app.services.printer_manager import printer_manager
 
     client = printer_manager.get_client(printer_id)
-    if client is None:
+    if client is None or getattr(client, "printer_type", "bambu") == "anycubic":
         return False
 
     state = printer_manager.get_status(printer_id)
@@ -2443,6 +2443,17 @@ async def assign_spool(
 
     printer_scope.ensure(data.printer_id)
 
+    printer = await db.get(Printer, data.printer_id)
+    if printer is None:
+        raise HTTPException(404, "Printer not found")
+    native_printer = printer.printer_type == "anycubic"
+    if native_printer:
+        from backend.app.utils.anycubic_models import get_model
+
+        model = get_model(printer.model)
+        if model is None or data.ams_id not in model.ace_ids or data.tray_id not in range(4):
+            raise HTTPException(400, "Invalid Anycubic ACE slot")
+
     # 1. Validate spool exists and is not archived
     result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == data.spool_id))
     spool = result.scalar_one_or_none()
@@ -2527,8 +2538,9 @@ async def assign_spool(
     vacated: list[tuple[int, int, int]] = []
     while True:
         async with AsyncExitStack() as locks:
-            if data.move:
-                await locks.enter_async_context(get_spool_move_lock("inventory", data.spool_id))
+            # Native RFID matching also takes this lock before the printer's
+            # lock, so an automatic link cannot race a manual assignment.
+            await locks.enter_async_context(get_spool_move_lock("inventory", data.spool_id))
             for pid in sorted(locked_printer_ids):
                 await locks.enter_async_context(get_ams_assignment_lock(pid))
             if data.move:
@@ -2642,7 +2654,7 @@ async def assign_spool(
     # saving of one MQTT message the firmware would have dropped anyway.
     slot_is_definitely_empty = tray_has_spool is not True and (tray_state == 9 or tray_state == 10)
     configured = False
-    if not slot_is_definitely_empty:
+    if not slot_is_definitely_empty and not native_printer:
         try:
             configured = await apply_spool_to_slot_via_mqtt(
                 db=db,
@@ -2673,7 +2685,9 @@ async def assign_spool(
     # firmware said empty, OR when MQTT couldn't actually publish (printer
     # offline, no client, transient failure). on_ams_change replay re-fires
     # the config in either case once the AMS reports a non-empty fingerprint.
-    pending_config = slot_is_definitely_empty or not configured
+    # Native assignment is an inventory link. Its explicit Configure action
+    # has separate printer-control permission and never uses Bambu presets.
+    pending_config = not native_printer and (slot_is_definitely_empty or not configured)
 
     # Return assignment with spool data
     result = await db.execute(

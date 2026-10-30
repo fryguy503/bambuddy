@@ -34,6 +34,7 @@ from backend.app.schemas.printer import (
     AmsLabelBody,
     AMSTray,
     AMSUnit,
+    AnycubicSlotUpdate,
     DiagnosticRequest,
     ExtruderSlotResponse,
     FilaSwitchResponse,
@@ -53,6 +54,7 @@ from backend.app.schemas.printer import (
     hms_error_responses,
 )
 from backend.app.services import camera_light as camera_light_service, drying_preflight, kprofile_drift
+from backend.app.services.anycubic import AnycubicError, AnycubicMQTTClient
 from backend.app.services.bambu_ftp import (
     DownloadDeadlineExceeded,
     FileNotOnPrinterError,
@@ -102,6 +104,7 @@ from backend.app.services.printer_media import (
 )
 from backend.app.services.slicer_filament_resolver import _ORCA_PROFILE_ID, lookup_orca_filament_id
 from backend.app.services.slot_nozzle import reports_two_nozzles, resolve_slot_nozzle
+from backend.app.utils.anycubic_models import get_model as get_anycubic_model
 from backend.app.utils.filament_finish import different_finish, finish_generic_id
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
@@ -112,10 +115,45 @@ from backend.app.utils.filament_types import is_material_name, printer_filament_
 from backend.app.utils.fts_routing import slot_extruder
 from backend.app.utils.http import build_content_disposition, download_error_response, safe_download_filename
 from backend.app.utils.kprofile_lookup import build_slot_k_resolver
+from backend.app.utils.printer_capabilities import require_printer_operation
 from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C, aux_fan_sides, uses_exhaust_fan_label
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/printers", tags=["printers"])
+router = APIRouter(prefix="/printers", tags=["printers"], dependencies=[Depends(require_printer_operation)])
+
+
+def _anycubic_control_capabilities(printer, client, *, require_ready=True):
+    if (
+        not isinstance(client, AnycubicMQTTClient)
+        or client.ip_address != printer.ip_address
+        or client.serial_number != printer.serial_number
+        or client.model != printer.model
+        or client.tls_fingerprint != printer.tls_fingerprint
+    ):
+        raise HTTPException(503, "The Anycubic LAN connection is unavailable or updating")
+    capabilities = client.control_capabilities()
+    if require_ready and not capabilities["ready"]:
+        raise HTTPException(409, "Wait for fresh idle or printing status before changing settings")
+    return capabilities
+
+
+def _anycubic_control_result(queued):
+    if not queued:
+        raise HTTPException(409, "The Anycubic setting could not be queued for the current printer state")
+    return {"success": True, "queued": True, "message": "Anycubic LAN setting request queued"}
+
+
+async def _native_client(printer_id, db, *, require_ready=True):
+    printer = (await db.execute(select(Printer).where(Printer.id == printer_id))).scalar_one_or_none()
+    if printer is None:
+        raise HTTPException(404, "Printer not found")
+    if printer.printer_type != "anycubic":
+        raise HTTPException(409, "This operation requires an Anycubic LAN printer")
+    client = printer_manager.get_client(printer_id)
+    _anycubic_control_capabilities(printer, client, require_ready=require_ready)
+    assert isinstance(client, AnycubicMQTTClient)
+    return client
+
 
 # Seconds the /hms/execute-action route waits for a printer status push
 # confirming the command landed before reporting 502 to the UI. Module-level
@@ -192,10 +230,16 @@ async def create_printer(
     if result.scalar_one_or_none():
         raise HTTPException(400, "Printer with this serial number already exists")
 
+    provider_args = (
+        {"printer_type": "anycubic", "tls_fingerprint": printer_data.tls_fingerprint, "model": printer_data.model}
+        if printer_data.printer_type == "anycubic"
+        else {}
+    )
     test_result = await printer_manager.test_connection(
         ip_address=printer_data.ip_address,
         serial_number=printer_data.serial_number,
         access_code=printer_data.access_code,
+        **provider_args,
     )
     if not test_result.get("success"):
         # The frontend renders the user-facing message via i18n on `code`;
@@ -419,6 +463,17 @@ async def update_printer(
         raise HTTPException(404, "Printer not found")
 
     update_data = printer_data.model_dump(exclude_unset=True)
+    if "printer_type" in update_data and update_data["printer_type"] != printer.printer_type:
+        raise HTTPException(400, "A printer's protocol cannot be changed; add a separate printer instead")
+    if printer.printer_type == "anycubic":
+        if "model" in update_data:
+            model = get_anycubic_model(update_data["model"])
+            if model is None:
+                raise HTTPException(400, "Unsupported Anycubic LAN printer model")
+            update_data["model"] = model.name
+        if "tls_fingerprint" in update_data and not update_data["tls_fingerprint"]:
+            raise HTTPException(400, "An Anycubic LAN certificate fingerprint is required")
+        update_data.pop("access_code", None)
 
     # Groups can be given a location (#1727), so moving a printer between
     # locations changes who can reach it. That is an access change and only an
@@ -448,6 +503,9 @@ async def update_printer(
             update_data["plate_detection_roi_h"] = None
 
     ip_changed = "ip_address" in update_data and update_data["ip_address"] != printer.ip_address
+    anycubic_model_changed = (
+        printer.printer_type == "anycubic" and update_data.get("model", printer.model) != printer.model
+    )
 
     for field, value in update_data.items():
         setattr(printer, field, value)
@@ -469,7 +527,9 @@ async def update_printer(
             logger.error("Failed to sync virtual printers after printer IP change: %s", e)
 
     # Reconnect if connection settings changed
-    if any(k in update_data for k in ["ip_address", "access_code", "is_active"]):
+    if anycubic_model_changed or any(
+        k in update_data for k in ["ip_address", "access_code", "is_active", "tls_fingerprint"]
+    ):
         printer_manager.disconnect_printer(printer_id)
         if printer.is_active:
             await printer_manager.connect_printer(printer)
@@ -689,7 +749,12 @@ async def _printer_status(db: AsyncSession, printer: Printer) -> PrinterStatus:
         ams_exists = True
         # Same serialiser as the WebSocket push, so the card cannot lose a
         # field between page load and the first push.
-        ams_units = [AMSUnit(**unit) for unit in ams_units_to_dicts(raw_data["ams"], _kprofile_k, drying_targets)]
+        ams_units = [
+            AMSUnit(**unit)
+            for unit in ams_units_to_dicts(
+                raw_data["ams"], _kprofile_k, drying_targets, printer_type=printer.printer_type
+            )
+        ]
 
     # Virtual tray (external spool holder) - comes from vt_tray in raw_data (list)
     if "vt_tray" in raw_data:
@@ -778,6 +843,7 @@ async def _printer_status(db: AsyncSession, printer: Printer) -> PrinterStatus:
 
     return PrinterStatus(
         id=printer_id,
+        anycubic_controls=raw_data.get("anycubic_controls") if printer.printer_type == "anycubic" else None,
         name=printer.name,
         connected=state.connected,
         state=state.state,
@@ -1038,6 +1104,44 @@ async def disconnect_printer(
 
     printer_manager.disconnect_printer(printer_id)
     return {"connected": False}
+
+
+@router.post("/anycubic/discover")
+async def discover_anycubic_printer(
+    ip_address: str,
+    _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CREATE),
+):
+    """Read the selected LAN printer's identity and certificate for review.
+
+    Discovery never opens an authenticated MQTT session or controls the printer.
+    Only the public certificate digest is returned to the browser.
+    """
+    try:
+        return await asyncio.to_thread(AnycubicMQTTClient.discover, ip_address)
+    except AnycubicError:
+        raise HTTPException(400, "Could not discover this Anycubic LAN printer. Check its IP and LAN mode.") from None
+
+
+@router.post("/{printer_id}/anycubic/discover")
+async def discover_anycubic_printer_for_update(
+    printer_id: int,
+    ip_address: str,
+    _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_UPDATE),
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    """Review a changed address/certificate within an existing printer's scope."""
+    printer = (await db.execute(select(Printer).where(Printer.id == printer_id))).scalar_one_or_none()
+    if not printer:
+        raise HTTPException(404, "Printer not found")
+    if printer.printer_type != "anycubic":
+        raise HTTPException(400, "This printer does not use the Anycubic LAN provider")
+    try:
+        public = await asyncio.to_thread(AnycubicMQTTClient.discover, ip_address)
+    except AnycubicError:
+        raise HTTPException(400, "Could not discover this Anycubic LAN printer. Check its IP and LAN mode.") from None
+    if public["serial_number"] != printer.serial_number:
+        raise HTTPException(400, "The discovered device identity does not match this printer")
+    return public
 
 
 @router.post("/diagnostic", response_model=PrinterDiagnosticResult)
@@ -2300,6 +2404,7 @@ async def start_drying(
     duration: int = 4,
     filament: str = "",
     rotate_tray: bool = False,
+    duration_minutes: int | None = None,
     _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
@@ -2308,6 +2413,30 @@ async def start_drying(
     printer = result.scalar_one_or_none()
     if not printer:
         raise HTTPException(404, "Printer not found")
+
+    if printer.printer_type == "anycubic":
+        client = printer_manager.get_client(printer_id)
+        capabilities = _anycubic_control_capabilities(printer, client)
+        control = next((item for item in capabilities["ace_drying"] if item["id"] == ams_id), None)
+        minutes = duration_minutes if duration_minutes is not None else duration * 60
+        if filament or rotate_tray:
+            raise HTTPException(422, "Bambu filament and rotation options do not apply to ACE drying")
+        if control is None or not control["start_ready"]:
+            raise HTTPException(409, "Wait for current drying metadata from this ACE unit")
+        if (
+            not control["temp_min"] <= temp <= control["temp_max"]
+            or not control["duration_min"] <= minutes <= control["duration_max"]
+            or any(
+                temp >= bound["temperature"] and minutes > bound["max_minutes"] for bound in control["duration_limits"]
+            )
+        ):
+            raise HTTPException(
+                422, "Drying temperature or duration exceeds this ACE unit's model or loaded-filament limits"
+            )
+        assert isinstance(client, AnycubicMQTTClient)
+        return _anycubic_control_result(client.set_ace_drying(ams_id, temperature=temp, duration_minutes=minutes))
+    if duration_minutes is not None:
+        raise HTTPException(422, "Bambu drying uses duration in whole hours")
 
     # Server-side guard: reject if this model/firmware doesn't support drying
     live_state = printer_manager.get_status(printer_id)
@@ -2359,6 +2488,12 @@ async def stop_drying(
 
     # Screen-only models ignore stop just as they ignore start — a cycle running on a
     # P1S was started at the printer and has to be ended there too (#2533).
+    if printer.printer_type == "anycubic":
+        client = printer_manager.get_client(printer_id)
+        _anycubic_control_capabilities(printer, client, require_ready=False)
+        assert isinstance(client, AnycubicMQTTClient)
+        return _anycubic_control_result(client.set_ace_drying(ams_id, stop=True))
+
     if drying_screen_only(printer.model):
         raise HTTPException(400, _DRYING_SCREEN_ONLY_DETAIL)
 
@@ -3687,6 +3822,11 @@ async def set_print_speed(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    if printer.printer_type == "anycubic":
+        capabilities = _anycubic_control_capabilities(printer, client)
+        if mode not in capabilities["speed_modes"]:
+            raise HTTPException(422, "This Anycubic printer supports speed modes 1, 2 and 3")
+        return _anycubic_control_result(client.set_print_speed(mode))
     success = client.set_print_speed(mode)
     if not success:
         raise HTTPException(500, "Failed to set print speed")
@@ -3698,7 +3838,7 @@ async def set_print_speed(
 @router.post("/{printer_id}/temperature/nozzle")
 async def set_nozzle_temperature(
     printer_id: int,
-    target: int = Query(..., ge=0, le=320, description="Target nozzle temperature in Celsius; 0 turns heating off"),
+    target: int = Query(..., ge=0, le=350, description="Target nozzle temperature in Celsius; 0 turns heating off"),
     nozzle: int = Query(0, ge=0, le=1, description="Nozzle/extruder index (0=right/default, 1=left)"),
     _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
     db: AsyncSession = Depends(get_db, scope="function"),
@@ -3713,6 +3853,13 @@ async def set_nozzle_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    if printer.printer_type == "anycubic":
+        capabilities = _anycubic_control_capabilities(printer, client)
+        if nozzle != 0 or target > capabilities["nozzle_max"]:
+            raise HTTPException(422, "The nozzle selection or target exceeds this Anycubic printer's limits")
+        return _anycubic_control_result(client.set_nozzle_temperature(target, nozzle))
+    if target > 320:
+        raise HTTPException(422, "The nozzle target must not exceed 320 degrees")
     success = client.set_nozzle_temperature(target, nozzle)
     if not success:
         raise HTTPException(500, "Failed to set nozzle temperature")
@@ -3737,6 +3884,11 @@ async def set_bed_temperature(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    if printer.printer_type == "anycubic":
+        capabilities = _anycubic_control_capabilities(printer, client)
+        if target > capabilities["bed_max"]:
+            raise HTTPException(422, "The bed target exceeds this Anycubic printer's limits")
+        return _anycubic_control_result(client.set_bed_temperature(target))
     success = client.set_bed_temperature(target)
     if not success:
         raise HTTPException(500, "Failed to set bed temperature")
@@ -3820,6 +3972,13 @@ async def set_fan_speed(
     client = printer_manager.get_client(printer_id)
     if not client:
         raise HTTPException(400, "Printer not connected")
+
+    if printer.printer_type == "anycubic":
+        capabilities = _anycubic_control_capabilities(printer, client)
+        if fan not in capabilities["fans"]:
+            raise HTTPException(400, "This fan or its control scale has not been reported by the Anycubic printer")
+        assert isinstance(client, AnycubicMQTTClient)  # Validated by the capability helper.
+        return _anycubic_control_result(client.set_fan_percent(fan, speed))
 
     # Presence gate for the accessory fan. Without this, aux2 is accepted for
     # every model and an A1 would be sent M106 P10 for a fan it does not have.
@@ -3920,6 +4079,10 @@ async def set_chamber_light(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    if printer.printer_type == "anycubic":
+        _anycubic_control_capabilities(printer, client, require_ready=False)
+        return _anycubic_control_result(client.set_chamber_light(on))
+
     success = client.set_chamber_light(on)
     if not success:
         raise HTTPException(500, "Failed to control chamber light")
@@ -4009,6 +4172,10 @@ async def bed_jog(
     # Bare relative move, never M211 (#2579). Not because a bare move is safe —
     # the firmware ignores soft endstops on MQTT G-code either way — but because
     # M211 S0 disabled them globally, taking the touchscreen's limits with it.
+    if printer.printer_type == "anycubic":
+        _anycubic_control_capabilities(printer, client)
+        assert isinstance(client, AnycubicMQTTClient)
+        return _anycubic_control_result(client.jog_axis("z", distance))
     lines = ["G91", f"G1 Z{distance:.2f} F600", "G90"]
 
     if not client.send_gcode("\n".join(lines)):
@@ -4124,10 +4291,73 @@ async def home_axes(
     if not client:
         raise HTTPException(400, "Printer not connected")
 
+    if printer.printer_type == "anycubic":
+        _anycubic_control_capabilities(printer, client)
+        assert isinstance(client, AnycubicMQTTClient)
+        return _anycubic_control_result(client.home_axes(axes))
     if not client.send_gcode("G28"):
         raise HTTPException(500, "Failed to send home command")
 
     return {"success": True, "message": "Full auto-home sequence sent"}
+
+
+@router.post("/{printer_id}/anycubic/jog")
+async def jog_anycubic_axis(
+    printer_id: int,
+    axis: str,
+    distance: float = Query(..., ge=-50, le=50),
+    _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    client = await _native_client(printer_id, db)
+    return _anycubic_control_result(client.jog_axis(axis.lower(), distance))
+
+
+@router.post("/{printer_id}/anycubic/extruder-pulse")
+async def pulse_anycubic_extruder(
+    printer_id: int,
+    direction: int = Query(..., ge=0, le=1),
+    _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    client = await _native_client(printer_id, db)
+    return _anycubic_control_result(client.extruder_pulse(direction))
+
+
+@router.post("/{printer_id}/anycubic/extruder-stop")
+async def stop_anycubic_extrusion(
+    printer_id: int,
+    _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    client = await _native_client(printer_id, db, require_ready=False)
+    return _anycubic_control_result(client.stop_extrusion())
+
+
+@router.post("/{printer_id}/anycubic/slots/{box_id}/{slot_id}")
+async def set_anycubic_slot(
+    printer_id: int,
+    box_id: int,
+    slot_id: int,
+    body: AnycubicSlotUpdate,
+    _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    client = await _native_client(printer_id, db)
+    return _anycubic_control_result(client.set_ace_slot(box_id, slot_id, body.material, body.color))
+
+
+@router.post("/{printer_id}/anycubic/slots/{box_id}/{slot_id}/{operation}")
+async def feed_anycubic_slot(
+    printer_id: int,
+    box_id: int,
+    slot_id: int,
+    operation: str,
+    _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
+    db: AsyncSession = Depends(get_db, scope="function"),
+):
+    client = await _native_client(printer_id, db, require_ready=operation != "stop")
+    return _anycubic_control_result(client.feed_ace_slot(box_id, slot_id, operation))
 
 
 @router.post("/{printer_id}/hms/clear")
@@ -4374,6 +4604,8 @@ async def refresh_ams_slot(
         raise HTTPException(404, "Printer not found")
 
     client = printer_manager.get_client(printer_id)
+    if isinstance(client, AnycubicMQTTClient):
+        raise HTTPException(409, "RFID refresh is not supported by the Anycubic LAN provider")
     if not client:
         raise HTTPException(400, "Printer not connected")
 

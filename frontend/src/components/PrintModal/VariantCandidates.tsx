@@ -22,6 +22,8 @@ interface VariantCandidatesProps {
   readOnly?: boolean;
   /** Replaces the help line under the heading when read-only. */
   readOnlyNote?: string;
+  /** Reuse the ordered list for native files, with no Bambu plate lookup. */
+  queueAll?: boolean;
 }
 
 /**
@@ -47,13 +49,14 @@ export function VariantCandidates({
   onPlateChange,
   readOnly = false,
   readOnlyNote,
+  queueAll = false,
 }: VariantCandidatesProps) {
   const { t } = useTranslation();
 
   const plateQueries = useQueries({
     // Read-only mode shows a job that is already queued — its plates were
     // chosen when it was created, so there is nothing to fetch or offer.
-    queries: readOnly
+    queries: readOnly || queueAll
       ? []
       : candidates.map((c) => ({
           queryKey: ['library-file-plates', c.id],
@@ -96,10 +99,10 @@ export function VariantCandidates({
     <div className="mb-4">
       <div className="flex items-center gap-2 mb-2">
         <PrinterIcon className="w-4 h-4 text-bambu-gray" />
-        <span className="text-sm text-bambu-gray">{t('printModal.variants.title')}</span>
+        <span className="text-sm text-bambu-gray">{t(queueAll ? 'printers.anycubic.queueFilesTitle' : 'printModal.variants.title')}</span>
       </div>
       <p className="text-xs text-bambu-gray mb-2">
-        {readOnly ? (readOnlyNote ?? t('printModal.variants.help')) : t('printModal.variants.help')}
+        {queueAll ? t('printers.anycubic.queueFilesHelp') : readOnly ? (readOnlyNote ?? t('printModal.variants.help')) : t('printModal.variants.help')}
       </p>
 
       <div className="space-y-2">

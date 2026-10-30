@@ -20,6 +20,7 @@ from backend.app.models.settings import Settings
 from backend.app.models.spool import Spool
 from backend.app.models.spool_usage_history import SpoolUsageHistory
 from backend.app.models.user import User
+from backend.app.services.anycubic import AnycubicMQTTClient
 from backend.app.services.git_providers.factory import get_provider_backend
 from backend.app.services.github_restore import is_restorable_setting_key
 from backend.app.services.printer_manager import printer_manager
@@ -434,7 +435,7 @@ class GitHubBackupService:
 
         for printer in printers:
             client = printer_manager.get_client(printer.id)
-            if not client or not client.state.connected:
+            if not client or isinstance(client, AnycubicMQTTClient) or not client.state.connected:
                 continue
 
             serial = printer.serial_number

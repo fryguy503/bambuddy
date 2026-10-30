@@ -12,6 +12,20 @@ import { getPrinterImage, isGcodeCompatible, filterCompatibleQueueItems } from '
 import type { PrintQueueItem } from '../../api/client';
 
 describe('getPrinterImage', () => {
+  it.each([
+    ['Kobra S1', 's1'], ['KS1', 's1'], ['Anycubic Kobra S1 Combo', 's1'],
+    ['Kobra S1 Max', 's1-max'], ['Anycubic Kobra 3 Combo', '3'],
+    ['Kobra 3 V2', '3-v2'], ['Kobra 3 Max', '3-max'],
+    ['Kobra 4', '4'], ['Kobra X', 'x'], [' anycubic-kobra-s1-max ', 's1-max'],
+  ])('resolves %s to its distinct Anycubic icon', (model, image) => {
+    expect(getPrinterImage(model)).toBe(`/img/printers/anycubic-kobra-${image}.png`);
+  });
+
+  it('does not confuse unknown variants with supported printer artwork', () => {
+    expect(getPrinterImage('Kobra S1 Max V2')).toBe('/img/printers/default.png');
+    expect(getPrinterImage('Kobra 3 Max V2')).toBe('/img/printers/default.png');
+  });
+
   describe('X2D (#988)', () => {
     it('resolves display name "X2D" to x2d.png', () => {
       expect(getPrinterImage('X2D')).toBe('/img/printers/x2d.png');

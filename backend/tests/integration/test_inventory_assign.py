@@ -14,6 +14,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.spool import Spool
 
 
+async def test_anycubic_assignment_is_an_inventory_link_without_bambu_configuration(
+    async_client, printer_factory, spool_factory
+):
+    printer = await printer_factory(printer_type="anycubic", model="Kobra S1", tls_fingerprint="a" * 64)
+    spool = await spool_factory()
+    with patch("backend.app.api.routes.inventory.apply_spool_to_slot_via_mqtt", new_callable=AsyncMock) as write:
+        response = await async_client.post(
+            "/api/v1/inventory/assignments",
+            json={"printer_id": printer.id, "ams_id": 1, "tray_id": 2, "spool_id": spool.id},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["spool_id"] == spool.id
+    assert response.json()["pending_config"] is False
+    assert response.json()["configured"] is False
+    write.assert_not_awaited()
+
+
 @pytest.fixture
 async def spool_factory(db_session: AsyncSession):
     """Factory to create test spools."""

@@ -34,6 +34,7 @@ the run loop draining a queue that exceeds the cap.
 """
 
 import asyncio
+import zipfile
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -664,8 +665,8 @@ async def test_library_print_without_a_parseable_print_time_does_not_crash(tmp_p
     """Regression: `_start_print` read `library_file.print_time_seconds`, a column
     LibraryFile does not have.
 
-    It only fired when the archive carried no print time — a plain .gcode, or a 3MF
-    the parser could not read — and it fired *after* the printer had been sent the
+    It only fired when the archive carried no print time — a 3MF whose G-code
+    declares none — and it fired *after* the printer had been sent the
     job. The started-notification was lost and the AttributeError unwound the
     dispatch. Two printers here: if the first one's dispatch blows up, the second
     must still go out.
@@ -681,12 +682,13 @@ async def test_library_print_without_a_parseable_print_time_does_not_crash(tmp_p
         async with session_maker() as db:
             db.add(Settings(key="queue_max_concurrent_uploads", value="2"))
             for n in range(2):
-                src = base_dir / "library" / f"job-{n}.gcode"
-                src.write_bytes(b"G28\n")
+                src = base_dir / "library" / f"job-{n}.gcode.3mf"
+                with zipfile.ZipFile(src, "w") as zf:
+                    zf.writestr("Metadata/plate_1.gcode", "G28\n")
                 lib = LibraryFile(
-                    filename=f"job-{n}.gcode",
+                    filename=f"job-{n}.gcode.3mf",
                     file_path=str(src),
-                    file_type="gcode",
+                    file_type="3mf",
                     file_size=src.stat().st_size,
                 )
                 db.add(lib)

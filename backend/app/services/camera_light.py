@@ -181,7 +181,7 @@ async def camera_light(
     printer, and holding the light here rather than switching it itself keeps
     it from switching the light off under a viewer who came meanwhile (SP-C11).
     """
-    if printer is None:
+    if printer is None or getattr(printer, "printer_type", "bambu") == "anycubic":
         yield
         return
     mode, delay = await _light_settings()

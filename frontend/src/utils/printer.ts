@@ -1,5 +1,9 @@
+import { getAnycubicModel } from './anycubicModels';
+
 export function getPrinterImage(model: string | null | undefined): string {
   if (!model) return '/img/printers/default.png';
+  const anycubic = getAnycubicModel(model);
+  if (anycubic) return `/img/printers/${anycubic.image}`;
   const m = model.toLowerCase().replace(/\s+/g, '');
   if (m.includes('x1e')) return '/img/printers/x1e.png';
   if (m.includes('x1c') || m.includes('x1carbon')) return '/img/printers/x1c.png';

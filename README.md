@@ -823,6 +823,12 @@ Full documentation available at **[wiki.bambuddy.cool](http://wiki.bambuddy.cool
 | A1 | A1, A1 Mini |
 | A2 | A2L |
 
+Experimental **Anycubic Kobra LAN support** adds printer discovery, monitoring,
+ACE inventory and drying, native controls, camera viewing, G-code transfer and
+queued printing. No Anycubic account is required. The Kobra S1 has partial
+hardware validation; additional supported models have offline coverage.
+See [setup, supported models and validation limits](docs/anycubic.md).
+
 ---
 
 ## 🛠️ Tech Stack

@@ -322,7 +322,7 @@ def calculate_file_hash(file_path: Path) -> str:
     return sha256_hash.hexdigest()
 
 
-def validate_print_file_upload(filename: str, content: bytes) -> None:
+def validate_print_file_upload(filename: str, content: bytes, *, allow_anycubic_gcode: bool = False) -> str | None:
     """Reject obviously-unprintable uploads early so the printer doesn't see them (#1401).
 
     Bambu printers in network mode only parse ``.gcode.3mf`` zip containers
@@ -350,6 +350,17 @@ def validate_print_file_upload(filename: str, content: bytes) -> None:
     is_raw_gcode_upload = lower_filename.endswith(".gcode") and not lower_filename.endswith(".gcode.3mf")
 
     if is_raw_gcode_upload:
+        if allow_anycubic_gcode:
+            from io import BytesIO
+
+            from backend.app.services.anycubic.files import inspect_gcode
+            from backend.app.services.anycubic.protocol import AnycubicError
+
+            try:
+                model, _, _ = inspect_gcode(BytesIO(content))
+            except AnycubicError as exc:
+                raise HTTPException(400, str(exc)) from None
+            return model
         raise HTTPException(
             status_code=400,
             detail=(
@@ -2541,7 +2552,9 @@ async def upload_file(
         # Read upload now so the validation can sniff magic bytes; the file
         # is written to disk only after the checks. #1401.
         content = await file.read()
-        validate_print_file_upload(filename, content)
+        anycubic_model = await asyncio.to_thread(
+            validate_print_file_upload, filename, content, allow_anycubic_gcode=True
+        )
 
         # Save file
         with open(file_path, "wb") as f:
@@ -2561,7 +2574,7 @@ async def upload_file(
         duplicate_of = dup_result.scalar()
 
         # Extract metadata and thumbnail
-        metadata = {}
+        metadata = {"printer_type": "anycubic", "sliced_for_model": anycubic_model} if anycubic_model else {}
         thumbnail_path = None
         thumbnails_dir = get_library_thumbnails_dir()
 
@@ -2603,6 +2616,17 @@ async def upload_file(
                 logger.warning("Failed to parse 3MF: %s", e)
 
         elif ext == ".gcode":
+            if anycubic_model:
+                from backend.app.services.anycubic.printing import inspect_print_file, merge_estimates
+                from backend.app.services.anycubic.protocol import AnycubicError
+
+                try:
+                    artifact = await asyncio.to_thread(inspect_print_file, file_path, filename, anycubic_model)
+                    metadata = merge_estimates(metadata, artifact.estimates)
+                except (AnycubicError, OSError) as error:
+                    # Upload admission remains independent of optional metadata;
+                    # native queue validation still inspects the actual source.
+                    logger.debug("Native G-code estimates unavailable: %s", error)
             # Extract embedded thumbnail from gcode
             try:
                 thumbnail_data = extract_gcode_thumbnail(file_path)
@@ -3325,6 +3349,15 @@ async def add_files_to_queue(
             errors.append(AddToQueueError(file_id=file_id, filename="(not found)", error="File not found"))
             continue
 
+        if lib_file.filename.lower().endswith(".gcode"):
+            errors.append(
+                AddToQueueError(
+                    file_id=file_id,
+                    filename=lib_file.filename,
+                    error="Open Print and choose a matching Anycubic printer and ACE mapping for this G-code file",
+                )
+            )
+            continue
         # Validate file is sliced
         if not is_sliced_file(lib_file.filename):
             errors.append(
@@ -3460,6 +3493,54 @@ async def add_files_to_queue(
     await announce_queue_jobs_added(db, [a.queue_item_id for a in added])
 
     return AddToQueueResponse(added=added, errors=errors)
+
+
+@router.get("/files/{file_id}/anycubic-print")
+async def get_anycubic_print_requirements(
+    file_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    auth_result: tuple[User | ApiKeyActor | None, bool] = Depends(
+        require_ownership_permission(Permission.LIBRARY_READ_ALL, Permission.LIBRARY_READ_OWN)
+    ),
+):
+    """Read model/tool requirements from the actual native G-code, without printer I/O."""
+    from backend.app.services.anycubic.files import inspect_gcode
+    from backend.app.services.anycubic.printing import inspect_print_file
+    from backend.app.services.anycubic.protocol import AnycubicError
+
+    user, can_read_all = auth_result
+    row = (await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))).scalar_one_or_none()
+    row = _ensure_library_file_visible(row, user, can_read_all)
+    if row is None:
+        raise HTTPException(404, "File not found")
+    if not row.filename.lower().endswith(".gcode"):
+        raise HTTPException(400, "Choose sliced Anycubic .gcode")
+    path = Path(row.file_path)
+    if not path.is_absolute():
+        path = app_settings.base_dir / path
+
+    def inspect():
+        with path.open("rb") as stream:
+            model, _, _ = inspect_gcode(stream)
+        return inspect_print_file(path, row.filename, model)
+
+    try:
+        artifact = await asyncio.to_thread(inspect)
+    except (AnycubicError, OSError) as error:
+        raise HTTPException(
+            400, str(error) if isinstance(error, AnycubicError) else "G-code file unavailable"
+        ) from None
+    return {
+        "model": artifact.file.model,
+        "tools": [
+            {
+                "tool": entry.tool,
+                "type": entry.material_type,
+                "color": "".join(f"{component:02X}" for component in entry.color),
+            }
+            for entry in artifact.filaments
+        ],
+    }
 
 
 @router.get("/files/{file_id}/plates")

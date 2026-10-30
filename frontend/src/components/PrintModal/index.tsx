@@ -2,7 +2,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { AlertCircle, AlertTriangle, Layers, Loader2, Pencil, Printer, ThumbsUp, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { CostCenterSummary, PrintQueueItemCreate, PrintQueueItemUpdate, SlotMaterial } from '../../api/client';
+import type { AnycubicPrintOptions, CostCenterSummary, PrintQueueItemCreate, PrintQueueItemUpdate, SlotMaterial } from '../../api/client';
 import { api } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card, CardContent } from '../Card';
@@ -29,6 +29,8 @@ import { FilamentOverride } from './FilamentOverride';
 import { PlateSelector } from './PlateSelector';
 import { PrinterSelector } from './PrinterSelector';
 import { PrintOptionsPanel } from './PrintOptions';
+import { AnycubicPrintSettings } from './AnycubicPrintSettings';
+import { combineNativeRequirements, DEFAULT_ANYCUBIC_PRINT_OPTIONS, nativeMappingComplete, nativeOptionsForFile, nativePrintOptions } from '../../utils/anycubicPrint';
 import { ScheduleOptionsPanel } from './ScheduleOptions';
 import { VariantCandidates, type VariantCandidate } from './VariantCandidates';
 import { CostCenterSelect } from './CostCenterSelect';
@@ -98,6 +100,7 @@ export function PrintModal({
   projectId,
   cleanupLibraryAfterDispatch,
   variantFiles,
+  nativeQueueFiles,
 }: PrintModalProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -113,7 +116,8 @@ export function PrintModal({
 
   // Cross-model alternatives (#671). One candidate is not a choice, so a
   // single-entry list behaves exactly like an ordinary print.
-  const isCrossModel = mode === 'create' && (variantFiles?.length ?? 0) > 1;
+  const isNativeQueue = mode === 'create' && (nativeQueueFiles?.length ?? 0) > 0;
+  const isCrossModel = mode === 'create' && !isNativeQueue && (variantFiles?.length ?? 0) > 1;
   // Editing an already-queued cross-model item. The candidates are shown so the
   // dialog doesn't misrepresent the job as a plain "Any H2D" — which is what it
   // did before, offering a printer picker whose Save would have left a row with
@@ -129,7 +133,12 @@ export function PrintModal({
         }))
       : [];
   const hasEditingVariants = editingVariants.length > 0;
-  const [candidates, setCandidates] = useState<VariantCandidate[]>(variantFiles ?? []);
+  const [candidates, setCandidates] = useState<VariantCandidate[]>(nativeQueueFiles ?? variantFiles ?? []);
+  // Keep synthetic filament ids stable when successful files leave a partial
+  // submission. Remaining rows must retain the same physical spool choices.
+  const [initialNativeFiles] = useState<VariantCandidate[]>(nativeQueueFiles ?? []);
+  const [nativeQueuedCount, setNativeQueuedCount] = useState(0);
+  const nativeAsapInserted = useRef(0);
   const [candidatePlates, setCandidatePlates] = useState<Record<number, number | null>>({});
 
   type FilamentWarningItem = {
@@ -171,6 +180,7 @@ export function PrintModal({
 
   // Quantity — number of copies (creates a batch if > 1)
   const [quantity, setQuantity] = useState(1);
+  const [anycubicOptions, setAnycubicOptions] = useState<AnycubicPrintOptions>(() => queueItem?.anycubic_options ?? DEFAULT_ANYCUBIC_PRINT_OPTIONS);
 
   // Per-plate quantities for multi-plate files (#342). Keyed by plate index;
   // a plate with no entry means one run. Only used in create mode on a
@@ -362,12 +372,61 @@ export function PrintModal({
 
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
   const defaultCostPerKg = settings?.default_filament_cost ?? 0;
-  const billingEnabled = settings?.billing_enabled === true;
 
-  const { data: printers, isLoading: loadingPrinters } = useQuery({
+  const { data: archiveDetails, isError: archiveDetailsFailed } = useQuery({
+    queryKey: ['archive', archiveId],
+    queryFn: () => api.getArchive(archiveId!),
+    enabled: !!archiveId && !isLibraryFile,
+  });
+  const { data: libraryFileDetails, isError: libraryFileDetailsFailed } = useQuery({
+    queryKey: ['library-file', libraryFileId],
+    queryFn: () => api.getLibraryFile(libraryFileId!),
+    enabled: isLibraryFile && !!libraryFileId,
+  });
+  const nativeArchive = !isLibraryFile && !!archiveId && (
+    archiveDetails?.filename?.toLowerCase().endsWith('.gcode') || archiveDetails?.extra_data?.printer_type === 'anycubic'
+  );
+  const nativeSource = isNativeQueue || nativeArchive || !!queueItem?.anycubic_options || (isLibraryFile && (
+    libraryFileDetails?.filename?.toLowerCase().endsWith('.gcode') || libraryFileDetails?.metadata?.printer_type === 'anycubic'
+  ));
+  const nativeSourceUnavailable = nativeSource && !isNativeQueue && ((!archiveId && !libraryFileId) || libraryFileDetailsFailed);
+  const billingEnabled = !nativeSource && settings?.billing_enabled === true;
+  const { data: singleNativeRequirements, isError: singleNativeRequirementsFailed } = useQuery({
+    queryKey: ['anycubic-print-requirements', libraryFileId],
+    queryFn: () => api.getAnycubicPrintRequirements(libraryFileId!),
+    enabled: nativeSource && !isNativeQueue && isLibraryFile && !!libraryFileId,
+    retry: false,
+  });
+  const nativeFileQueries = useQueries({
+    queries: isNativeQueue ? initialNativeFiles.map(file => ({
+      queryKey: ['anycubic-print-requirements', file.id],
+      queryFn: () => api.getAnycubicPrintRequirements(file.id),
+      retry: false,
+    })) : [],
+  });
+  const nativeRequirementsByFile = new Map(initialNativeFiles.map((file, index) => [file.id, nativeFileQueries[index]?.data]));
+  const nativePendingFile = isNativeQueue ? initialNativeFiles.find((_, index) => nativeFileQueries[index]?.isPending) : undefined;
+  const nativeFailedFile = isNativeQueue ? initialNativeFiles.find((_, index) => nativeFileQueries[index]?.isError) : undefined;
+  const nativeRequirements = isNativeQueue
+    ? nativeFileQueries.every(query => query.data) && initialNativeFiles.length > 0
+      ? combineNativeRequirements(nativeFileQueries.map(query => query.data!))
+      : undefined
+    : singleNativeRequirements;
+  const nativeModelsMismatch = isNativeQueue && !nativePendingFile && !nativeFailedFile && !nativeRequirements;
+  const nativeRequirementsFailed = isNativeQueue ? !!nativeFailedFile || nativeModelsMismatch : singleNativeRequirementsFailed;
+  const slicedForModel = (nativeSource ? nativeRequirements?.model : null) || archiveDetails?.sliced_for_model || libraryFileDetails?.sliced_for_model
+    || (typeof libraryFileDetails?.metadata?.sliced_for_model === 'string' ? libraryFileDetails.metadata.sliced_for_model : null);
+  const sourceDetailsPending =
+    (!isNativeQueue && ((!!archiveId && !isLibraryFile && !archiveDetails && !archiveDetailsFailed) ||
+    (isLibraryFile && !libraryFileDetails && !libraryFileDetailsFailed)))
+    || (nativeSource && isLibraryFile && !nativeRequirements && !nativeRequirementsFailed);
+  const { data: allPrinters, isLoading: loadingPrinters } = useQuery({
     queryKey: ['printers'],
     queryFn: api.getPrinters,
   });
+  const printers = useMemo(() => allPrinters?.filter(printer => nativeSource
+    ? printer.printer_type === 'anycubic' && !!slicedForModel && printer.model === slicedForModel
+    : printer.printer_type !== 'anycubic'), [allPrinters, nativeSource, slicedForModel]);
 
   const { data: myCostCenters, isLoading: loadingCostCenters } = useQuery({
     queryKey: ['finance', 'cost-centers', 'mine'],
@@ -407,7 +466,7 @@ export function PrintModal({
       // Concurrent mounts dedupe, so opening the dialog costs one fetch per
       // printer however many plate panels are on screen.
       refetchOnMount: 'always',
-      enabled: selectedPrinters.length > 0,
+      enabled: selectedPrinters.length > 0 && !nativeSource && !sourceDetailsPending,
     })),
   });
   const inventoryByTrayIdPerPrinter = useMemo(() => {
@@ -442,27 +501,6 @@ export function PrintModal({
     return result;
   }, [selectedPrinters, inventoryRemainQueries]);
 
-  // Fetch archive details to get sliced_for_model
-  const { data: archiveDetails, isError: archiveDetailsFailed } = useQuery({
-    queryKey: ['archive', archiveId],
-    queryFn: () => api.getArchive(archiveId!),
-    enabled: !!archiveId && !isLibraryFile,
-  });
-
-  // Fetch library file details to get sliced_for_model
-  const { data: libraryFileDetails, isError: libraryFileDetailsFailed } = useQuery({
-    queryKey: ['library-file', libraryFileId],
-    queryFn: () => api.getLibraryFile(libraryFileId!),
-    enabled: isLibraryFile && !!libraryFileId,
-  });
-
-  // Get sliced_for_model from archive or library file
-  const slicedForModel = archiveDetails?.sliced_for_model || libraryFileDetails?.sliced_for_model || null;
-  // Until the file's details are in, the model it was sliced for is unknown.
-  const sourceDetailsPending =
-    (!!archiveId && !isLibraryFile && !archiveDetails && !archiveDetailsFailed) ||
-    (isLibraryFile && !libraryFileDetails && !libraryFileDetailsFailed);
-
   // The archive's own saved AMS-slot pick from the slicer (see the "Save AMS
   // mapping" virtual-printer setting) — undefined for library files or
   // archives that predate the feature / had it off at print time, and
@@ -480,7 +518,7 @@ export function PrintModal({
   const { data: archivePlatesData, isError: archivePlatesError } = useQuery({
     queryKey: ['archive-plates', archiveId],
     queryFn: () => api.getArchivePlates(archiveId!),
-    enabled: !!archiveId && !isLibraryFile,
+    enabled: !!archiveId && !isLibraryFile && !nativeArchive && !sourceDetailsPending,
     retry: false,
   });
 
@@ -488,7 +526,7 @@ export function PrintModal({
   const { data: libraryPlatesData } = useQuery({
     queryKey: ['library-file-plates', libraryFileId],
     queryFn: () => api.getLibraryFilePlates(libraryFileId!),
-    enabled: isLibraryFile && !!libraryFileId,
+    enabled: isLibraryFile && !!libraryFileId && !nativeSource && !sourceDetailsPending,
   });
 
   // Combine plates data from either source
@@ -498,7 +536,7 @@ export function PrintModal({
   const { data: archiveFilamentReqs, isError: archiveFilamentReqsError } = useQuery({
     queryKey: ['archive-filaments', archiveId, selectedPlate],
     queryFn: () => api.getArchiveFilamentRequirements(archiveId!, selectedPlate ?? undefined),
-    enabled: !!archiveId && !isLibraryFile && (selectedPlate !== null || !platesData?.is_multi_plate),
+    enabled: !!archiveId && !isLibraryFile && !nativeArchive && !sourceDetailsPending && (selectedPlate !== null || !platesData?.is_multi_plate),
     retry: false,
   });
 
@@ -506,7 +544,7 @@ export function PrintModal({
   const { data: libraryFilamentReqs } = useQuery({
     queryKey: ['library-file-filaments', libraryFileId, selectedPlate],
     queryFn: () => api.getLibraryFileFilamentRequirements(libraryFileId!, selectedPlate ?? undefined),
-    enabled: isLibraryFile && !!libraryFileId && (selectedPlate !== null || !platesData?.is_multi_plate),
+    enabled: isLibraryFile && !!libraryFileId && !nativeSource && !sourceDetailsPending && (selectedPlate !== null || !platesData?.is_multi_plate),
   });
 
   // Track if archive data couldn't be loaded (archive deleted or file missing)
@@ -527,7 +565,7 @@ export function PrintModal({
 
   // Fetch available filaments for model-based assignment (for filament override UI)
   // Preset id -> name, to store a colour name within its product line (SN-C9)
-  const filamentNameByIdx = useFilamentNameByIdx();
+  const filamentNameByIdx = useFilamentNameByIdx(!nativeSource && !sourceDetailsPending);
   const { data: availableFilaments } = useQuery({
     queryKey: ['available-filaments', targetModel, targetLocation],
     queryFn: () => api.getAvailableFilaments(targetModel!, targetLocation ?? undefined),
@@ -576,6 +614,51 @@ export function PrintModal({
     queryFn: () => api.getPrinterStatus(effectivePrinterId!),
     enabled: !!effectivePrinterId,
   });
+  const nativeMappingPrinter = useRef(effectivePrinterId);
+  useEffect(() => {
+    if (!nativeSource || nativeMappingPrinter.current === effectivePrinterId) return;
+    nativeMappingPrinter.current = effectivePrinterId;
+    setAnycubicOptions(previous => ({ ...previous, filament_mapping: [] }));
+  }, [nativeSource, effectivePrinterId]);
+  const nativeSelectionValid = !nativeSource || (
+    assignmentMode === 'printer' && selectedPrinters.length === 1
+    && printers?.some(printer => printer.id === effectivePrinterId) === true
+    && nativeRequirements?.model === slicedForModel
+    && nativeMappingComplete(anycubicOptions, nativeRequirements, printerStatus)
+    && (!isNativeQueue || (candidates.length > 0 && candidates.every(file => {
+      const requirements = nativeRequirementsByFile.get(file.id);
+      return !!requirements && !!nativeRequirements && !!nativeOptionsForFile(anycubicOptions, nativeRequirements, requirements);
+    })))
+  );
+  const nativeBlockingReason = !nativeSource ? null
+    : nativePendingFile ? t('printers.anycubic.queueFilesLoading', { filename: nativePendingFile.filename })
+      : nativeFailedFile ? t('printers.anycubic.queueFilesInvalid', { filename: nativeFailedFile.filename })
+        : nativeModelsMismatch ? t('printers.anycubic.queueFilesModels')
+          : isNativeQueue && !nativeSelectionValid ? t('printers.anycubic.queueFilesMapping')
+            : null;
+  const nativeQueueOptions = nativeSource ? {
+    anycubic_options: nativePrintOptions(anycubicOptions, printerStatus?.anycubic_controls?.print_options ?? []),
+    ams_mapping: null,
+    filament_overrides: null,
+    nozzle_rack_choice: null,
+    plate_id: null,
+    bed_levelling: 'off' as const,
+    flow_cali: 'off' as const,
+    vibration_cali: false,
+    layer_inspect: false,
+    timelapse: false,
+    use_ams: false,
+    nozzle_offset_cali: 'off' as const,
+    confirm_outcome: false,
+    preheat_override: 'off' as const,
+    preheat_chamber_target_override: null,
+    gcode_injection: false,
+    auto_off_after: false,
+    skip_filament_check: false,
+    cost_center_id: undefined,
+    estimated_cost: undefined,
+    cleanup_library_after_dispatch: false,
+  } : {};
 
   // Single-printer flow: gate prefer_lowest on this printer's backup state.
   // Multi-printer flow gates per-printer inside the hook (different printers
@@ -607,8 +690,8 @@ export function PrintModal({
 
   // Get AMS mapping from hook (only when single printer selected)
   const { amsMapping } = useFilamentMapping(
-    mappingFilamentReqs,
-    printerStatus,
+    nativeSource ? undefined : mappingFilamentReqs,
+    nativeSource ? undefined : printerStatus,
     manualMappings,
     singlePrinterPreferLowest,
     effectivePrinterId ? inventoryByTrayIdPerPrinter.get(effectivePrinterId) : undefined,
@@ -733,7 +816,7 @@ export function PrintModal({
 
   // Multi-printer filament mapping (for per-printer configuration)
   const multiPrinterMapping = useMultiPrinterFilamentMapping(
-    selectedPrinters,
+    nativeSource ? [] : selectedPrinters,
     printers,
     mappingFilamentReqs,
     manualMappings,
@@ -781,6 +864,7 @@ export function PrintModal({
   useEffect(() => {
     // Skip auto-select for edit mode (already initialized from queueItem)
     if (mode === 'edit-queue-item') return;
+    if (sourceDetailsPending) return;
     if (selectedPrinters.length > 0) {
       defaultPrinterOffered.current = true;
       return;
@@ -961,6 +1045,7 @@ export function PrintModal({
   // compute one at dispatch, which it already does per plate; a union mapping
   // would be used verbatim and could feed a slot from the wrong tray.
   const getMappingForPrinter = (printerId: number, plateId: number | null): number[] | undefined => {
+    if (nativeSource) return undefined;
     if (isMultiPlateSelection) {
       // Fanning several plates across several printers would be a mapping per
       // plate *per printer*; those items go out without one and the scheduler
@@ -1056,14 +1141,85 @@ export function PrintModal({
     options?: { skipFilamentCheck?: boolean; acknowledgedPrinters?: number[] },
   ) => {
     e?.preventDefault();
+    if (nativeSource && !nativeSelectionValid) {
+      showToast(t('printers.anycubic.queueSelectionRequired'), 'error');
+      return;
+    }
 
     if (billingEnabled && selectedCostCenter == null) {
       showToast(t('printModal.noPrintableCostCenters'), 'error');
       return;
     }
 
+    if (isNativeQueue && nativeRequirements && effectivePrinterId) {
+      // Validate every file before creating the first queue row. Synthetic
+      // display tool ids are rebound to each file's original sparse T indices.
+      const prepared = candidates.map(file => {
+        const requirements = nativeRequirementsByFile.get(file.id);
+        return {
+          file,
+          options: requirements ? nativeOptionsForFile(
+            nativePrintOptions(anycubicOptions, printerStatus?.anycubic_controls?.print_options ?? []),
+            nativeRequirements,
+            requirements,
+          ) : undefined,
+        };
+      });
+      if (prepared.some(item => !item.options)) {
+        showToast(t('printers.anycubic.queueFilesMapping'), 'error');
+        return;
+      }
+      setIsSubmitting(true);
+      setSubmitProgress({ current: 0, total: prepared.length });
+      const completed = new Set<number>();
+      let failureMessage: string | null = null;
+      for (const { file, options: fileOptions } of prepared) {
+        try {
+          await api.addToQueue({
+            ...nativeQueueOptions,
+            anycubic_options: fileOptions,
+            library_file_id: file.id,
+            printer_id: effectivePrinterId,
+            target_model: null,
+            target_location: null,
+            project_id: projectId ?? undefined,
+            quantity: quantity > 1 ? quantity : undefined,
+            manual_start: needsReview || (scheduleOptions.scheduleType === 'queue' && scheduleOptions.requireManualStart),
+            require_previous_success: scheduleOptions.requirePreviousSuccess,
+            scheduled_time: scheduleOptions.scheduleType === 'scheduled' && scheduleOptions.scheduledTime
+              ? new Date(scheduleOptions.scheduledTime).toISOString()
+              : undefined,
+            ...(scheduleOptions.scheduleType === 'asap'
+              ? { insert_at_top: true, insert_position: nativeAsapInserted.current + 1 }
+              : {}),
+          });
+          completed.add(file.id);
+          if (scheduleOptions.scheduleType === 'asap') nativeAsapInserted.current += quantity;
+          setSubmitProgress({ current: completed.size, total: prepared.length });
+        } catch (error) {
+          failureMessage = `${file.filename}: ${error instanceof Error ? error.message : String(error)}`;
+          break;
+        }
+      }
+      if (completed.size) {
+        setNativeQueuedCount(count => count + completed.size);
+        setCandidates(files => files.filter(file => !completed.has(file.id)));
+        queryClient.invalidateQueries({ queryKey: ['queue'] });
+      }
+      setIsSubmitting(false);
+      if (failureMessage) {
+        showToast(failureMessage, 'error');
+      } else {
+        showToast(t('queue.itemsQueued', { count: completed.size }), 'success');
+        onSuccess?.();
+        onClose();
+      }
+      return;
+    }
+
     if (
       !options?.skipFilamentCheck &&
+      !nativeSource &&
       !settings?.disable_filament_warnings &&
       !isEditing &&
       assignmentMode === 'printer'
@@ -1437,6 +1593,7 @@ export function PrintModal({
       estimated_cost: billingEnabled && selectedCostCenterId != null ? plateEstimatedCost : undefined,
       batch_id: autoBatchId ?? undefined,
       cleanup_library_after_dispatch: cleanupLibraryAfterDispatch,
+      ...nativeQueueOptions,
       };
     };
 
@@ -1466,6 +1623,7 @@ export function PrintModal({
                 ? new Date(scheduleOptions.scheduledTime).toISOString()
                 : null,
               ...printOptions,
+              ...nativeQueueOptions,
               cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
               estimated_cost: billingEnabled && selectedCostCenterId != null ? estimatedCost : undefined,
             };
@@ -1536,6 +1694,7 @@ export function PrintModal({
                   ? new Date(scheduleOptions.scheduledTime).toISOString()
                   : null,
                 ...printOptions,
+                ...nativeQueueOptions,
                 cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
                 estimated_cost: billingEnabled && selectedCostCenterId != null
                   ? (plateId != null && isMultiPlateSelection
@@ -1614,6 +1773,7 @@ export function PrintModal({
 
   const canSubmit = useMemo(() => {
     if (isPending) return false;
+    if (nativeSource && (sourceDetailsPending || !nativeSelectionValid)) return false;
 
     // Billing requires a server-authorized cost center. Wait for the query and
     // keep submission disabled when the user has no printable center, rather
@@ -1659,6 +1819,9 @@ export function PrintModal({
     billingEnabled,
     loadingCostCenters,
     selectedCostCenter,
+    nativeSource,
+    nativeSelectionValid,
+    sourceDetailsPending,
   ]);
 
   // Quantity only applies for single-printer or model-based assignment (not multi-printer)
@@ -1730,7 +1893,7 @@ export function PrintModal({
   // - Single printer selected
   // - For archives: plate is selected (for multi-plate) or not required (single-plate)
   // - For library files: always show (no plate selection)
-  const showFilamentMapping = effectivePrinterId && selectedPlates.size <= 1 && (
+  const showFilamentMapping = !nativeSource && effectivePrinterId && selectedPlates.size <= 1 && (
     isLibraryFile || (isMultiPlate ? selectedPlate !== null : true)
   );
 
@@ -1745,7 +1908,7 @@ export function PrintModal({
   // plate *per printer*, so those items ship without a mapping and the scheduler
   // computes one per plate when it picks the printer.
   const showPerPlateFilamentMapping =
-    !!effectivePrinterId && isMultiPlateSelection && selectedPrinters.length === 1;
+    !nativeSource && !!effectivePrinterId && isMultiPlateSelection && selectedPrinters.length === 1;
 
   // Model mode has no printer and so no trays to map onto; what it offers instead
   // is the filament each slot must be printed in, which the scheduler matches
@@ -1754,6 +1917,7 @@ export function PrintModal({
   // Cross-model items have no targetModel by design — their candidates each
   // carry their own — so gate on having somewhere to source choices from.
   const showFilamentOverride =
+    !nativeSource &&
     assignmentMode === 'model'
     && (isCrossModel || !!targetModel)
     && !!effectiveAvailableFilaments
@@ -1775,6 +1939,18 @@ export function PrintModal({
     if (!printers || selectedPrinters.length === 0) return false;
     return selectedPrinters.some(id => printers.find(p => p.id === id)?.nozzle_count === 2);
   }, [assignmentMode, targetModel, printers, selectedPrinters, DUAL_NOZZLE_MODELS]);
+  if (nativeArchive || nativeSourceUnavailable) {
+    return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <Card className="w-full max-w-lg" onClick={event => event.stopPropagation()}>
+        <CardContent className="space-y-4 p-5">
+          <h2 className="text-lg font-semibold text-white">{t('common.print')}</h2>
+          <p className="break-words text-sm text-bambu-gray">{archiveName}</p>
+          <p role="alert" className="text-sm text-amber-700 dark:text-amber-300">{t('printers.anycubic.archiveRequeueHelp')}</p>
+          <Button type="button" variant="secondary" onClick={onClose}>{t('common.close')}</Button>
+        </CardContent>
+      </Card>
+    </div>;
+  }
 
   return (
     <div
@@ -1882,6 +2058,22 @@ export function PrintModal({
               />
             )}
 
+            {isNativeQueue && (
+              <>
+                <VariantCandidates
+                  queueAll
+                  candidates={candidates}
+                  onReorder={setCandidates}
+                  plateByFile={{}}
+                  onPlateChange={() => {}}
+                  readOnly={isSubmitting}
+                />
+                {nativeQueuedCount > 0 && <p role="status" className="mb-3 text-sm text-bambu-gray">
+                  {t('printers.anycubic.queueFilesPartial', { queued: nativeQueuedCount, total: nativeQueueFiles?.length ?? 0 })}
+                </p>}
+              </>
+            )}
+
             {hasEditingVariants && (
               <VariantCandidates
                 candidates={editingVariants}
@@ -1893,14 +2085,14 @@ export function PrintModal({
               />
             )}
 
-            {/* Printer selection with per-printer mapping — hidden when printer is pre-selected via props */}
-            {!isCrossModel && !hasEditingVariants && !initialSelectedPrinterIds?.length && (
+            {/* Preselection sets the initial target; keep its identity and status visible. */}
+            {!isCrossModel && !hasEditingVariants && (
               <PrinterSelector
                 printers={printers || []}
                 selectedPrinterIds={selectedPrinters}
                 onMultiSelect={setSelectedPrinters}
-                isLoading={loadingPrinters}
-                allowMultiple={true}
+                isLoading={loadingPrinters || sourceDetailsPending}
+                allowMultiple={!nativeSource}
                 showInactive={mode === 'edit-queue-item'}
                 disableBusy={false}
                 printerMappingResults={multiPrinterMapping.printerResults}
@@ -1913,9 +2105,9 @@ export function PrintModal({
                 onAutoConfigurePrinter={multiPrinterMapping.autoConfigurePrinter}
                 onUpdatePrinterConfig={multiPrinterMapping.updatePrinterConfig}
                 assignmentMode={assignmentMode}
-                onAssignmentModeChange={setAssignmentMode}
+                onAssignmentModeChange={nativeSource ? undefined : setAssignmentMode}
                 targetModel={targetModel}
-                onTargetModelChange={setTargetModel}
+                onTargetModelChange={nativeSource ? undefined : setTargetModel}
                 targetLocation={targetLocation}
                 onTargetLocationChange={setTargetLocation}
                 slicedForModel={slicedForModel}
@@ -2071,7 +2263,7 @@ export function PrintModal({
             })}
 
             {/* Print options */}
-            {(mode === 'create' || effectivePrinterCount > 0 || (assignmentMode === 'model' && targetModel)) && (
+            {!nativeSource && (mode === 'create' || effectivePrinterCount > 0 || (assignmentMode === 'model' && targetModel)) && (
               <PrintOptionsPanel
                 options={printOptions}
                 onChange={setPrintOptions}
@@ -2079,6 +2271,10 @@ export function PrintModal({
                 showDualNozzleOptions={showDualNozzleOptions}
               />
             )}
+            {nativeSource && nativeRequirements && <AnycubicPrintSettings options={anycubicOptions} onChange={setAnycubicOptions} requirements={nativeRequirements} status={printerStatus} defaultExpanded={!!initialSelectedPrinterIds?.length} requireAce={isNativeQueue && nativeFileQueries.some(query => (query.data?.tools.length ?? 0) > 1)} />}
+            {nativeBlockingReason && <p role={nativePendingFile ? 'status' : 'alert'} className="mb-4 text-sm text-amber-400">{nativeBlockingReason}</p>}
+            {nativeSource && !isNativeQueue && !nativeRequirements && <p role={nativeRequirementsFailed ? 'alert' : 'status'} className="mb-4 text-sm text-bambu-gray">{t(nativeRequirementsFailed ? 'printers.anycubic.printFileUnreadable' : 'printers.anycubic.readingPrintFile')}</p>}
+            {nativeSource && (!isNativeQueue || !!nativeRequirements) && !loadingPrinters && !sourceDetailsPending && !printers?.length && <p role="alert" className="mb-4 text-sm text-amber-400">{t('printers.anycubic.noMatchingPrinter', { model: slicedForModel ?? t('common.unknown') })}</p>}
 
             {billingEnabled && printableCostCenters.length > 0 && (
               <CostCenterSelect
@@ -2132,14 +2328,15 @@ export function PrintModal({
               canControlPrinter={hasPermission('printers:control')}
               showStagger={!isEditing && assignmentMode === 'printer' && selectedPrinters.length > 1}
               printerCount={selectedPrinters.length}
-              hasGcodeSnippets={hasGcodeSnippets(settings)}
+              hasGcodeSnippets={!nativeSource && hasGcodeSnippets(settings)}
+              showAutoOff={!nativeSource}
               needsReview={needsReview}
             />
 
             {/* Outcome prompt (#1898) sits outside the collapsed Print Options
                 panel so it is discoverable; it edits the same printOptions
                 field as the row inside the panel. */}
-            <button
+            {!nativeSource && <button
               type="button"
               aria-pressed={printOptions.confirm_outcome}
               title={t('printModal.askForOutcomeTitle')}
@@ -2152,7 +2349,7 @@ export function PrintModal({
             >
               <ThumbsUp className="w-4 h-4" />
               {t('printModal.askForOutcome')}
-            </button>
+            </button>}
 
             {/* Error message */}
             {updateQueueMutation.isError && (
@@ -2201,7 +2398,11 @@ export function PrintModal({
                 ) : (
                   <>
                     <SubmitIcon className="w-4 h-4" />
-                    {modalConfig.submitText}
+                    {isNativeQueue
+                      ? nativeQueuedCount > 0
+                        ? t('printers.anycubic.queueFilesRetry')
+                        : t('printers.anycubic.queueFilesAction', { count: candidates.length })
+                      : modalConfig.submitText}
                   </>
                 )}
               </Button>

@@ -28,6 +28,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from backend.app.api.routes import (
     ams_history,
     announcements,
+    anycubic_files,
     api_keys,
     archive_purge,
     archives,
@@ -106,6 +107,7 @@ from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.services import kprofile_drift, pause_eta, print_dispatch_context, slot_unlink_grace
 from backend.app.services.ams_assignment_lock import get_ams_assignment_lock
+from backend.app.services.anycubic import AnycubicMQTTClient
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
 from backend.app.services.archive_cost_estimate import (
     schedule_archive_cost_estimate as _schedule_archive_cost_estimate,
@@ -1965,6 +1967,28 @@ def _progress_milestone_to_notify(printer_id: int, state: PrinterState) -> int |
 
 async def on_printer_status_change(printer_id: int, state: PrinterState):
     """Handle printer status changes - broadcast via WebSocket."""
+    client = printer_manager.get_client(printer_id)
+    if getattr(client, "printer_type", "bambu") == "anycubic":
+        # Native queue correlation must see short terminal reports before
+        # firmware returns to IDLE. Keep Bambu archive/AMS automation separate.
+        from backend.app.services.anycubic.queue_dispatch import observe_status
+
+        try:
+            await observe_status(printer_id, state)
+        except Exception:
+            logging.getLogger(__name__).exception("Anycubic queue status update failed for printer %s", printer_id)
+        from backend.app.services.anycubic.spool_matching import observe_status as match_native_spools
+
+        try:
+            await match_native_spools(printer_id)
+        except Exception:
+            logging.getLogger(__name__).exception("Anycubic RFID spool matching failed for printer %s", printer_id)
+        await ws_manager.send_printer_status(
+            printer_id,
+            printer_state_to_dict(state, printer_id, printer_manager.get_model(printer_id)),
+        )
+        return
+
     try:
         notify_live_activities.observe(printer_id, state)
     except Exception:
@@ -7554,7 +7578,7 @@ async def prime_kprofile_table(printer_id: int) -> int:
     """
     client = printer_manager.get_client(printer_id)
     state = printer_manager.get_status(printer_id)
-    if client is None or state is None or not state.connected:
+    if client is None or isinstance(client, AnycubicMQTTClient) or state is None or not state.connected:
         return 0
 
     # Deduplicated, order preserved: a dual-nozzle printer with two 0.4s should
@@ -11064,6 +11088,10 @@ async def _recover_dead_printer_sessions() -> int:
 
     for printer_id, client in list(printer_manager._clients.items()):
         try:
+            if getattr(client, "printer_type", "bambu") == "anycubic":
+                # Its LAN client owns reconnects on its own transport/port.
+                _connection_watchdog_last_attempt.pop(printer_id, None)
+                continue
             if client.state.connected:
                 _connection_watchdog_last_attempt.pop(printer_id, None)
                 continue
@@ -12490,6 +12518,7 @@ app.include_router(settings_routes.router, prefix=app_settings.api_prefix)
 app.include_router(overlay_branding.router, prefix=app_settings.api_prefix)
 app.include_router(cloud.router, prefix=app_settings.api_prefix)
 app.include_router(orca_cloud.router, prefix=app_settings.api_prefix)
+app.include_router(anycubic_files.router, prefix=app_settings.api_prefix)
 app.include_router(local_presets.router, prefix=app_settings.api_prefix)
 app.include_router(smart_plugs.router, prefix=app_settings.api_prefix)
 app.include_router(ha_sensors.router, prefix=app_settings.api_prefix)
