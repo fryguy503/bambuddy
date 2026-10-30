@@ -2182,6 +2182,29 @@ async def _migrate_printer_plugin_identity(conn) -> None:
         )
 
 
+async def _migrate_printer_plugin_options(conn) -> None:
+    """Retain a reviewed legacy certificate pin on the first options upgrade."""
+    import re
+
+    from sqlalchemy import JSON, bindparam, text
+
+    options_column_existed = await _table_has_column(conn, "printers", "plugin_options")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN plugin_options JSON")
+    if options_column_existed or not await _table_has_column(conn, "printers", "tls_fingerprint"):
+        return
+    statement = text(
+        "UPDATE printers SET plugin_options = :options WHERE id = :id AND plugin_options IS NULL"
+    ).bindparams(bindparam("options", type_=JSON))
+    async with conn.begin_nested():
+        result = await conn.execute(text("SELECT id, tls_fingerprint FROM printers WHERE tls_fingerprint IS NOT NULL"))
+        for row in result.all():
+            fingerprint = row.tls_fingerprint
+            if isinstance(fingerprint, str) and re.fullmatch(r"[0-9a-fA-F]{64}", fingerprint.strip()):
+                await conn.execute(
+                    statement, {"id": row.id, "options": {"tls_fingerprint": fingerprint.strip().lower()}}
+                )
+
+
 async def _sqlite_table_exists(conn, name: str) -> bool:
     from sqlalchemy import text
 
@@ -5880,7 +5903,7 @@ async def _run_migrations(conn):
     # The default covers databases without provider metadata and integrations
     # that insert a printer without specifying its provider.
     await _migrate_printer_plugin_identity(conn)
-    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN plugin_options JSON")
+    await _migrate_printer_plugin_options(conn)
     for column in ("tool_ids", "material_bindings", "job_options", "sdk_job"):
         await _safe_execute(conn, f"ALTER TABLE print_queue ADD COLUMN {column} JSON")
     if not is_sqlite():
