@@ -2160,6 +2160,28 @@ async def _table_has_column(conn, table: str, column: str) -> bool:
     return result.first() is not None
 
 
+async def _migrate_printer_plugin_identity(conn) -> None:
+    """Preserve legacy provider identities only when adding the plugin column.
+
+    An unavailable provider must remain unavailable rather than acquiring the
+    included driver's connection behavior. Once plugin_id exists it is the
+    authoritative identity, even when the historical column remains present.
+    """
+    from sqlalchemy import text
+
+    plugin_column_existed = await _table_has_column(conn, "printers", "plugin_id")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN plugin_id VARCHAR(64) NOT NULL DEFAULT 'bambu'")
+    if plugin_column_existed or not await _table_has_column(conn, "printers", "printer_type"):
+        return
+    async with conn.begin_nested():
+        await conn.execute(
+            text(
+                "UPDATE printers SET plugin_id = TRIM(printer_type) "
+                "WHERE printer_type IS NOT NULL AND TRIM(printer_type) <> '' AND plugin_id = 'bambu'"
+            )
+        )
+
+
 async def _sqlite_table_exists(conn, name: str) -> bool:
     from sqlalchemy import text
 
@@ -5854,10 +5876,10 @@ async def _run_migrations(conn):
     await _safe_execute(conn, f"ALTER TABLE print_log_entries ADD COLUMN wear_cost {float_type}")
     await _safe_execute(conn, f"ALTER TABLE print_archives ADD COLUMN wear_cost {float_type}")
 
-    # Printer plugins: preserve existing printers as the bundled Bambu provider.
-    # Same DDL on SQLite and PostgreSQL; the server default also covers older
-    # integrations that insert a printer without specifying its provider.
-    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN plugin_id VARCHAR(64) NOT NULL DEFAULT 'bambu'")
+    # Printer plugins: retain historical provider identities on first upgrade.
+    # The default covers databases without provider metadata and integrations
+    # that insert a printer without specifying its provider.
+    await _migrate_printer_plugin_identity(conn)
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN plugin_options JSON")
     for column in ("tool_ids", "material_bindings", "job_options", "sdk_job"):
         await _safe_execute(conn, f"ALTER TABLE print_queue ADD COLUMN {column} JSON")

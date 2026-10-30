@@ -4,19 +4,21 @@ name: bambuddy-temp
 
 services:
   bambuddy:
-    image: bambuddy:anycubic-https-testing
+    image: ${BAMBUDDY_IMAGE:-bambuddy:printer-modularization-https}
     build: .
     pull_policy: never
     restart: "no"
     stop_grace_period: 30s
     ports:
-      - "${BAMBUDDY_BIND_ADDRESS:-127.0.0.1}:${BAMBUDDY_TEST_PORT:-18443}:8000/tcp"
+      - "${BAMBUDDY_BIND_ADDRESS:?Set BAMBUDDY_BIND_ADDRESS to the Docker host LAN address}:${BAMBUDDY_TEST_PORT:-18443}:8000/tcp"
     environment:
       TZ: ${TZ:-America/New_York}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       HOST: 0.0.0.0
       PORT: "8000"
       BAMBUDDY_HTTPS: "true"
-      BAMBUDDY_HTTPS_HOSTNAMES: ${BAMBUDDY_HTTPS_HOSTNAMES:-${BAMBUDDY_BIND_ADDRESS:-127.0.0.1}}
+      BAMBUDDY_HTTPS_HOSTNAMES: ${BAMBUDDY_HTTPS_HOSTNAMES:-${BAMBUDDY_BIND_ADDRESS}}
     volumes:
       - bambuddy_data:/app/data
       - bambuddy_logs:/app/logs

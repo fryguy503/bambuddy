@@ -4,6 +4,7 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
+image="${BAMBUDDY_IMAGE:-bambuddy:printer-modularization-https}"
 
 # Keep one authoritative Dockerfile. Only the two dependency-cache mounts need
 # removing for Docker's classic builder; dependencies and runtime stay the same.
@@ -27,4 +28,4 @@ if grep -Eq '^RUN --' "$dockerfile"; then
 fi
 
 DOCKER_BUILDKIT=0 docker build --force-rm --file "$dockerfile" \
-    --tag bambuddy:anycubic-https-testing .
+    --tag "$image" .

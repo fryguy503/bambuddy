@@ -4,7 +4,7 @@ Bambuddy's Docker image serves its web UI, API and WebSockets over HTTPS on
 port **8000** by default. First startup generates a persistent self-signed
 certificate; no certificate setup is required to start the service.
 
-For a fresh NAS installation, use the [Synology deployment guide](synology.md).
+For an existing NAS installation, use the [Synology upgrade and rollback guide](synology.md).
 
 ## Default generated certificate
 
