@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-SDK_API_VERSION = "2.0.0"
+SDK_API_VERSION = "2.1.0"
 ResourceId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*$")]
 OperationId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_.:/-]*$")]
 JobId = Annotated[str, Field(min_length=1, max_length=256)]
@@ -185,7 +185,9 @@ class ResourceState(SDKModel):
 
 
 class JobProgress(SDKModel):
-    job_id: JobId
+    # A printer may report an active job before exposing a stable native ID.
+    # Such observations are display-only; lifecycle events require an ID.
+    job_id: JobId | None = None
     state: str
     name: str | None = None
     artifact_uri: str | None = None
