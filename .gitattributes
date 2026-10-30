@@ -2,5 +2,9 @@
 # regardless of the user's core.autocrlf setting.
 *.bat text eol=crlf
 
+# Printer package checksums must match the same text bytes on every platform.
+/backend/app/printers/bambu/**/*.py text eol=lf
+/backend/app/printers/bambu/**/*.json text eol=lf
+
 # The Synology build helper runs directly in DSM's Linux shell.
 deploy/build-synology.sh text eol=lf

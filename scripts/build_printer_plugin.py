@@ -18,6 +18,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+def canonical_payload_bytes(path: Path) -> bytes:
+    """Package text with LF endings regardless of checkout or release host."""
+    content = path.read_bytes()
+    if path.suffix.lower() in {".py", ".json"}:
+        return content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return content
+
+
 def build(source: Path, output: Path):
     from backend.app.printers.contracts import PrinterConfig
     from backend.app.printers.sdk import validate_device, validate_manifest, validate_plugin_contract
@@ -46,7 +54,8 @@ def build(source: Path, output: Path):
     )
     if any(path.is_symlink() for path in files):
         raise ValueError("Plugin payload may not contain symbolic links")
-    inventory = {path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
+    payload = {path.relative_to(source).as_posix(): canonical_payload_bytes(path) for path in files}
+    inventory = {name: hashlib.sha256(content).hexdigest() for name, content in payload.items()}
     data = plugin.sdk_manifest().model_dump(mode="json")
     operation_catalog = {}
     templates = []
@@ -87,8 +96,8 @@ def build(source: Path, output: Path):
             archive.writestr(info, content)
 
         write("manifest.json", encoded)
-        for path in files:
-            write("payload/" + path.relative_to(source).as_posix(), path.read_bytes())
+        for name, content in payload.items():
+            write("payload/" + name, content)
     return manifest
 
 
