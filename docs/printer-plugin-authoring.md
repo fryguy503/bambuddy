@@ -147,6 +147,13 @@ agree with that terminal status. If no snapshot accompanies a job event, core
 updates the normalized job view while retaining prior resource telemetry;
 unknown resource values remain unknown.
 
+SDK 2.1 adds display-only job observations: `DeviceSnapshot.job` may contain a
+`JobProgress` with `job_id` omitted or `null` when the printer exposes no stable
+job identity. Do not invent an ID for these observations. Plugins using this
+capability must declare `requires_api: ">=2.1.0,<3.0.0"`; older hosts reject that
+requirement before importing the package. Explicit `job.*` lifecycle events still
+require a stable, nonempty job ID, as does every `JobRequest` submitted for dispatch.
+
 For example, after updating its own normalized state, a six-tool driver can
 publish its start without constructing a Bambu wire message:
 

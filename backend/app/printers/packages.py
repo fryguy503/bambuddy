@@ -28,6 +28,7 @@ from backend.app.core.config import APP_VERSION
 from backend.app.core.permissions import Permission
 from backend.app.printers.contracts import PrinterPlugin, PrinterPluginError
 from backend.app.printers.sdk import (
+    SDK_API_VERSION,
     PluginManifest,
     check_manifest_compatibility,
     manifest_permissions,
@@ -39,7 +40,7 @@ MAX_EXPANDED_BYTES = 128 * 1024 * 1024
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_PACKAGE_FILES = 2048
 MAX_MANIFEST_BYTES = 512 * 1024
-SUPPORTED_APIS = ("1.0.0", "2.0.0")
+SUPPORTED_APIS = ("1.0.0", SDK_API_VERSION)
 _NAMESPACE = "bambuddy_printer_plugins"
 _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 

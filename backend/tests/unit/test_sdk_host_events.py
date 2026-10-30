@@ -3,10 +3,18 @@
 from unittest.mock import Mock
 
 import pytest
+from pydantic import ValidationError
 
 from backend.app.printers.contracts import PrinterConfig
-from backend.app.printers.sdk import DeviceEvent, JobArtifact, JobEventData, JobProgress, SDKValidationError
-from backend.app.printers.sdk.host import HostEventBridge, HostPrinterState, adapt_callbacks
+from backend.app.printers.sdk import (
+    DeviceEvent,
+    JobArtifact,
+    JobEventData,
+    JobProgress,
+    SDKValidationError,
+    validate_snapshot,
+)
+from backend.app.printers.sdk.host import HostEventBridge, HostPrinterState, adapt_callbacks, state_for_host
 from examples.printer_plugins.reference.payload.plugin import ReferencePlugin
 
 
@@ -98,3 +106,81 @@ def test_event_optin_requires_an_explicit_parameter_and_filters_unsupported_call
             return super().create_connection(config, **callbacks)
 
     assert "on_event" not in adapt_callbacks(bridge.config, LegacyCallbacks(), callbacks)
+
+
+def test_anonymous_snapshot_projects_live_job_without_inventing_an_archive_identity():
+    bridge, callbacks, connection = case()
+    snapshot = connection.state.model_copy(deep=True)
+    snapshot.connected = True
+    snapshot.status = "PAUSE"
+    snapshot.job = JobProgress(
+        state="paused",
+        fraction=0.375,
+        remaining_seconds=600,
+        layer=15,
+        total_layers=40,
+        active_tool_ids=["tool:5"],
+    )
+    validate_snapshot(connection.descriptor, snapshot)
+    assert bridge.emit(
+        DeviceEvent(
+            device_id=snapshot.device_id,
+            sequence=1,
+            event="device.snapshot",
+            data=snapshot.model_dump(mode="json"),
+        )
+    )
+    state = callbacks["on_state_change"].call_args.args[0]
+    assert state.state == "PAUSE"
+    assert state.subtask_id is None and state.current_print is None
+    assert state.progress == 37.5 and state.remaining_time == 10
+    assert (state.layer_num, state.total_layers) == (15, 40)
+    assert state.status_name is None
+    callbacks["on_print_start"].assert_not_called()
+    callbacks["on_print_complete"].assert_not_called()
+
+
+@pytest.mark.parametrize("event", ["started", "progress", "completed", "failed", "cancelled"])
+@pytest.mark.parametrize("job_id", [None, "   "])
+def test_anonymous_job_lifecycle_events_fail_before_any_host_callback(event, job_id):
+    bridge, callbacks, connection = case()
+    job = JobProgress(job_id=job_id, state=event)
+    with pytest.raises(ValidationError, match="stable nonempty job ID"):
+        JobEventData(job=job)
+    with pytest.raises(ValidationError, match="stable nonempty job ID"):
+        bridge.emit(
+            DeviceEvent(
+                device_id=connection.descriptor.device_id,
+                sequence=1,
+                event=f"job.{event}",
+                data={"job": job.model_dump(mode="json")},
+            )
+        )
+    for callback in callbacks.values():
+        callback.assert_not_called()
+    assert bridge.latest_snapshot is None
+
+
+def test_snapshot_job_identity_must_agree_when_the_envelope_declares_an_id():
+    _bridge, _callbacks, connection = case()
+    snapshot = connection.state.model_copy(deep=True)
+    snapshot.job_id = "stable-native-id"
+    snapshot.job = JobProgress(state="paused")
+    with pytest.raises(SDKValidationError, match="different jobs"):
+        validate_snapshot(connection.descriptor, snapshot)
+    snapshot.job.job_id = "other-native-id"
+    with pytest.raises(SDKValidationError, match="different jobs"):
+        validate_snapshot(connection.descriptor, snapshot)
+    snapshot.job.job_id = snapshot.job_id
+    validate_snapshot(connection.descriptor, snapshot)
+
+
+@pytest.mark.parametrize(
+    "phase, expected", [("PAUSE", None), ("paused", None), ("Waiting for operator", "Waiting for operator")]
+)
+def test_host_status_name_only_overrides_display_for_a_specific_job_phase(phase, expected):
+    bridge, _callbacks, connection = case()
+    snapshot = connection.state.model_copy(deep=True)
+    snapshot.job = JobProgress(state="paused", phase=phase)
+    state = state_for_host(bridge.config, bridge.plugin, snapshot)
+    assert state.status_name == expected

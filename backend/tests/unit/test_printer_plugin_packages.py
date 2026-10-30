@@ -21,6 +21,7 @@ def package_bytes(
     plugin_id="example",
     version="1.0.0",
     publisher="example-org",
+    api_version=1,
     marker=None,
     broken=False,
     change="",
@@ -37,7 +38,7 @@ def package_bytes(
         f"    id = {plugin_id!r}\n"
         "    name = 'Example package'\n"
         f"    version = {version!r}\n"
-        "    api_version = 1\n"
+        f"    api_version = {api_version!r}\n"
         "    def create_connection(self, config, **callbacks):\n"
         "        return SimpleNamespace(state=PrinterState(), callbacks=callbacks)\n"
     )
@@ -51,8 +52,8 @@ def package_bytes(
         "plugin_id": plugin_id,
         "name": "Example package",
         "version": version,
-        "api_version": 1,
-        "requires_api": ">=1,<2",
+        "api_version": api_version,
+        "requires_api": f">={api_version},<{api_version + 1}",
         "requires_core": ">=1.0",
         "requires_python": ">=3.11",
         "entrypoint": "plugin:Example",
@@ -160,6 +161,26 @@ def test_incompatible_packages_never_execute(managed, tmp_path, overrides):
     with pytest.raises(PluginPackageError, match="manifest"):
         managed.stage(package_bytes(marker=marker, manifest_overrides=overrides))
     assert not marker.exists()
+
+
+def test_sdk_minor_requirement_is_checked_during_staging_before_import(managed, tmp_path, monkeypatch):
+    from backend.app.printers import packages
+    from backend.app.printers.sdk import SDK_API_VERSION
+
+    supported = packages.SUPPORTED_APIS
+    assert supported == ("1.0.0", SDK_API_VERSION)
+    marker = tmp_path / "new-sdk-package-imported.txt"
+    content = package_bytes(api_version=2, marker=marker, manifest_overrides={"requires_api": ">=2.1.0,<3.0.0"})
+    monkeypatch.setattr(packages, "SUPPORTED_APIS", ("1.0.0", "2.0.0"))
+    with pytest.raises(PluginPackageError, match="unsupported printer API"):
+        managed.stage(content)
+    assert not marker.exists()
+
+    monkeypatch.setattr(packages, "SUPPORTED_APIS", supported)
+    managed.stage(content)
+    assert not marker.exists()
+    # Compatible existing v2 providers do not need a package update.
+    inspect_package(package_bytes(api_version=2, manifest_overrides={"requires_api": ">=2.0.0,<3.0.0"}))
 
 
 @pytest.mark.parametrize("invalid_statement", ["return 1", "break", "await task()"])

@@ -229,6 +229,8 @@ def validate_snapshot(device: DeviceDescriptor, value: DeviceSnapshot | Mapping)
     snapshot = value if isinstance(value, DeviceSnapshot) else DeviceSnapshot.model_validate(value)
     if snapshot.device_id != device.device_id or snapshot.descriptor_revision != device.revision:
         raise SDKValidationError("Snapshot identity or descriptor revision does not match the device")
+    if snapshot.job is not None and snapshot.job_id is not None and snapshot.job_id != snapshot.job.job_id:
+        raise SDKValidationError("Snapshot and job identify different jobs")
     for state in snapshot.resources:
         resource = device.resource(state.resource_id)
         for key, telemetry in state.properties.items():
