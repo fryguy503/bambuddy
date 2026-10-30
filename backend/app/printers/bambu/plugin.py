@@ -190,7 +190,7 @@ _CAMERA_OPERATIONS = frozenset(
 class BambuPrinterPlugin(PrinterPlugin):
     id = "bambu"
     name = "Bambu Lab"
-    version = "1.0.0"
+    version = "1.0.1"
     api_version = 2
     publisher_id = "bambuddy"
     bundled = True

@@ -8,8 +8,9 @@ needs to inspect a vendor's raw protocol payload to obtain them.
 from __future__ import annotations
 
 from backend.app.printers.api import config_for_id
+from backend.app.printers.contracts import PrinterPlugin
 from backend.app.printers.models import _provider
-from backend.app.printers.registry import get_plugin
+from backend.app.printers.registry import get_plugin, plugin_for
 
 
 def printer_telemetry(
@@ -17,15 +18,24 @@ def printer_telemetry(
 ) -> dict:
     if state is None:
         return {}
+    configured = config_for_id(printer_id)
     if plugin_id is None:
-        configured = config_for_id(printer_id)
         if configured is not None:
             plugin_id = configured.plugin_id
     if plugin_id is None:
         state_plugin_id = getattr(state, "plugin_id", None)
         if isinstance(state_plugin_id, str) and state_plugin_id:
             plugin_id = state_plugin_id
-    plugin = get_plugin(plugin_id) if plugin_id else _provider(model)
+    origin = getattr(state, "_printer_provider", None)
+    plugin = (
+        origin
+        if isinstance(origin, PrinterPlugin)
+        else plugin_for(configured)
+        if configured is not None
+        else get_plugin(plugin_id)
+        if plugin_id
+        else _provider(model)
+    )
     telemetry = plugin.normalize_telemetry(state)
     return telemetry if isinstance(telemetry, dict) else {}
 
@@ -42,7 +52,8 @@ def loaded_materials(state, *, plugin_id: str | None = None) -> list[dict]:
     state_plugin_id = getattr(state, "plugin_id", None)
     if plugin_id is None and isinstance(state_plugin_id, str) and state_plugin_id:
         plugin_id = state_plugin_id
-    plugin = get_plugin(plugin_id) if plugin_id else _provider(None)
+    origin = getattr(state, "_printer_provider", None)
+    plugin = origin if isinstance(origin, PrinterPlugin) else get_plugin(plugin_id) if plugin_id else _provider(None)
     return plugin.loaded_materials(state)
 
 

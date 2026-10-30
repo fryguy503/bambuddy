@@ -3,8 +3,9 @@
 Printer plugins are versioned Python packages. The application includes the
 initial `bambu` package, and an administrator can install a newer compatible
 Bambu package without replacing Bambuddy or publishing an application release.
-A server restart applies a selected version; updates do not hot-swap code while
-printer connections or requests are running.
+Applying an update immediately refreshes printer data connections. Current
+prints continue, queues do not drain, and no idle period or application restart
+is required. Already accepted work stays attached to its original provider.
 
 The [authoring reference](printer-plugin-authoring.md) describes device resources,
 operation schemas and the SDK. This guide describes package delivery and the
@@ -65,25 +66,24 @@ Printer plugins has its own entry in the Settings menu. You can also open
    it does not import the uploaded code or replace the running plugin.
 2. Review the plugin, version, publisher ID, integrity result and signature
    result. SHA-256 integrity alone does not authenticate a publisher.
-3. Select **Activate after restart** for the staged version. The server checks
-   affected printers and validates all saved `plugin_options` against the new
-   configuration schema before changing the desired version.
-4. Restart the Bambuddy server during an idle period. The running version stays
-   visible until this restart; the application does not restart itself.
-5. Check the loaded version and any startup errors in the management screen.
+3. Select **Apply update**. The server validates saved settings and loads the
+   candidate before changing the selected default.
+4. Watch each printer's connection refresh. Printing and paused printers can
+   refresh immediately; a slow/offline printer does not stop others updating.
+5. Check the versions in use and any per-printer refresh errors. A failed
+   replacement leaves that printer's previous observer available.
 
-Updates are refused while an affected printer is printing or paused, a queue
-dispatch/upload is in flight, firmware is uploading, or an SDK operation receipt
-is accepted/running. A plugin may also refuse deactivation through
-`can_deactivate(config, connection)` for hardware-specific operations such as
-calibration or a tool change.
+A refresh never starts, pauses, stops or resends a print. Existing queue jobs,
+accepted operation receipts and print completion callbacks remain bound to the
+provider instance that owns them, even after the displayed data uses the new
+connection. Older versions stay retained until that work ends. The selected
+default and version pins survive a host restart. A first installation can also
+restore a missing observer without deleting historical queue records.
 
-First activation can restore a missing provider even when its saved queue or
-operation records remain active. This recovery applies only when the provider
-is not loaded and none of its printers has a managed connection. Live print,
-upload and dispatch checks still apply. Activation does not clear queue records
-or replay commands; after restart the restored provider can observe the printers
-and let the host reconcile their state.
+Global provider services have one owner to avoid duplicate background workers
+or listener-port conflicts. Their previous owner stays alive while its existing
+work is retained; this does not delay refreshing printer displays. Disabling or
+removing an unused provider may still report an explicit restart requirement.
 
 Package management requires an actual administrator when authentication is
 enabled. A user granted `settings:update` without administrator status cannot
@@ -188,9 +188,9 @@ Version directories are staged and renamed atomically. A process-safe lock
 serializes management writes; the selection file is replaced atomically. The
 running plugin is not unloaded by a request.
 
-The management API distinguishes the loaded version, desired version, previous
-selection, last successfully loaded version, enabled state and restart-needed
-state. A selected package that fails verification/import/contract validation
+The management API distinguishes the selected default, versions actually in
+use, per-printer refresh status, previous selection and last known good version.
+A candidate that fails verification/import/contract validation
 falls back only to an earlier version of the same plugin. Bambu can also fall
 back to its bundled version. The failed candidate and fallback remain visible
 as a load error and desired/loaded-version mismatch.
@@ -200,7 +200,7 @@ Configured printer identities remain unchanged and the unavailable provider
 fails explicitly.
 
 Select **Rollback** to choose the previous version, or explicitly choose
-`bundled` for Bambu. Rollback also requires an idle provider and validates saved
+`bundled` for Bambu. Rollback refreshes connections immediately and validates saved
 options against the target schema. Package activation/rollback never rewrites
 printer options or deletes fields. Authors must keep schemas backward
 compatible or document an explicit user-controlled configuration transition;
@@ -209,7 +209,7 @@ schema defaults do not silently migrate stored data.
 Disabling or removing a plugin with configured printers is refused. Remove or
 reassign those printer records first. The included Bambu package can be disabled
 when unused, but the application cannot delete its built-in fallback. Unselected
-installed versions may be deleted; selected, loaded and rollback versions are
+installed versions may be deleted; selected, pinned, retained and rollback versions are
 protected. Removing a non-bundled plugin schedules package removal at restart,
 after its old Python modules are no longer running.
 
@@ -225,9 +225,9 @@ routes continue to use normal `printers:read` permission.
 
 | Method and path under `/api/v1/printer-plugins` | Effect |
 | --- | --- |
-| `GET /management` | Loaded/desired versions, installed versions, errors and policy |
+| `GET /management` | Selected default, versions in use, per-printer refreshes, installed versions and errors |
 | `POST /packages` | Multipart `file`, optional `expected_sha256`; validate and stage |
-| `POST /{id}/activate` | JSON `{"version":"1.2.0"}`; select for restart |
+| `POST /{id}/activate` | JSON `{"version":"1.2.0"}`; select and refresh connections immediately |
 | `POST /{id}/rollback` | Optional JSON `{"version":"1.1.0"}`; select prior/explicit version |
 | `POST /{id}/enable` | Re-enable an installed selection for restart |
 | `POST /{id}/disable` | Disable an unused provider for restart |
@@ -240,5 +240,6 @@ Uploads are limited to 64 MiB, 128 MiB expanded, 16 MiB per file and 2,048 archi
 entries. Manifest JSON is limited to 512 KiB. Native extension binaries are not
 installed by the package loader; declare required preinstalled distributions in
 the manifest instead. Validation errors return an explicit failure without
-importing the candidate. Selecting a version returns `restart_required`; it is
-not a claim that the running provider was already replaced.
+importing the candidate. Applying a version imports trusted code after static
+validation, returns `restart_required: false`, and reports each connection's
+refresh separately. Old and new versions can legitimately both be in use.

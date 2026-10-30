@@ -76,6 +76,39 @@ def test_duplicate_lifecycle_and_older_events_do_not_repeat_callbacks_or_revive_
     callbacks["on_print_complete"].assert_called_once()
 
 
+def test_observer_refresh_preserves_lifecycle_deduplication_but_resets_sequence():
+    old, callbacks, old_connection = case()
+    assert old.emit(job_event(old_connection, "job.started", sequence=100))
+    refreshed, _, connection = case()
+    refreshed.callbacks = callbacks
+    refreshed.adopt_lifecycle(old)
+    # A new driver has a connection-local sequence. Reobserving the current
+    # print must not create a second archive or account for another run.
+    assert not refreshed.emit(job_event(connection, "job.started", sequence=1))
+    callbacks["on_print_start"].assert_called_once()
+    assert refreshed.emit(job_event(connection, "job.completed", sequence=2, state="completed"))
+    callbacks["on_print_complete"].assert_called_once()
+    next_observer, _, next_connection = case()
+    next_observer.callbacks = callbacks
+    next_observer.adopt_lifecycle(refreshed)
+    assert not next_observer.emit(job_event(next_connection, "job.completed", sequence=1, state="completed"))
+    callbacks["on_print_complete"].assert_called_once()
+
+
+def test_rollback_does_not_adopt_quarantined_terminal_observation_for_another_owner():
+    original, callbacks, original_connection = case()
+    assert original.emit(job_event(original_connection, "job.started", sequence=100))
+    outgoing, _quarantined_callbacks, outgoing_connection = case()
+    assert outgoing.emit(job_event(outgoing_connection, "job.completed", sequence=1, state="completed"))
+    original.adopt_lifecycle(outgoing, exclude_job_ids={"opaque-job-id"})
+    # The display-only observer saw completion first. Its manager quarantined
+    # that callback because the original observer owns this in-flight job.
+    # Reviving the owner must still deliver its one real completion.
+    assert original.emit(job_event(original_connection, "job.completed", sequence=101, state="completed"))
+    callbacks["on_print_start"].assert_called_once()
+    callbacks["on_print_complete"].assert_called_once()
+
+
 def test_identity_resource_and_snapshot_payloads_fail_before_host_callbacks():
     bridge, callbacks, connection = case()
     event = job_event(connection, "job.started")

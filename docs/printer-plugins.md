@@ -184,7 +184,9 @@ optional transport operations supported by the hardware. This Python entry-point
 mechanism remains available for host-managed distributions. Prefer a versioned
 managed package for administrator installation, independent upgrades and
 rollback. Uploaded packages are inspected without importing them; explicitly
-selected compatible code loads after a server restart. Installed plugins run
+selected compatible code refreshes printer connections immediately without
+stopping their current prints. Older versions remain available for already
+accepted work and its completion callbacks. Installed plugins run
 as trusted application code, not in a sandbox for untrusted scripts.
 
 The registry loads bundled support and installed entry points. Duplicate IDs,

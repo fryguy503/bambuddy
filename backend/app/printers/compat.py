@@ -8,11 +8,12 @@ from importlib import import_module
 
 
 def compatibility_module(plugin_id: str, module: str):
-    from backend.app.printers.registry import current_registry
+    from backend.app.printers.registry import context_provider_for_plugin, current_registry
 
     registry = current_registry()
     registry.load()
-    source = registry.loaded_sources.get(plugin_id)
+    provider = context_provider_for_plugin(plugin_id)
+    source = registry.runtime_for(provider).source if provider is not None else registry.loaded_sources.get(plugin_id)
     if source is None:
         # Deprecated code/type imports remain importable when the included
         # provider is disabled. This does not register or connect a provider;

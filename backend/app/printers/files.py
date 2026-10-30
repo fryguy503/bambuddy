@@ -13,6 +13,7 @@ from backend.app.printers import file_helpers
 from backend.app.printers.api import (
     bind_printer as bind_printer,
     config_for_ip,
+    leased_call,
     plugin_for_ip,
     unbind_printer as unbind_printer,
 )
@@ -30,7 +31,7 @@ from backend.app.printers.file_types import (
     FtpFailureReport as FtpFailureReport,
     UploadCancelled as UploadCancelled,
 )
-from backend.app.printers.registry import get_plugin
+from backend.app.printers.registry import plugin_for
 
 # Application recovery-download budget, shared across file providers.
 RECOVERY_DOWNLOAD_MAX_TIMEOUT = 900.0
@@ -38,10 +39,10 @@ RECOVERY_DOWNLOAD_MAX_TIMEOUT = 900.0
 
 def create_file_client(printer: Any, **options: Any):
     config = PrinterConfig.from_printer(printer)
-    return get_plugin(config.plugin_id).create_file_client(config, **options)
+    return plugin_for(config).create_file_client(config, **options)
 
 
-def _dispatch(operation: str, *args: Any, **kwargs: Any):
+def _dispatch(operation: str, *args: Any, **kwargs: Any) -> Any:
     plugin_id = kwargs.pop("plugin_id", None)
     printer_id = kwargs.pop("printer_id", None)
     ip_address = args[0] if args else kwargs.get("ip_address")
@@ -54,7 +55,7 @@ def _dispatch(operation: str, *args: Any, **kwargs: Any):
         raise PrinterPluginError("Addressless transport has no configured printer binding")
     plugin = plugin_for_ip(ip_address, plugin_id=plugin_id, printer_id=printer_id)
     if config is not None:
-        return plugin.file_operation_for(config, operation, *args, **kwargs)
+        return leased_call(config, plugin.file_operation_for, config, operation, *args, **kwargs)
     return plugin.file_operation(operation, *args, **kwargs)
 
 
@@ -102,7 +103,7 @@ async def get_storage_info_async(*args: Any, **kwargs: Any):
     return await _dispatch("get_storage_info_async", *args, **kwargs)
 
 
-def ftps_handshake_blocked(*args: Any, **kwargs: Any):
+def ftps_handshake_blocked(*args: Any, **kwargs: Any) -> bool:
     try:
         return _dispatch("ftps_handshake_blocked", *args, **kwargs)
     except UnsupportedPrinterOperation:

@@ -42,7 +42,7 @@ def get_firmware_update_service(printer=None, *, plugin_id: str = "bambu"):
 
 def _upload_plugin(printer_id: int, plugin_id: str | None = None):
     config = config_for_id(printer_id)
-    return get_plugin(plugin_id or (config.plugin_id if config else "bambu"))
+    return plugin_for(config) if config is not None else get_plugin(plugin_id or "bambu")
 
 
 def _supports_firmware(plugin, printer_id: int) -> bool:
