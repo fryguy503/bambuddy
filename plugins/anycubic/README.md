@@ -19,18 +19,19 @@ Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
 1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
    `.bbp` file and optionally paste its expected SHA-256 digest.
-2. Review the validation result, then activate version `0.1.1`.
-3. Restart Bambuddy to load the selected package. Staging alone does not load
-   or enable its code.
-4. Add or edit a printer, select **Anycubic**, and choose its model.
+2. Review the validation result, then apply version `0.1.1`. Staging alone does
+   not load or enable its code.
+3. Add or edit a printer, select **Anycubic**, and choose its model.
 
-Package updates use the same flow. Updating a loaded plugin requires affected
-printers and queue jobs to be idle. First activation can restore a missing
-provider with no managed connections despite old queue records; it preserves
-those records and still checks live printing, uploads and dispatches.
-Installed versions can be selected or rolled back through
-the plugin manager. Existing application data and plugin selections belong in
-your normal pre-upgrade backup.
+Package updates and rollbacks refresh data connections immediately, including
+while printers are printing or paused. They do not wait for idle printers,
+drain queues or require an application restart. Existing accepted operations
+and current-print callbacks keep their original provider until finished;
+refreshing never resends print commands. The plugin manager shows the selected
+default, versions still in use and each printer's refresh result. Install the
+host's live-update implementation once before using this flow on an older host.
+Existing application data and plugin selections belong in your normal
+pre-upgrade backup.
 
 The archive contains trusted Python code. Its checksum verifies integrity; the
 publisher label and checksum do not constitute a cryptographic publisher
