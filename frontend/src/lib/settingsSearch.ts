@@ -10,6 +10,7 @@
 
 export type SettingsSearchTab =
   | 'general'
+  | 'printer-plugins'
   | 'plugs'
   | 'sensors'
   | 'notifications'

@@ -65,7 +65,7 @@ import { availableLanguages } from '../i18n';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme, type ThemeStyle, type DarkBackground, type LightBackground, type ThemeAccent } from '../contexts/ThemeContext';
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
-import { Gauge, Link2, Palette, type LucideIcon } from 'lucide-react';
+import { Gauge, Link2, Palette, Puzzle, type LucideIcon } from 'lucide-react';
 import { registerSettingsSearch, getSettingsSearchEntries } from '../lib/settingsSearch';
 import type { UsersSubTab } from '../lib/settingsSearch';
 import { availableEngines, hasEngineChoice, resolveEngine, type SliceEngineId } from '../lib/sliceEngines';
@@ -74,7 +74,7 @@ import { PrinterSearchPicker } from '../components/PrinterSearchPicker';
 import { UsbCameraDevicePicker } from '../components/UsbCameraDevicePicker';
 import { PluginManagementPanel } from '../components/PluginManagementPanel';
 
-const validTabs = ['general', 'plugs', 'sensors', 'notifications', 'queue', 'filament', 'camera', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'users', 'backup'] as const;
+const validTabs = ['general', 'printer-plugins', 'plugs', 'sensors', 'notifications', 'queue', 'filament', 'camera', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'users', 'backup'] as const;
 type TabType = typeof validTabs[number];
 interface SettingsTabEntry { tab: TabType; icon: LucideIcon; label: string; extra?: ReactNode }
 
@@ -82,6 +82,7 @@ interface SettingsTabEntry { tab: TabType; icon: LucideIcon; label: string; extr
 // Adding a new settings card? Register it here (or, if the card lives in its
 // own component file, call registerSettingsSearch at that file's module scope).
 registerSettingsSearch({ labelKey: 'settings.general', tab: 'general', keywords: 'language date time format printer model printers cards', anchor: 'card-general' });
+registerSettingsSearch({ labelKey: 'settings.tabs.printerPlugins', labelFallback: 'Printer plugins', tab: 'printer-plugins', keywords: 'printer plugins support install upload package bbp update upgrade version rollback bambu anycubic', anchor: 'printer-plugin-management' });
 registerSettingsSearch({ labelKey: 'settings.appearance', tab: 'general', keywords: 'theme dark light mode colors', anchor: 'card-appearance' });
 registerSettingsSearch({ labelKey: 'settings.archiveSettings', tab: 'general', keywords: 'archive auto save thumbnails captures', anchor: 'card-archive' });
 registerSettingsSearch({ labelKey: 'settings.camera', tab: 'camera', keywords: 'camera external video stream rtsp mjpeg usb snapshot rotation chamber light led lamp', anchor: 'card-camera' });
@@ -319,6 +320,7 @@ export function SettingsPage() {
   // Camera tokens and the overlay builder used to live under API Keys; links
   // to them (bookmarks, the wiki, /camera-tokens) open the Camera tab instead.
   const canSeeApiKeysTab = hasPermission('api_keys:read') || hasPermission('settings:update');
+  const canManagePrinterPlugins = !authLoading && (isAdmin || !authEnabled);
   const isLegacyCameraLink = tabParam === 'apikeys'
     && ['#card-camera-tokens', '#card-stream-overlay'].includes(window.location.hash);
   const initialTab = isLegacyEmailTab ? 'users'
@@ -377,6 +379,11 @@ export function SettingsPage() {
     if (!authLoading && activeTab === 'apikeys' && !canSeeApiKeysTab) handleTabChange('camera');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, activeTab, canSeeApiKeysTab]);
+
+  useEffect(() => {
+    if (!authLoading && activeTab === 'printer-plugins' && !canManagePrinterPlugins) handleTabChange('general');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, activeTab, canManagePrinterPlugins]);
 
   // Switch the Workflow tab's sub-tab and reflect it in the URL so deep-links work.
   const handleQueueSubTabChange = (sub: 'dispatch' | 'pipelines') => {
@@ -1630,7 +1637,7 @@ export function SettingsPage() {
 
   // Cross-tab search is powered by the module-level registry in lib/settingsSearch.
   // Resolve i18n labels here so language changes take effect without re-registering.
-  const searchIndex = getSettingsSearchEntries().map(e => ({
+  const searchIndex = getSettingsSearchEntries().filter(e => e.tab !== 'printer-plugins' || canManagePrinterPlugins).map(e => ({
     ...e,
     label: t(e.labelKey, e.labelFallback ?? e.labelKey),
   }));
@@ -1690,7 +1697,11 @@ export function SettingsPage() {
   // General stays first, where most visits start; the rest are sorted by their
   // label in the current language so each language reads alphabetically.
   const generalTab: SettingsTabEntry = { tab: 'general', icon: SettingsIcon, label: t('settings.tabs.general') };
+  const printerPluginsLabel = t('settings.tabs.printerPlugins', 'Printer plugins');
   const otherTabs = ([
+    ...(canManagePrinterPlugins
+      ? [{ tab: 'printer-plugins', icon: Puzzle, label: printerPluginsLabel } as SettingsTabEntry]
+      : []),
     { tab: 'plugs', icon: Plug, label: t('settings.tabs.smartPlugs'), extra: countBadge(smartPlugs?.length ?? 0) },
     { tab: 'sensors', icon: Gauge, label: t('settings.tabs.sensors'), extra: countBadge(haSensorCount) },
     { tab: 'notifications', icon: Bell, label: t('settings.tabs.notifications'), extra: countBadge(notificationProviders?.length ?? 0) },
@@ -1750,7 +1761,7 @@ export function SettingsPage() {
                 >
                   <p className="text-sm text-white">{entry.label}</p>
                   <p className="text-xs text-bambu-gray">
-                    {t(`settings.tabs.${entry.tab === 'virtual-printer' ? 'virtualPrinter' : entry.tab === 'failure-detection' ? 'failureDetection' : entry.tab}`)}
+                    {entry.tab === 'printer-plugins' ? printerPluginsLabel : t(`settings.tabs.${entry.tab === 'virtual-printer' ? 'virtualPrinter' : entry.tab === 'failure-detection' ? 'failureDetection' : entry.tab}`)}
                     {entry.subTab ? ` › ${t(`settings.tabs.${entry.subTab}`, entry.subTab)}` : ''}
                   </p>
                 </button>
@@ -1785,9 +1796,9 @@ export function SettingsPage() {
         ))}
       </nav>
       <div className="flex-1 min-w-0">
+      {activeTab === 'printer-plugins' && canManagePrinterPlugins && <PluginManagementPanel />}
       {activeTab === 'general' && (
       <>
-      <div className="mb-4"><PluginManagementPanel /></div>
       {/* Sponsor banner — independence callout, or the commercial ask on a
           business-sized fleet (see utils/fleetAudience). */}
       <a
