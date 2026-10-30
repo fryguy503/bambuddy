@@ -6,7 +6,7 @@ import sys
 import zipfile
 from types import ModuleType
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1382,14 +1382,14 @@ async def stop_print(
 @router.post("/{printer_id}/clear-plate")
 async def clear_plate(
     printer_id: int,
+    request: Request,
     _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CLEAR_PLATE),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Acknowledge that the build plate has been cleared after a finished/failed print.
 
-    Sets a plate-cleared flag so the scheduler can start the next queued print.
-    No MQTT command is sent to the printer — the scheduler's start_print command
-    will override the FINISH/FAILED state when it sends the next job.
+    Providers may validate an acknowledgement through optional job.clear_plate.
+    The host flag is cleared only after that operation succeeds.
     """
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
     printer = result.scalar_one_or_none()
@@ -1413,6 +1413,30 @@ async def clear_plate(
             400,
             f"Printer is not awaiting plate-clear acknowledgment (state={state.state if state else 'unknown'})",
         )
+
+    from backend.app.printers.api import printer_api
+    from backend.app.printers.contracts import UnknownPrinterPlugin
+    from backend.app.printers.registry import get_plugin
+    from backend.app.printers.sdk import OperationRequest
+
+    try:
+        provider = get_plugin(printer.plugin_id)
+    except UnknownPrinterPlugin:
+        provider = None  # An unavailable driver cannot dispatch a new job.
+    if provider is not None and provider.api_version == 2:
+        descriptor = printer_api.describe_device(printer)
+        operation = next((item for item in descriptor.operations if item.id == "job.clear_plate"), None)
+        if operation is not None:
+            from backend.app.api.routes.printer_devices import _permission
+
+            for permission in dict.fromkeys([operation.permission, *operation.additional_permissions]):
+                await _permission(request, printer_id, permission)
+            client = printer_manager.get_client(printer_id)
+            if client is None:
+                raise HTTPException(409, "This provider requires a connected printer to confirm plate clearance")
+            receipt = await printer_api.invoke(printer, client, OperationRequest(operation_id="job.clear_plate"))
+            if receipt.status != "succeeded" or receipt.result is False:
+                raise HTTPException(409, "The provider has not confirmed plate clearance; its hold is retained")
 
     printer_manager.set_awaiting_plate_clear(printer_id, False)
 
