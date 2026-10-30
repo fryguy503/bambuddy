@@ -56,7 +56,10 @@ and dependency ranges must accurately describe the versions it supports.
 
 ## Installation and activation
 
-Use Settings → Printer plugins while logged in as an administrator:
+Use Settings → Printer plugins while logged in as an administrator.
+
+Printer plugins has its own entry in the Settings menu. You can also open
+`/settings?tab=printer-plugins` directly, or search Settings for “plugins”.
 
 1. Upload the package. This stages files and validates their static metadata;
    it does not import the uploaded code or replace the running plugin.
