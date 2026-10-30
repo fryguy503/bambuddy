@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PluginManagementPanel } from '../../components/PluginManagementPanel';
 import { pluginManagementApi } from '../../printer-plugins/api';
 
-const auth = vi.hoisted(() => ({ isAdmin: true, authEnabled: true }));
+const auth = vi.hoisted(() => ({ isAdmin: true, authEnabled: true, loading: false }));
 vi.mock('../../contexts/AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('../../printer-plugins/api', () => ({ pluginManagementApi: { list: vi.fn(), stage: vi.fn(), activate: vi.fn(), rollback: vi.fn(), enable: vi.fn(), disable: vi.fn(), remove: vi.fn(), removeVersion: vi.fn() } }));
 
@@ -14,7 +14,7 @@ function mount() {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks(); auth.isAdmin = true;
+  vi.clearAllMocks(); auth.isAdmin = true; auth.authEnabled = true; auth.loading = false;
   vi.mocked(pluginManagementApi.list).mockResolvedValue({ plugins: [{ id: 'bambu', name: 'Bambu Lab', loaded_version: '1.0.0', bundled_version: '1.0.0', desired_version: '1.1.0', enabled: true, previous_version: '1.0.0', restart_required: true, configured_printers: 1, versions: [], load_error: null }], load_errors: {}, policy: { restart_required_on_changes: true, trust_mode: 'administrator-installed-code' } });
 });
 
@@ -43,6 +43,15 @@ describe('printer plugin management', () => {
 
   it('does not expose management to non-administrators', () => {
     auth.isAdmin = false;
+    mount();
+    expect(screen.queryByText('Printer plugins')).not.toBeInTheDocument();
+    expect(pluginManagementApi.list).not.toHaveBeenCalled();
+  });
+
+  it('waits for authentication before loading management when auth initially appears disabled', () => {
+    auth.isAdmin = false;
+    auth.authEnabled = false;
+    auth.loading = true;
     mount();
     expect(screen.queryByText('Printer plugins')).not.toBeInTheDocument();
     expect(pluginManagementApi.list).not.toHaveBeenCalled();
