@@ -144,14 +144,23 @@ class PrinterAPI:
         from backend.app.printers.sdk import validate_snapshot
 
         config = PrinterConfig.from_printer(printer)
+        descriptor = self.describe_device(config)
         if isinstance(connection, PrinterConnectionAdapter) and connection._event_bridge is not None:
-            snapshot = connection._event_bridge.latest_snapshot
-            if snapshot is not None:
-                return validate_snapshot(self.describe_device(config), snapshot)
+            snapshot, _ = connection._event_bridge.snapshot_context()
+            if snapshot is not None and snapshot.descriptor_revision == descriptor.revision:
+                return validate_snapshot(descriptor, snapshot)
         raw = connection._connection if isinstance(connection, PrinterConnectionAdapter) else connection
-        return validate_snapshot(
-            self.describe_device(config), _provider(config, connection).snapshot_device(config, raw)
-        )
+        # A cached report can predate a native capability change. Request a
+        # current snapshot rather than validating old telemetry against a new
+        # contract. One retry covers a change during these synchronous reads.
+        fresh_snapshot = _provider(config, connection).snapshot_device(config, raw)
+        for attempt in range(2):
+            descriptor = self.describe_device(config)
+            if fresh_snapshot.descriptor_revision == descriptor.revision:
+                break
+            if attempt == 0:
+                fresh_snapshot = _provider(config, connection).snapshot_device(config, raw)
+        return validate_snapshot(descriptor, fresh_snapshot)
 
     async def invoke(self, printer: Any, connection: Any, request):
         import asyncio
@@ -317,8 +326,8 @@ class PrinterConnectionAdapter:
         """
         from backend.app.printers.sdk.host import state_for_host
 
-        snapshot = self._event_bridge.latest_snapshot if self._event_bridge is not None else None
-        return state_for_host(self._config, self._plugin, snapshot or self._connection.state)
+        snapshot, descriptor = self._event_bridge.snapshot_context() if self._event_bridge is not None else (None, None)
+        return state_for_host(self._config, self._plugin, snapshot or self._connection.state, device=descriptor)
 
     @state.setter
     def state(self, state: PrinterState) -> None:
