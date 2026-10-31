@@ -149,6 +149,7 @@ class PrinterPluginRegistry:
 
                     plugin = BambuPrinterPlugin()
                     manifest = PluginManager().selection_manifest(plugin_id, version)
+                    plugin._installed_manifest = manifest
                     source_kind = "bundled"
                 else:
                     plugin, manifest = PluginManager().load_version(plugin_id, version)
@@ -309,7 +310,9 @@ class PrinterPluginRegistry:
                 visited.add(version)
                 try:
                     if version == "bundled":
-                        self.register(bundled[plugin_id], source="bundled")
+                        manifest = manager.selection_manifest(plugin_id, version)
+                        bundled[plugin_id]._installed_manifest = manifest
+                        self.register(bundled[plugin_id], manifest=manifest, source="bundled")
                     else:
                         plugin, manifest = manager.load_version(plugin_id, version)
                         self.register(plugin, manifest=manifest, source="managed-package")

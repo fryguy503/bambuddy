@@ -290,6 +290,7 @@ def validate_plugin_contract(
                 raise SDKValidationError("Plugin host service hooks must be async functions")
         if manifest.api_version == 2:
             inspect.signature(plugin.describe_device).bind(placeholder)
+            inspect.signature(plugin.describe_job).bind(placeholder, object(), object())
             inspect.signature(plugin.snapshot_device).bind(placeholder, object())
             inspect.signature(plugin.invoke).bind(
                 placeholder, object(), OperationRequest(operation_id="conformance.check")

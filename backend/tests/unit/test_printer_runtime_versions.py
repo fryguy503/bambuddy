@@ -72,6 +72,15 @@ def test_default_refresh_does_not_reroute_a_pinned_running_printer(versions):
     assert {item["version"] for item in registry.running_versions(old.id)} == {old.version, new.version}
 
 
+def test_bundled_catalog_uses_its_static_model_presentation_for_print_options(versions):
+    registry, _, _, _ = versions
+    bundled = registry.get("bambu")
+    candidate = registry.runtime_for(bundled)
+    assert bundled._installed_manifest is candidate.manifest
+    models = bundled.descriptor()["models"]
+    assert models and all(model["presentation"]["compatibility_ui"] == "bambu-v1" for model in models)
+
+
 def test_explicit_candidate_connection_does_not_publish_it_before_commit(versions):
     registry, old, new, config = versions
     candidate = api.printer_api.create_connection(config, provider=new)

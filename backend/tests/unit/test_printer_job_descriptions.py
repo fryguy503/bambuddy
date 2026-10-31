@@ -18,6 +18,7 @@ from backend.app.printers.sdk import (
     SDKValidationError,
     check_manifest_compatibility,
     validate_job_description,
+    validate_plugin_contract,
 )
 
 
@@ -47,6 +48,17 @@ def device():
             )
         ],
     )
+
+
+def test_invalid_job_description_hook_is_rejected_before_running_plugin_code():
+    from examples.printer_plugins.reference.payload.plugin import ReferencePlugin
+
+    class InvalidDescription(ReferencePlugin):
+        def describe_job(self, config):
+            raise AssertionError("Contract validation must not execute the plugin")
+
+    with pytest.raises(SDKValidationError, match="signatures"):
+        validate_plugin_contract(InvalidDescription())
 
 
 def test_job_description_validates_unique_input_and_resource_ids_without_vendor_positions():
