@@ -173,6 +173,15 @@ def test_anonymous_snapshot_projects_live_job_without_inventing_an_archive_ident
     callbacks["on_print_complete"].assert_not_called()
 
 
+@pytest.mark.parametrize("version", ["2.7.2.7", None, 2727, {"version": "2.7.2.7"}])
+def test_typed_snapshot_preserves_only_text_firmware_in_the_shared_printer_header(version):
+    bridge, _, connection = case()
+    snapshot = connection.state.model_copy(deep=True)
+    snapshot.extensions["firmware_version"] = version
+    projected = state_for_host(bridge.config, bridge.plugin, snapshot)
+    assert projected.firmware_version == (version if isinstance(version, str) else None)
+
+
 @pytest.mark.parametrize("event", ["started", "progress", "completed", "failed", "cancelled"])
 @pytest.mark.parametrize("job_id", [None, "   "])
 def test_anonymous_job_lifecycle_events_fail_before_any_host_callback(event, job_id):

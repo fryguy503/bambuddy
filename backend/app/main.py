@@ -73,6 +73,7 @@ from backend.app.api.routes import (
     printer_locations,
     printer_plugins,
     printer_sensor_history,
+    printer_uploads,
     printers,
     projects,
     scheduled_dryings,
@@ -10271,6 +10272,9 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await printer_plugin_rollouts.stop()
+    from backend.app.services.printer_file_uploads import printer_file_uploads
+
+    await printer_file_uploads.shutdown()
     print_scheduler.stop()
     smart_plug_manager.stop_scheduler()
     ha_sensor_manager.stop()
@@ -10899,6 +10903,10 @@ install_plugin_gateway(app)
 app.include_router(printers.router, prefix=app_settings.api_prefix)
 app.include_router(printer_assets.router, prefix=app_settings.api_prefix)
 app.include_router(printer_devices.router, prefix=app_settings.api_prefix)
+from backend.app.api.routes import printer_jobs
+
+app.include_router(printer_jobs.router, prefix=app_settings.api_prefix)
+app.include_router(printer_uploads.router, prefix=app_settings.api_prefix)
 app.include_router(printer_plugins.router, prefix=app_settings.api_prefix)
 app.include_router(printer_locations.router, prefix=app_settings.api_prefix)
 app.include_router(archives.router, prefix=app_settings.api_prefix)
