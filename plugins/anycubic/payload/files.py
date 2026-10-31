@@ -15,6 +15,9 @@ from .protocol import MAX_BYTES, AnycubicError, json_object, private_host
 
 MAX_GCODE_BYTES = 512 * 1024 * 1024
 MAX_LINE_BYTES = 256 * 1024
+_GENERATED_GCODE = re.compile(r";.*generated (?:by|with).*(?:AnycubicSlicer|OrcaSlicer)", re.IGNORECASE)
+_GCODE_MODEL = re.compile(r";\s*(?:printer_model|machine_model)\s*[:=]\s*(.+)", re.IGNORECASE)
+_GCODE_COMMAND = re.compile(r"(?:N\d+\s+)?(?:[GMT]\d+(?:\.\d+)?|[A-Z_][A-Z0-9_]+)(?:\s|;|$)", re.IGNORECASE)
 
 
 def basename(value):
@@ -169,19 +172,22 @@ def inspect_gcode(stream):
             raise AnycubicError("The upload is not supported text G-code or exceeds its size limit")
         digest.update(line)
         try:
-            text = line.decode("utf-8-sig").strip()
+            # The signature codec builds a decoder for every short motion line.
+            # Plain UTF-8 plus the same optional leading BOM keeps its semantics.
+            text = line.decode("utf-8").removeprefix("\ufeff").strip()
         except UnicodeError:
             raise AnycubicError("The upload is not UTF-8 text G-code") from None
-        if re.search(r";.*generated (?:by|with).*(?:AnycubicSlicer|OrcaSlicer)", text, re.IGNORECASE):
+        if ";" in text and _GENERATED_GCODE.search(text):
             generated = True
-        match = re.match(r";\s*(?:printer_model|machine_model)\s*[:=]\s*(.+)", text, re.IGNORECASE)
-        if match:
-            selected = get_model(match[1].strip().strip('"'))
-            if selected is None:
-                raise AnycubicError("The G-code identifies an unsupported printer model")
-            models.add(selected.name)
-        if text and not text.startswith(";"):
-            if not re.match(r"(?:N\d+\s+)?(?:[GMT]\d+(?:\.\d+)?|[A-Z_][A-Z0-9_]+)(?:\s|;|$)", text, re.IGNORECASE):
+        if text.startswith(";"):
+            match = _GCODE_MODEL.match(text)
+            if match:
+                selected = get_model(match[1].strip().strip('"'))
+                if selected is None:
+                    raise AnycubicError("The G-code identifies an unsupported printer model")
+                models.add(selected.name)
+        elif text:
+            if not _GCODE_COMMAND.match(text):
                 raise AnycubicError("The file contains unsupported G-code lines")
             commands += 1
     if not generated or len(models) != 1 or not commands:

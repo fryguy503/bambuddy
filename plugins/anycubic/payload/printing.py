@@ -150,14 +150,15 @@ def inspect_print_file(path: Path, filename: str, model: str | None = None) -> P
                 raise AnycubicError("The G-code changed while inspecting its filament metadata")
             md5.update(line)
             sha256.update(line)
-            stripped = line.strip()
-            if match := _TOOL.match(stripped):
-                if len(match[1]) > 3 or int(match[1]) > 255:
-                    raise AnycubicError("The G-code contains an unsupported tool selection")
-                tools.add(int(match[1]))
-            if not stripped.startswith(b";"):
+            prefix = line.lstrip()
+            if prefix[:1] in (b"T", b"t", b"N", b"n"):
+                if match := _TOOL.match(prefix):
+                    if len(match[1]) > 3 or int(match[1]) > 255:
+                        raise AnycubicError("The G-code contains an unsupported tool selection")
+                    tools.add(int(match[1]))
+            if not prefix.startswith(b";"):
                 continue
-            decoded = stripped.decode("utf-8-sig")
+            decoded = prefix.rstrip().decode("utf-8").removeprefix("\ufeff")
             if estimate := _ESTIMATE.fullmatch(decoded):
                 key, value = estimate[1].lower(), estimate[2].strip()
                 optional[key] = None if len(value) > 16384 or key in optional and optional[key] != value else value
