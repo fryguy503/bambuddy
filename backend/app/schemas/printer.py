@@ -3,8 +3,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
+from backend.app.printers.sdk.diagnostics import ConnectionDiagnosticResult, DiagnosticCheck as DiagnosticCheck
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.schemas.printer_location import normalize_location_name
+
+PrinterDiagnosticResult = ConnectionDiagnosticResult
 
 
 def _mask_url_login(url: str | None) -> str | None:
@@ -513,33 +516,6 @@ class PrinterStatus(BaseModel):
     current_plate_id: int | None = None
 
 
-class DiagnosticCheck(BaseModel):
-    """One connection-diagnostic check result.
-
-    ``id`` is a stable key (port_mqtt, port_ftps, port_rtsps,
-    macos_local_network, network_mode, subnet, external_storage, mqtt_auth,
-    developer_mode, printer_publishing); the frontend renders the localized
-    title and fix text from id + status. ``params`` carries interpolation
-    values (e.g. network mode, IP addresses) for that text.
-
-    Not every check is emitted on every run: ``macos_local_network`` appears
-    only on macOS, where it is the only platform it can say anything about.
-    """
-
-    id: str
-    status: str  # "pass" | "fail" | "warn" | "skip"
-    params: dict = Field(default_factory=dict)
-
-
-class PrinterDiagnosticResult(BaseModel):
-    """Result of a printer connection diagnostic run."""
-
-    printer_id: int | None = None
-    ip_address: str
-    overall: str  # "ok" | "warnings" | "problems"
-    checks: list[DiagnosticCheck]
-
-
 class DiagnosticRequest(BaseModel):
     plugin_id: str = "bambu"
     """Pre-save (Add Printer) connection diagnostic request.
@@ -552,6 +528,8 @@ class DiagnosticRequest(BaseModel):
     ip_address: str
     serial_number: str | None = None
     access_code: str | None = None
+    model: str | None = None
+    plugin_options: dict = Field(default_factory=dict, repr=False)
 
 
 class PrinterFilesDownloadRequest(BaseModel):
