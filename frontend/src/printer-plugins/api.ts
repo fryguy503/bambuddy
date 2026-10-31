@@ -2,13 +2,32 @@ import { ApiError, getAuthToken, request } from '../api/client';
 import type { OperationReceipt, PrinterDevice, PrinterDeviceState, PrinterJobDescription, PrinterJobSource } from './types';
 
 const printerPath = (printerId: number) => `/printers/${printerId}`;
+export const JOB_DESCRIPTION_TIMEOUT_MS = 65_000;
+
+async function describeJob(printerId: number, source: PrinterJobSource, signal?: AbortSignal): Promise<PrinterJobDescription> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  if (signal?.aborted) cancel();
+  else signal?.addEventListener('abort', cancel, { once: true });
+  const deadline = setTimeout(cancel, JOB_DESCRIPTION_TIMEOUT_MS);
+  try {
+    return await request<PrinterJobDescription>(`${printerPath(printerId)}/job-description`, {
+      method: 'POST', signal: controller.signal,
+      body: JSON.stringify({ library_file_id: source.libraryFileId, archive_id: source.archiveId, plate_id: source.plateId }),
+    });
+  } catch (error) {
+    if (controller.signal.aborted && !signal?.aborted) throw new Error('Reading print requirements timed out. Retry the inspection.');
+    throw error;
+  } finally {
+    clearTimeout(deadline);
+    signal?.removeEventListener('abort', cancel);
+  }
+}
 
 export const printerDeviceApi = {
-  describe: (printerId: number) => request<PrinterDevice>(`${printerPath(printerId)}/device`),
+  describe: (printerId: number, signal?: AbortSignal) => request<PrinterDevice>(`${printerPath(printerId)}/device`, { signal }),
   state: (printerId: number) => request<PrinterDeviceState>(`${printerPath(printerId)}/device-state`),
-  describeJob: (printerId: number, source: PrinterJobSource) => request<PrinterJobDescription>(`${printerPath(printerId)}/job-description`, {
-    method: 'POST', body: JSON.stringify({ library_file_id: source.libraryFileId, archive_id: source.archiveId, plate_id: source.plateId }),
-  }),
+  describeJob,
   execute: (printerId: number, operationId: string, parameters: Record<string, unknown>, resourceId?: string) =>
     request<OperationReceipt>(`${printerPath(printerId)}/operations/${encodeURIComponent(operationId)}`, {
       method: 'POST',

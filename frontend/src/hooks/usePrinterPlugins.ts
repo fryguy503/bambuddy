@@ -6,6 +6,7 @@ import { setPrinterPluginCatalog } from '../printer-plugins/catalog';
 export function usePrinterPlugins() {
   return useQuery({
     queryKey: ['printer-plugins'],
+    networkMode: 'always',
     queryFn: async () => {
       const plugins = await api.getPrinterPlugins();
       setPrinterPluginCatalog(plugins);

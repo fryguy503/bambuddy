@@ -28,7 +28,7 @@ function BooleanOption({ label, description, value, onChange, schema }: {
 }
 
 /** Material routing and option widgets use plugin-owned file requirements. */
-export function GenericPrintSetup({ printerId, printerName, value, onChange, materials = [], source, description: suppliedDescription, descriptionPending = false, descriptionError, defaultExpanded = false }: {
+export function GenericPrintSetup({ printerId, printerName, value, onChange, materials = [], source, description: suppliedDescription, descriptionPending = false, descriptionError, onRetryDescription, defaultExpanded = false }: {
   printerId: number;
   printerName: string;
   value: GenericJobSetup;
@@ -38,6 +38,7 @@ export function GenericPrintSetup({ printerId, printerName, value, onChange, mat
   description?: PrinterJobDescription;
   descriptionPending?: boolean;
   descriptionError?: string;
+  onRetryDescription?: () => void;
   defaultExpanded?: boolean;
 }) {
   const { t } = useTranslation();
@@ -48,7 +49,7 @@ export function GenericPrintSetup({ printerId, printerName, value, onChange, mat
   const device = usePrinterDevice(printerId);
   const requirements = usePrinterJobDescription(printerId, suppliedDescription ? undefined : source);
   const description = suppliedDescription || requirements.data;
-  const telemetry = useQuery({ queryKey: ['printer-device-state', printerId], queryFn: () => printerDeviceApi.state(printerId), enabled: !!description && !!device.data, refetchInterval: 3000, retry: false });
+  const telemetry = useQuery({ queryKey: ['printer-device-state', printerId], queryFn: () => printerDeviceApi.state(printerId), networkMode: 'always', enabled: !!description && !!device.data, refetchInterval: 3000, retry: false });
   useEffect(() => {
     const revision = telemetry.data?.descriptor_revision;
     const descriptorRevision = device.data?.revision;
@@ -65,7 +66,14 @@ export function GenericPrintSetup({ printerId, printerName, value, onChange, mat
   }, [description, normalizedKey, valueKey, onChange]);
   if (device.isPending) return <p className="text-xs text-bambu-gray">Loading {printerName} resources…</p>;
   const error = descriptionError || device.error?.message || requirements.error?.message;
-  if (error) return <p role="alert" className="text-xs text-red-400">{printerName}: {error}</p>;
+  if (error) return <div role="alert" className="mb-4 space-y-2 text-xs text-red-400">
+    <p>{printerName}: {error}</p>
+    <button type="button" className="rounded bg-bambu-dark-tertiary px-3 py-1.5 text-white" onClick={() => {
+      if (device.error) void device.refetch();
+      else if (onRetryDescription) onRetryDescription();
+      else void requirements.refetch();
+    }}>Retry requirements</button>
+  </div>;
   if (descriptionPending || source && !suppliedDescription && requirements.isPending) return <p role="status" className="mb-4 text-sm text-bambu-gray">Reading print requirements…</p>;
   if (!device.data) return null;
   const tools = device.data.resources.filter(resource => resource.kind === 'tool');
