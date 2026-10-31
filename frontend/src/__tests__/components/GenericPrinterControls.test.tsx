@@ -39,6 +39,32 @@ async function showControls(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(printerDeviceApi.execute).mockResolvedValue(receipt); });
 
 describe('generic printer resources', () => {
+  it('does not invent chamber temperature or heater controls when the plugin reports only nozzle and bed heaters', () => {
+    const value = device();
+    value.model_id = 'non-bambu-fixture';
+    value.resources = [
+      { ...resource('heater:nozzle', 'heater', 'Nozzle'), roles: ['hotend'], properties: { temperature: property('Temperature', 'number', 'degC') } },
+      { ...resource('heater:bed', 'heater', 'Bed'), roles: ['bed'], properties: { temperature: property('Temperature', 'number', 'degC') } },
+      { ...resource('fan:chamber', 'fan', 'Chamber fan'), properties: { percent: property('Speed', 'number', '%') } },
+      { ...resource('light:chamber', 'light', 'Chamber light'), properties: { on: { ...property('On', 'boolean'), writable: true, operation_id: 'light.set', parameter: 'on', write_permission: 'printers:control' } } },
+    ];
+    value.operations = [operation('heater.set_target', 'Set temperature', ['heater']), operation('fan.set_percent', 'Set fan', ['fan']), operation('light.set', 'Set light', ['light'])];
+    const state = snapshot();
+    state.resources = [
+      { resource_id: 'heater:nozzle', properties: { temperature: reading(210) } },
+      { resource_id: 'heater:bed', properties: { temperature: reading(55) } },
+      { resource_id: 'fan:chamber', properties: { percent: reading(20) } },
+      { resource_id: 'light:chamber', properties: { on: reading(true) } },
+    ];
+    renderControls(value, true, state);
+    expect(screen.getByRole('button', { name: 'Controls for Nozzle' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Controls for Bed' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Controls for Chamber fan' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Controls for Chamber light' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Controls for Chamber(?: temperature| heater)?$/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^(Chamber temperature|Chamber heater|Chamber target|Preheat chamber)$/i)).not.toBeInTheDocument();
+  });
+
   it('renders five independent tools and addresses the selected stable ID', async () => {
     const user = userEvent.setup();
     renderControls(device());

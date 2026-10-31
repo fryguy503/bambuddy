@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import { onlineManager, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { PrintModal } from '../../components/PrintModal';
@@ -31,6 +31,29 @@ const description = (fileId: number): PrinterJobDescription => ({
   options_schema: { type: 'object', properties: { leveling: { type: 'boolean', title: 'Auto leveling', default: true } }, additionalProperties: false },
   default_options: {}, warnings: [], extensions: {},
 });
+
+function overrideDescription(fileId: number): PrinterJobDescription {
+  const value = description(fileId);
+  value.options_schema.properties!.use_ace = { type: 'boolean', title: 'Use ACE', default: true };
+  value.options_schema.properties!.allow_material_type_mismatch = { type: 'boolean', title: 'Allow different filament types', default: false };
+  value.extensions = { 'bambuddy:ui': { material_mode: { option: 'use_ace', external_source_id: 'external', require_reported_material: true,
+    type_override_option: 'allow_material_type_mismatch', type_override_help: 'Sliced temperatures stay unchanged. Re-slice for another temperature profile.' } } };
+  return value;
+}
+
+function mockSilkMaterial() {
+  server.use(
+    http.get('/api/v1/printers/:id/device-state', () => HttpResponse.json({ schema_version: 2, device_id: DEVICE.device_id, connected: true, status: 'idle', descriptor_revision: DEVICE.revision,
+      observed_at: new Date().toISOString(), sequence: 1, extensions: {}, resources: [{ resource_id: 'source:ace:1:3', available: true, status: 'loaded', properties: {
+        material_type: { value: 'PLA Silk', quality: 'known', observed_at: new Date().toISOString() }, color: { value: '#0000FFFF', quality: 'known' },
+      } }],
+    })),
+    http.post('/api/v1/printers/:id/job-description', async ({ request }) => {
+      const body = await request.json() as { library_file_id: number };
+      return HttpResponse.json(overrideDescription(body.library_file_id));
+    }),
+  );
+}
 
 function mockBackend() {
   server.use(
@@ -149,6 +172,9 @@ describe('independent File Manager batch queue', () => {
     const user = await chooseSource();
     await user.click(screen.getAllByRole('button', { name: 'Print Options' })[0]);
     expect(await screen.findByText('Auto leveling')).toBeInTheDocument();
+    expect(screen.queryByText(/preheat/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/chamber.*target|target.*chamber/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^(Chamber temperature|Chamber heater|Chamber target)$/i)).not.toBeInTheDocument();
     const submit = screen.getByRole('button', { name: 'Queue 2 files' });
     await waitFor(() => expect(submit).toBeEnabled());
     await user.click(submit);
@@ -212,6 +238,57 @@ describe('independent File Manager batch queue', () => {
     await user.click(retry);
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(submitted).toEqual([11, 12, 12]);
+  });
+
+  it('keeps an explicit different-material choice across batch creation and a failed-file retry', async () => {
+    mockSilkMaterial();
+    const submitted: PrintQueueItemCreate[] = [];
+    let failed = false;
+    server.use(http.post('/api/v1/queue/', async ({ request }) => {
+      const body = await request.json() as PrintQueueItemCreate;
+      submitted.push(body);
+      if (body.library_file_id === 12 && !failed) { failed = true; return HttpResponse.json({ detail: 'Temporary failure' }, { status: 503 }); }
+      return HttpResponse.json({ id: submitted.length, status: 'pending' });
+    }));
+    const close = openBatch();
+    const toggle = await screen.findByRole('group', { name: 'Allow different filament types' });
+    await userEvent.click(within(toggle).getByRole('button', { name: 'On' }));
+    const user = await chooseSource();
+    expect(screen.getByRole('combobox', { name: 'Blue PLA' })).toHaveTextContent('PLA Silk');
+    const submit = screen.getByRole('button', { name: 'Queue 2 files' });
+    await waitFor(() => expect(submit).toBeEnabled());
+    await user.click(submit);
+    const retry = await screen.findByRole('button', { name: 'Queue 1 file' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    await user.click(retry);
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(submitted.map(value => value.library_file_id)).toEqual([11, 12, 12]);
+    expect(submitted.map(value => value.sdk_job?.options.allow_material_type_mismatch)).toEqual([true, true, true]);
+    expect(submitted.map(value => value.job_options?.allow_material_type_mismatch)).toEqual([true, true, true]);
+  });
+
+  it('restores an edited queue plan’s saved material override and preserves it on save', async () => {
+    mockSilkMaterial();
+    const saved = vi.fn();
+    server.use(http.patch('/api/v1/queue/90', async ({ request }) => { saved(await request.json()); return HttpResponse.json({ id: 90 }); }));
+    render(<PrintModal mode="edit-queue-item" libraryFileId={11} archiveName="First" onClose={() => {}}
+      queueItem={{ id: 90, printer_id: 41, plate_id: null, manual_start: true, sdk_job: {
+        job_id: 'saved-override-job', artifact: description(11).artifact, selected_tool_ids: ['tool:primary'],
+        bindings: [{ input_id: 'T0', tool_id: 'tool:primary', source_id: 'source:ace:1:3' }],
+        options: { leveling: false, use_ace: true, allow_material_type_mismatch: true }, extensions: {},
+      } } as PrintQueueItem} />);
+    const toggle = await screen.findByRole('group', { name: 'Allow different filament types' });
+    expect(within(toggle).getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Blue PLA' })).toHaveTextContent('PLA Silk'));
+    const save = screen.getByRole('button', { name: 'Save' });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+    const value = saved.mock.lastCall![0] as PrintQueueItemUpdate;
+    expect(value.sdk_job?.job_id).toBe('saved-override-job');
+    expect(value.sdk_job?.options.allow_material_type_mismatch).toBe(true);
+    expect(value.sdk_job?.bindings[0].input_id).toBe('T0');
+    expect(value.job_options?.allow_material_type_mismatch).toBe(true);
   });
 
   it('keeps legacy calibration options in Any model mode when neutral catalog metadata requests compatibility UI', async () => {

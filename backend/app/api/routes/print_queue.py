@@ -3104,6 +3104,23 @@ async def start_queue_item(
     if item.status != "pending":
         raise HTTPException(400, f"Can only start pending items, current status: '{item.status}'")
 
+    if item.printer_id is not None:
+        from backend.app.services.print_scheduler import scheduler as _plate_scheduler
+        from backend.app.services.printer_manager import printer_manager
+
+        required = printer_manager.provider_requires_plate_clear(item.printer_id)
+        host_required = await _plate_scheduler._get_bool_setting(db, "require_plate_clear", default=False)
+        if required or host_required and printer_manager.is_awaiting_plate_clear(item.printer_id):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "plate_clear_required",
+                    "printer_id": item.printer_id,
+                    "printer_name": item.printer.name if item.printer is not None else "Printer",
+                    "message": "Confirm the build plate is clear before starting this queued print.",
+                },
+            )
+
     item.estimated_cost = await _trusted_item_estimated_cost(
         db,
         item,

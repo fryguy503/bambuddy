@@ -49,6 +49,21 @@ beforeEach(() => {
 afterEach(() => vi.mocked(localStorage.getItem).mockReset());
 
 describe('plugin printer card job summary', () => {
+  it('shows provider-required plate acknowledgement when the global preference is disabled', async () => {
+    status('IDLE');
+    server.use(
+      http.get('/api/v1/settings/ui-flags', () => HttpResponse.json({ require_plate_clear: false })),
+      http.get('/api/v1/settings/', () => HttpResponse.json({ require_plate_clear: false })),
+      http.get('/api/v1/printers/:id/status', () => HttpResponse.json({
+        connected: true, state: 'IDLE', progress: 0, temperatures: {}, hms_errors: [], ams: [], vt_tray: [],
+        awaiting_plate_clear: true, plate_clear_required: true,
+      })),
+    );
+    render(<PrintersPage />);
+    expect(await screen.findByText('Plate not Clear')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Mark plate as cleared' })).toBeInTheDocument();
+  });
+
   it('keeps the included compatibility panels for API2 without duplicating the generic card', async () => {
     status('RUNNING');
     server.use(http.get('/api/v1/printers/:id/device', () => HttpResponse.json({

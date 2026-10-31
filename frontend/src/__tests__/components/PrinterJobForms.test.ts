@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildSdkJobPlan, emptyGenericJobSetup, jobInputKey, jobSetupDefaults, remapJobSetupForDescription } from '../../printer-plugins/forms';
-import type { PrinterDevice, PrinterJobDescription, PrinterJobInput } from '../../printer-plugins/types';
+import { buildSdkJobPlan, emptyGenericJobSetup, jobInputKey, jobMaterialSourceEligible, jobMaterialTypeOverrideEnabled, jobSetupDefaults, remapJobSetupForDescription } from '../../printer-plugins/forms';
+import type { PrinterDevice, PrinterDeviceState, PrinterJobDescription, PrinterJobInput } from '../../printer-plugins/types';
 
 const input = (id: string, routingKey?: string): PrinterJobInput => ({ id, label: id, routing_key: routingKey, required: true, compatible_tool_ids: ['tool:seven'], compatible_source_ids: ['source:opaque', 'source:external'] });
 const description = (uri: string, inputs: PrinterJobInput[]): PrinterJobDescription => ({
@@ -8,6 +8,89 @@ const description = (uri: string, inputs: PrinterJobInput[]): PrinterJobDescript
   options_schema: { type: 'object', properties: { use_feeder: { type: 'boolean', default: true }, leveling: { type: 'boolean', default: false } }, additionalProperties: false },
   default_options: {}, warnings: [],
   extensions: { 'bambuddy:ui': { material_mode: { option: 'use_feeder', external_source_id: 'source:external' } } },
+});
+
+function overrideDescription(): PrinterJobDescription {
+  const value = description('library:1', [{ ...input('T7', 'blue'), material_type: 'PLA' }]);
+  value.options_schema.properties!.allow_material_type_mismatch = { type: 'boolean', title: 'Allow different filament types', default: false };
+  value.extensions = { 'bambuddy:ui': { material_mode: { option: 'use_feeder', external_source_id: 'source:external', require_reported_material: true,
+    type_override_option: 'allow_material_type_mismatch', type_override_help: 'Sliced temperatures stay unchanged.' } } };
+  return value;
+}
+
+function reportedMaterial(materialType = 'PLA Silk'): PrinterDeviceState {
+  return { schema_version: 2, device_id: 'fixture', connected: true, status: 'idle', observed_at: new Date().toISOString(), descriptor_revision: '1', sequence: 1, extensions: {},
+    resources: [{ resource_id: 'source:opaque', available: true, status: 'loaded', properties: {
+      material_type: { value: materialType, quality: 'known', observed_at: new Date().toISOString(), valid_until: new Date(Date.now() + 30_000).toISOString() },
+    } }],
+  };
+}
+
+describe('explicit plugin material type override', () => {
+  it('defaults off, permits a known PLA Silk route only when opted in, and clears it when switched off', () => {
+    const value = overrideDescription();
+    const state = reportedMaterial();
+    const source = device.resources.find(item => item.id === 'source:opaque')!;
+    const setup = jobSetupDefaults(emptyGenericJobSetup(), value, device, state);
+    expect(setup.job_options.allow_material_type_mismatch).toBe(false);
+    expect(jobMaterialSourceEligible(value.inputs[0], source, value, setup, state)).toBe(false);
+    setup.job_options.allow_material_type_mismatch = true;
+    setup.material_bindings['routing:blue'] = source.id;
+    expect(jobMaterialSourceEligible(value.inputs[0], source, value, setup, state)).toBe(true);
+    const plan = remapJobSetupForDescription(setup, value, device, state);
+    expect(plan.job_options.allow_material_type_mismatch).toBe(true);
+    expect(plan.material_bindings).toEqual({ T7: source.id });
+    const strict = jobSetupDefaults({ ...setup, job_options: { ...setup.job_options, allow_material_type_mismatch: false } }, value, device, state);
+    expect(strict.material_bindings).toEqual({});
+    expect(() => remapJobSetupForDescription(strict, value, device, state)).toThrow('Select a material source');
+  });
+
+  it.each(['empty', 'unconfigured', 'unknown', 'unavailable'])('does not allow explicitly %s slots with retained material telemetry', status => {
+    const value = overrideDescription();
+    const state = reportedMaterial();
+    state.resources[0].status = status;
+    const setup = jobSetupDefaults({ ...emptyGenericJobSetup(), job_options: { allow_material_type_mismatch: true }, material_bindings: { 'routing:blue': 'source:opaque' } }, value, device, state);
+    const source = device.resources.find(item => item.id === 'source:opaque')!;
+    expect(jobMaterialSourceEligible(value.inputs[0], source, value, setup, state)).toBe(false);
+    expect(() => remapJobSetupForDescription(setup, value, device, state)).toThrow('available material source');
+  });
+
+  it.each(['missing', 'unknown', 'stale', 'expired', 'empty', 'unavailable', 'old_snapshot'])('keeps %s material reports unavailable even with override enabled', condition => {
+    const value = overrideDescription();
+    const state = reportedMaterial();
+    const reading = state.resources[0].properties.material_type;
+    if (condition === 'missing') state.resources = [];
+    if (condition === 'unknown' || condition === 'stale') reading.quality = condition;
+    if (condition === 'expired') reading.valid_until = new Date(Date.now() - 1_000).toISOString();
+    if (condition === 'empty') reading.value = ' ';
+    if (condition === 'unavailable') state.resources[0].available = false;
+    if (condition === 'old_snapshot') state.observed_at = new Date(Date.now() - 120_000).toISOString();
+    const setup = jobSetupDefaults({ ...emptyGenericJobSetup(), job_options: { allow_material_type_mismatch: true } }, value, device, state);
+    expect(jobMaterialSourceEligible(value.inputs[0], device.resources[1], value, setup, state)).toBe(false);
+  });
+
+  it('does not relax source or tool constraints', () => {
+    const value = overrideDescription();
+    const state = reportedMaterial();
+    const setup = jobSetupDefaults({ ...emptyGenericJobSetup(), job_options: { allow_material_type_mismatch: true } }, value, device, state);
+    const source = device.resources[1];
+    expect(jobMaterialSourceEligible({ ...value.inputs[0], compatible_source_ids: ['source:other'] }, source, value, setup, state)).toBe(false);
+    expect(jobMaterialSourceEligible({ ...value.inputs[0], compatible_tool_ids: ['tool:other'] }, source, value, setup, state)).toBe(false);
+    expect(jobMaterialSourceEligible(value.inputs[0], { ...source, relations: { tools: ['tool:other'] } }, value, setup, state)).toBe(false);
+  });
+
+  it.each(['undeclared', 'readOnly', 'const', 'wrong_type'])('cannot enable an override that is %s', condition => {
+    const value = overrideDescription();
+    const mode = (value.extensions['bambuddy:ui'] as { material_mode: Record<string, unknown> }).material_mode;
+    const field = value.options_schema.properties!.allow_material_type_mismatch;
+    if (condition === 'undeclared') delete mode.type_override_option;
+    if (condition === 'readOnly') field.readOnly = true;
+    if (condition === 'const') field.const = false;
+    if (condition === 'wrong_type') field.type = 'string';
+    const setup = jobSetupDefaults({ ...emptyGenericJobSetup(), job_options: { allow_material_type_mismatch: true } }, value, device, reportedMaterial());
+    expect(jobMaterialTypeOverrideEnabled(value, setup)).toBe(false);
+    expect(jobMaterialSourceEligible(value.inputs[0], device.resources[1], value, setup, reportedMaterial())).toBe(false);
+  });
 });
 const device = { resources: [
   { id: 'tool:seven', kind: 'tool', relations: {} },

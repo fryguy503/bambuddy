@@ -1854,6 +1854,71 @@ describe('QueuePage', () => {
     });
   });
 
+  describe('provider plate-clear confirmation before queue release', () => {
+    const staged = { ...mockQueueItems[0], manual_start: true };
+    const held = () => HttpResponse.json({ detail: { code: 'plate_clear_required', printer_id: 1, printer_name: 'KS1' } }, { status: 409 });
+
+    it('asks first, then acknowledges the plate before retrying the staged print', async () => {
+      const calls: string[] = [];
+      server.use(
+        http.get('/api/v1/queue/', () => HttpResponse.json([staged])),
+        http.post('/api/v1/queue/:id/start', () => { calls.push('start'); return calls.length === 1 ? held() : HttpResponse.json({ ...staged, manual_start: false }); }),
+        http.post('/api/v1/printers/1/clear-plate', () => { calls.push('clear'); return HttpResponse.json({ success: true }); }),
+      );
+      render(<QueuePage />);
+      await userEvent.click(await screen.findByTitle(/Start Print|do not have permission to start prints/i));
+      const confirm = await screen.findByRole('button', { name: 'Plate is clear — start print' });
+      expect(screen.getByText(/Remove any finished print from KS1/)).toBeInTheDocument();
+      expect(calls).toEqual(['start']);
+      await userEvent.click(confirm);
+      await waitFor(() => expect(calls).toEqual(['start', 'clear', 'start']));
+      expect(screen.queryByText('Confirm plate is clear')).not.toBeInTheDocument();
+    });
+
+    it('never releases the item when durable acknowledgement fails', async () => {
+      let starts = 0; let clears = 0;
+      server.use(
+        http.get('/api/v1/queue/', () => HttpResponse.json([staged])),
+        http.post('/api/v1/queue/:id/start', () => { starts++; return held(); }),
+        http.post('/api/v1/printers/1/clear-plate', () => { clears++; return HttpResponse.json({ detail: 'Printer needs a fresh idle report.' }, { status: 409 }); }),
+      );
+      render(<QueuePage />);
+      await userEvent.click(await screen.findByTitle(/Start Print|do not have permission to start prints/i));
+      await userEvent.click(await screen.findByRole('button', { name: 'Plate is clear — start print' }));
+      await screen.findByRole('alert');
+      expect(screen.getByText('Printer needs a fresh idle report.')).toBeInTheDocument();
+      expect(starts).toBe(1); expect(clears).toBe(1);
+      expect(screen.getByRole('button', { name: 'Plate is clear — start print' })).toBeEnabled();
+    });
+
+    it('offers confirmation on a pinned automatic item waiting for its plate', async () => {
+      let starts = 0;
+      server.use(
+        http.get('/api/v1/queue/', () => HttpResponse.json([{ ...staged, manual_start: false, waiting_reason: 'Waiting for plate confirmation: KS1' }])),
+        http.post('/api/v1/queue/:id/start', () => { starts++; return held(); }),
+      );
+      render(<QueuePage />);
+      await userEvent.click(await screen.findByTitle(/Start Print|do not have permission to start prints/i));
+      await screen.findByRole('button', { name: 'Plate is clear — start print' });
+      expect(starts).toBe(1);
+    });
+
+    it('cancels without acknowledging or releasing the print', async () => {
+      let starts = 0; let clears = 0;
+      server.use(
+        http.get('/api/v1/queue/', () => HttpResponse.json([staged])),
+        http.post('/api/v1/queue/:id/start', () => { starts++; return held(); }),
+        http.post('/api/v1/printers/1/clear-plate', () => { clears++; return HttpResponse.json({ success: true }); }),
+      );
+      render(<QueuePage />);
+      await userEvent.click(await screen.findByTitle(/Start Print|do not have permission to start prints/i));
+      await screen.findByRole('button', { name: 'Plate is clear — start print' });
+      await userEvent.click(screen.getByText('Cancel', { selector: 'button' }));
+      expect(screen.queryByText('Confirm plate is clear')).not.toBeInTheDocument();
+      expect(starts).toBe(1); expect(clears).toBe(0);
+    });
+  });
+
   describe('filament-short ▶ flow (#1496)', () => {
     /**
      * The dispatch pre-flight flags a queue item as filament_short. The user

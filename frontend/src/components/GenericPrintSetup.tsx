@@ -10,7 +10,7 @@ import { FilamentSwatch } from './FilamentSwatch';
 import { SlotPicker } from './PrintModal/SlotPicker';
 import { CALIBRATION_MODE_ACTIVE, CALIBRATION_MODE_INACTIVE } from '../utils/calibrationMode';
 import type { JsonSchema, GenericJobSetup, PrinterJobDescription, PrinterJobSource } from '../printer-plugins/types';
-import { jobInputKey, jobMaterialMode, jobSetupDefaults, resolveLocalSchema } from '../printer-plugins/forms';
+import { jobInputKey, jobMaterialMode, jobMaterialSourceEligible, jobMaterialTypeOverrideEnabled, jobSetupDefaults, resolveLocalSchema } from '../printer-plugins/forms';
 import { materialColor, readingQuality } from '../printer-plugins/presentation';
 
 function BooleanOption({ label, description, value, onChange, schema }: {
@@ -58,7 +58,7 @@ export function GenericPrintSetup({ printerId, printerName, value, onChange, mat
       void queryClient.invalidateQueries({ queryKey: ['printer-job-description', printerId] });
     }
   }, [telemetry.data?.descriptor_revision, device.data?.revision, printerId, queryClient]);
-  const normalized = description ? jobSetupDefaults(value, description, device.data) : value;
+  const normalized = description ? jobSetupDefaults(value, description, device.data, telemetry.data) : value;
   const normalizedKey = JSON.stringify(normalized);
   const valueKey = JSON.stringify(value);
   useEffect(() => {
@@ -83,11 +83,13 @@ export function GenericPrintSetup({ printerId, printerName, value, onChange, mat
   const optionsSchema = description?.options_schema || (optionsSpec && start ? resolveLocalSchema(optionsSpec, start.parameters_schema) : undefined);
   const mode = description && jobMaterialMode(description);
   const modeField = mode && optionsSchema?.properties?.[mode.option];
+  const overrideField = mode?.type_override_option ? optionsSchema?.properties?.[mode.type_override_option] : undefined;
   const modeEnabled = !mode || normalized.job_options[mode.option] !== false;
   const inputs = description ? description.inputs.map(input => ({ ...input, key: jobInputKey(input, description.artifact.uri) }))
     : materials.map(material => ({ ...material, key: material.id, compatible_tool_ids: [] as string[], compatible_source_ids: [] as string[], material_type: undefined, color: undefined, required: false }));
-  const complete = inputs.every(input => !input.required || !!normalized.material_bindings[input.key] && !!normalized.material_tool_ids[input.key]);
-  const optionFields = Object.entries(optionsSchema?.properties || {}).filter(([key, field]) => key !== mode?.option && !field.readOnly);
+  const complete = inputs.every(input => !input.required || !!normalized.material_bindings[input.key] && !!normalized.material_tool_ids[input.key]
+    && (!description || sources.some(source => source.id === normalized.material_bindings[input.key] && jobMaterialSourceEligible(input, source, description, normalized, telemetry.data))));
+  const optionFields = Object.entries(optionsSchema?.properties || {}).filter(([key, field]) => key !== mode?.option && key !== mode?.type_override_option && !field.readOnly);
   return <div aria-label={`${printerName} print setup`}>
     <div className="mb-4">
       <button type="button" aria-expanded={mappingExpanded} aria-controls={`${panelId}-mapping`} onClick={() => setMappingExpanded(!mappingExpanded)} className="flex w-full items-center gap-2 text-sm text-bambu-gray transition-colors hover:text-white">
@@ -99,11 +101,16 @@ export function GenericPrintSetup({ printerId, printerName, value, onChange, mat
       {mappingExpanded && <div id={`${panelId}-mapping`} className="mt-2 space-y-2 rounded-lg bg-bambu-dark p-3">
         {mode && modeField && <><BooleanOption label={modeField.title || mode.option} schema={modeField} value={modeEnabled} onChange={next => onChange({ ...normalized, job_options: { ...normalized.job_options, [mode.option]: next } })} />
           <p className="text-xs text-bambu-gray">{modeEnabled ? mode.enabled_help : mode.disabled_help}</p></>}
+        {mode?.type_override_option && overrideField && <BooleanOption label={overrideField.title || 'Allow different filament types'} schema={overrideField}
+          description={mode.type_override_help || overrideField.description || 'Sliced temperatures stay unchanged. Re-slice with the intended filament profile to change them.'}
+          value={normalized.job_options[mode.type_override_option] === true}
+          onChange={next => onChange({ ...normalized, job_options: { ...normalized.job_options, [mode.type_override_option!]: next } })} />}
         {tools.length > 1 && <div className="flex flex-wrap gap-2">{tools.map(tool => <label key={tool.id} className="flex items-center gap-2 text-sm text-white">
           <input type="checkbox" checked={normalized.tool_ids.includes(tool.id)} className="accent-bambu-green" onChange={event => onChange({ ...normalized, tool_ids: event.target.checked ? [...normalized.tool_ids, tool.id] : normalized.tool_ids.filter(id => id !== tool.id) })} />{tool.label}
         </label>)}</div>}
         {modeEnabled && inputs.map(input => {
           const eligible = sources.filter(candidate => {
+            if (description) return jobMaterialSourceEligible(input, candidate, description, normalized, telemetry.data);
             if (mode && candidate.id === mode.external_source_id) return false;
             if (input.compatible_source_ids.length && !input.compatible_source_ids.includes(candidate.id)) return false;
             const reading = telemetry.data?.resources.find(item => item.resource_id === candidate.id);
@@ -130,7 +137,10 @@ export function GenericPrintSetup({ printerId, printerName, value, onChange, mat
                 className={colorMatch ? 'border-bambu-green/50 text-bambu-green' : 'border-yellow-500 text-yellow-700 dark:border-yellow-400/50 dark:text-yellow-400'}
                 options={eligible.map(candidate => {
                   const color = materialColor(telemetry.data?.resources.find(item => item.resource_id === candidate.id)?.properties.color?.value);
-                  return { value: candidate.id, label: candidate.label, rgba: color?.slice(1), hex: color, exactMatch: !!color && !!input.color && color.slice(0, 7).toLowerCase() === input.color.slice(0, 7).toLowerCase() };
+                  const material = telemetry.data?.resources.find(item => item.resource_id === candidate.id)?.properties.material_type;
+                  const different = readingQuality(material) === 'known' && typeof material?.value === 'string' && input.material_type && material.value.trim().toLowerCase() !== input.material_type.trim().toLowerCase();
+                  const label = different && description && jobMaterialTypeOverrideEnabled(description, normalized) ? `${candidate.label} · ${material?.value}` : candidate.label;
+                  return { value: candidate.id, label, rgba: color?.slice(1), hex: color, exactMatch: !!color && !!input.color && color.slice(0, 7).toLowerCase() === input.color.slice(0, 7).toLowerCase() };
                 })}
                 onChange={next => onChange({ ...normalized, material_bindings: { ...normalized.material_bindings, [input.key]: next } })} /> : <select aria-label={input.label} className="w-full rounded border border-bambu-dark-tertiary bg-bambu-dark px-2 py-1 text-sm text-white" value={normalized.material_bindings[input.key] || ''} onChange={event => onChange({ ...normalized, material_bindings: { ...normalized.material_bindings, [input.key]: event.target.value } })}>
                   <option value="">Let the plugin select</option>{eligible.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}

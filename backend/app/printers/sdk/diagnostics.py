@@ -25,7 +25,7 @@ class DiagnosticCheck(SDKModel):
 
 class ConnectionDiagnosticResult(SDKModel):
     printer_id: int | None = None
-    ip_address: str = Field(min_length=1, max_length=253)
+    ip_address: str = Field(max_length=253)
     overall: Literal["ok", "warnings", "problems"]
     checks: list[DiagnosticCheck] = Field(max_length=128)
 

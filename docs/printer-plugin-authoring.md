@@ -288,6 +288,44 @@ does not mean zero; disconnected does not mean every last reading is current.
 The UI displays stale/unknown quality instead of treating an old value as a
 fresh measurement. State resource IDs must match the descriptor.
 
+### Provider-required plate acknowledgement
+
+A provider with a durable plate-clear requirement can expose the boolean
+`DeviceSnapshot.extensions["plate_clear_required"]`. Restore it from durable
+provider state before publishing the first snapshot after reconnect/restart.
+Keep it true until the explicit `job.clear_plate` operation succeeds; do not
+derive clearance from a reconnect or an idle report. The host honors this
+requirement independently of its optional global plate-clear preference.
+
+The shared queue leaves blocked jobs pending and the manual-start workflow
+requests acknowledgement before trying again. Use the standard declared
+`job.clear_plate` operation so existing core permission checks and the card/queue
+controls acknowledge the same provider state. A failed acknowledgement must
+leave the requirement and queued job intact. Clearing a plate does not waive
+other preflight checks or an unresolved dispatch outcome.
+
+## Connection diagnostics
+
+SDK 2.3 adds the optional `connection_diagnostics(config, *, connection=None,
+wait_for_publish_seconds=0.0, progress=None)` async hook and public
+`DiagnosticCheck`, `ConnectionDiagnosticResult` and `network_diagnostic_checks`
+exports. Declare `requires_api = ">=2.3.0,<3.0.0"` when using them. Diagnostic
+requests carry the selected model and complete plugin options before saving;
+the shared checklist renders plugin-supplied plain-text results without adding
+vendor-specific UI code. Existing `diagnostic_operation("connection", ...)`
+implementations retain their original call signature and translated labels.
+
+See [Connection diagnostic API](printer-plugin-diagnostics.md) for the hook,
+result schema, lifecycle, severity rules and example implementation.
+
+Device descriptors must describe the selected model's supported hardware.
+Do not expose a temperature sensor or heater just because a related model or
+generic firmware response contains that field. A chamber fan or light does
+not imply chamber temperature sensing or heating. Separate physical support
+from current readiness: stale telemetry or a temporarily disabled control
+does not prove the hardware is absent. Publish a new descriptor revision when
+confirmed optional hardware changes.
+
 ## Job plans and material routing
 
 SDK 2.2 adds `JobDescription` and `JobInput`. Plugins that rely on this print

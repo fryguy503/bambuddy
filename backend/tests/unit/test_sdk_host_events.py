@@ -226,3 +226,13 @@ def test_host_status_name_only_overrides_display_for_a_specific_job_phase(phase,
     snapshot.job = JobProgress(state="paused", phase=phase)
     state = state_for_host(bridge.config, bridge.plugin, snapshot)
     assert state.status_name == expected
+
+
+@pytest.mark.parametrize("required,expected", [(True, True), (False, False), ("true", False), (None, False)])
+def test_provider_durable_plate_gate_projects_from_typed_snapshot_even_when_disconnected(required, expected):
+    bridge, _callbacks, connection = case()
+    snapshot = connection.state.model_copy(deep=True)
+    snapshot.connected = False
+    snapshot.extensions["plate_clear_required"] = required
+    host = state_for_host(bridge.config, bridge.plugin, snapshot)
+    assert host.plate_clear_required is expected
