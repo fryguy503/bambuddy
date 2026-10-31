@@ -545,7 +545,7 @@ async def _printer_status(db: AsyncSession, printer: Printer) -> PrinterStatus:
         name=printer.name,
         current_archive_id=current_archive_id,
         awaiting_plate_clear=printer_manager.is_awaiting_plate_clear(printer_id),
-        plate_clear_required=getattr(state, "plate_clear_required", False) is True,
+        plate_clear_required=printer_manager.provider_requires_plate_clear(printer_id),
         ams=snapshot.get("ams") or [],
     )
     return PrinterStatus(**snapshot)

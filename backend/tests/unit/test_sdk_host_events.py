@@ -236,3 +236,19 @@ def test_provider_durable_plate_gate_projects_from_typed_snapshot_even_when_disc
     snapshot.extensions["plate_clear_required"] = required
     host = state_for_host(bridge.config, bridge.plugin, snapshot)
     assert host.plate_clear_required is expected
+
+
+@pytest.mark.parametrize("policy,expected", [("required", True), ("optional", False), (True, False), (None, False)])
+def test_provider_plate_policy_is_explicit_descriptor_metadata(policy, expected):
+    bridge, _callbacks, connection = case()
+    describe = bridge.plugin.describe_device
+
+    def device(config):
+        descriptor = describe(config)
+        descriptor.extensions["plate_clear_policy"] = policy
+        return descriptor
+
+    bridge.plugin.describe_device = device
+    host = state_for_host(bridge.config, bridge.plugin, connection.state)
+    assert host.requires_plate_clear is expected
+    assert host.plate_clear_required is False

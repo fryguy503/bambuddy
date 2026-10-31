@@ -126,7 +126,11 @@ def printer_state_to_dict(
     from backend.app.services.printer_manager import printer_manager
 
     snapshot["awaiting_plate_clear"] = printer_manager.is_awaiting_plate_clear(printer_id) if printer_id else False
-    snapshot["plate_clear_required"] = getattr(state, "plate_clear_required", False) is True
+    snapshot["plate_clear_required"] = (
+        printer_manager.provider_requires_plate_clear(printer_id)
+        if printer_id
+        else getattr(state, "plate_clear_required", False) is True
+    )
     if printer_id:
         info = printer_manager.get_printer(printer_id)
         if info is not None:
