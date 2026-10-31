@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDown, ArrowUp, Home, Settings2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, Home, Settings2 } from 'lucide-react';
 import type { JsonSchema, PrinterDevice, PrinterDeviceState, PrinterOperation, PrinterResource } from '../../printer-plugins/types';
 import { schemaDefaults } from '../../printer-plugins/forms';
 import { displayUnit, materialColor, readingQuality } from '../../printer-plugins/presentation';
@@ -113,7 +113,13 @@ export function DeviceControlPopover(props: Props) {
       ? [{ label: 'All axes', value: field.items.enum }, ...enumOptions(field.items).map(option => ({ label: option.label, value: [option.value] }))].filter(option => (typeof field.minItems !== 'number' || option.value.length >= field.minItems) && (typeof field.maxItems !== 'number' || option.value.length <= field.maxItems))
       : enumOptions(field);
     const active = stateRole('value');
-    content = <div className="space-y-1 p-3">{targetSelector}{options.map((option, index) => <button type="button" key={index} className={button + ' block w-full text-left ' + (active === option.value ? 'text-bambu-green' : '')} disabled={!allowed || !key} aria-pressed={kind === 'speed' ? active === option.value : undefined} onClick={() => key && void submit(operation, { [key]: option.value })}>{kind === 'home' && <Home className="mr-2 inline h-3.5 w-3.5" />}{option.label}</button>)}{!options.length && advanced}</div>;
+    content = <div className="space-y-1 p-3">{targetSelector}{options.map((option, index) => {
+      const selected = kind === 'speed' && active === option.value;
+      const choice = kind === 'speed'
+        ? 'flex w-full items-center justify-between rounded-lg border px-2 py-1.5 text-left text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ' + (selected ? 'border-bambu-green/30 bg-bambu-green/10 text-bambu-green' : 'border-bambu-dark-tertiary bg-bambu-dark text-white hover:bg-bambu-dark-tertiary')
+        : button + ' block w-full text-left';
+      return <button type="button" key={index} className={choice} disabled={!allowed || !key} aria-pressed={kind === 'speed' ? selected : undefined} onClick={() => key && void submit(operation, { [key]: option.value })}>{kind === 'home' && <Home className="mr-2 inline h-3.5 w-3.5" />}{option.label}{selected && <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}</button>;
+    })}{!options.length && advanced}</div>;
   } else if (kind === 'motion') {
     const jog = operations.filter(op => operationPresentation(op)?.editor === 'jog');
     const axes = device.resources.filter(axis => jog.some(op => op.resource_ids.includes(axis.id) || op.resource_kinds.includes(axis.kind)));
