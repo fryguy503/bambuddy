@@ -13,6 +13,7 @@ from backend.app.printers.sdk.domain import (
     DeviceSnapshot,
     JobId,
     JobProgress as JobProgress,
+    JSONSchema,
     ResourceId,
     SDKModel,
 )
@@ -63,6 +64,55 @@ class JobRequest(SDKModel):
         if len(self.selected_tool_ids) != len(set(self.selected_tool_ids)):
             raise ValueError("Selected tool IDs must be unique")
         return self
+
+
+class JobInput(SDKModel):
+    """A sliced input whose identity and equivalence are owned by its plugin."""
+
+    id: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=200)
+    artifact_uri: str | None = Field(default=None, max_length=4096)
+    routing_key: str | None = Field(default=None, min_length=1, max_length=512)
+    material_type: str | None = None
+    color: str | None = None
+    required_mass_grams: float | None = Field(default=None, ge=0)
+    compatible_tool_ids: list[ResourceId] = Field(default_factory=list)
+    compatible_source_ids: list[ResourceId] = Field(default_factory=list)
+    required: bool = True
+
+
+class JobDescription(SDKModel):
+    artifact: JobArtifact
+    inputs: list[JobInput] = Field(default_factory=list)
+    options_schema: JSONSchema = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    default_options: dict[str, JsonValue] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    extensions: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _unique_inputs(self):
+        if len(self.inputs) != len({item.id for item in self.inputs}):
+            raise ValueError("Job input IDs must be unique within an artifact")
+        return self
+
+
+def validate_job_description(device: DeviceDescriptor, value) -> JobDescription:
+    from backend.app.printers.sdk.validation import validate_json_schema
+
+    description = value if isinstance(value, JobDescription) else JobDescription.model_validate(value)
+    validate_json_schema(description.options_schema)
+    # Defaults may be partial: required choices can need explicit user input.
+    # The complete job options remain subject to job.start schema validation.
+    for item in description.inputs:
+        for resource_id in item.compatible_tool_ids:
+            if device.resource(resource_id).kind != "tool":
+                raise SDKValidationError("Job input references a non-tool resource")
+        for resource_id in item.compatible_source_ids:
+            if device.resource(resource_id).kind != "material_source":
+                raise SDKValidationError("Job input references a non-material resource")
+        if item.artifact_uri is not None and item.artifact_uri != description.artifact.uri:
+            raise SDKValidationError("Job input belongs to another artifact")
+    return description
 
 
 class MaterialInventoryItem(SDKModel):

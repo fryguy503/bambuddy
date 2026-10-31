@@ -19,11 +19,14 @@ from backend.app.printers.sdk.domain import (
 from backend.app.printers.sdk.host import JobEventData
 from backend.app.printers.sdk.jobs import (
     JobArtifact,
+    JobDescription,
+    JobInput,
     JobProgress,
     JobRequest,
     MaterialBinding,
     MaterialInventoryItem,
     material_inventory,
+    validate_job_description,
     validate_job_request,
 )
 from backend.app.printers.sdk.manifest import PluginManifest

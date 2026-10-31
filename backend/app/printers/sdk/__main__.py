@@ -10,7 +10,9 @@ from backend.app.printers.sdk import (
     DeviceDescriptor,
     DeviceEvent,
     DeviceSnapshot,
+    JobDescription,
     JobEventData,
+    JobInput,
     OperationReceipt,
     OperationRequest,
     PluginManifest,
@@ -32,7 +34,18 @@ def main(argv=None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     schema = commands.add_parser("schema", help="Export the machine-readable SDK JSON Schema")
     schema.add_argument(
-        "kind", choices=("manifest", "device", "snapshot", "request", "receipt", "event", "job-event-data")
+        "kind",
+        choices=(
+            "manifest",
+            "device",
+            "snapshot",
+            "request",
+            "receipt",
+            "event",
+            "job-event-data",
+            "job-description",
+            "job-input",
+        ),
     )
     manifest = commands.add_parser("manifest", help="Validate a static manifest without loading code")
     manifest.add_argument("path")
@@ -53,6 +66,8 @@ def main(argv=None) -> int:
                 "receipt": OperationReceipt,
                 "event": DeviceEvent,
                 "job-event-data": JobEventData,
+                "job-description": JobDescription,
+                "job-input": JobInput,
             }
             print(json.dumps(models[args.kind].model_json_schema(), indent=2))
             return 0
