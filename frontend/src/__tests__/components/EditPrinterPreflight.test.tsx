@@ -12,6 +12,7 @@ import { render } from '../utils';
 import { PrintersPage } from '../../pages/PrintersPage';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
+import type { PrinterDiagnosticRequest, PrinterCreate } from '../../api/client';
 
 const mockPrinter = {
   id: 1,
@@ -42,9 +43,9 @@ const mockStatus = {
   vt_tray: [],
 };
 
-async function openEditModal() {
+async function openEditModal(printerName = 'X1 Carbon') {
   render(<PrintersPage />);
-  await waitFor(() => expect(screen.getByText('X1 Carbon')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText(printerName)).toBeInTheDocument());
 
   // Open the per-printer actions menu (kebab button), then click Edit.
   const menuBtn = [...document.querySelectorAll('button')].find((b) =>
@@ -105,5 +106,46 @@ describe('EditPrinterModal pre-flight', () => {
 
     await waitFor(() => expect(updated).toBe(true));
     expect(screen.queryByText(/Some connection checks failed/i)).not.toBeInTheDocument();
+  });
+
+  it('checks the current unsaved model and plugin options before saving an edit', async () => {
+    const printer = { ...mockPrinter, name: 'Workshop Kobra', plugin_id: 'fixture', model: 'Kobra S1', plugin_options: { tls_fingerprint: 'a'.repeat(64) } };
+    const checks: PrinterDiagnosticRequest[] = [];
+    const updates: Partial<PrinterCreate>[] = [];
+    server.use(
+      http.get('/api/v1/printers/', () => HttpResponse.json([printer])),
+      http.get('/api/v1/printer-plugins', () => HttpResponse.json([{
+        id: 'fixture', name: 'Fixture support', api_version: 2, version: '1.0.0', bundled: false, capabilities: [],
+        models: ['Kobra S1', 'Kobra 3'].map(name => ({ id: name, name, aliases: [], capabilities: [] })),
+        connection_fields: [{ id: 'ip_address', label: 'LAN IP address', required: true }, { id: 'serial_number', label: 'Printer identity', required: true }],
+        configuration_schema: { type: 'object', properties: { tls_fingerprint: { type: 'string', title: 'Approved printer TLS fingerprint' } }, required: ['tls_fingerprint'] },
+      }])),
+      http.post('/api/v1/printers/diagnostic', async ({ request }) => {
+        checks.push(await request.json() as PrinterDiagnosticRequest);
+        return HttpResponse.json({ printer_id: null, overall: 'warnings', checks: [
+          { id: 'fixture:observation', status: 'warn', title: 'Printer reports', message: 'Waiting for a fresh report.', hint: 'Review the connection before saving.', params: {} },
+        ] });
+      }),
+      http.patch('/api/v1/printers/:id', async ({ request }) => {
+        updates.push(await request.json() as Partial<PrinterCreate>);
+        return HttpResponse.json(printer);
+      }),
+    );
+    await openEditModal(printer.name);
+    const user = userEvent.setup();
+    const address = screen.getByLabelText('LAN IP address');
+    await user.clear(address); await user.type(address, '192.168.1.88');
+    const pin = screen.getByLabelText(/Approved printer TLS fingerprint/);
+    await user.clear(pin); await user.type(pin, 'b'.repeat(64));
+    const model = await screen.findByRole('option', { name: 'Kobra 3' });
+    await user.selectOptions(model.closest('select')!, 'Kobra 3');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    expect(await screen.findByText('Waiting for a fresh report.')).toBeInTheDocument();
+    expect(checks).toEqual([expect.objectContaining({ plugin_id: 'fixture', ip_address: '192.168.1.88', serial_number: mockPrinter.serial_number,
+      model: 'Kobra 3', plugin_options: { tls_fingerprint: 'b'.repeat(64) } })]);
+    expect(updates).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: 'Save anyway', exact: true }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    expect(updates[0]).toEqual(expect.objectContaining({ ip_address: '192.168.1.88', model: 'Kobra 3', plugin_options: { tls_fingerprint: 'b'.repeat(64) } }));
   });
 });

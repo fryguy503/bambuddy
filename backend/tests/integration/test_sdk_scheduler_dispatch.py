@@ -165,3 +165,60 @@ async def test_invalid_resource_plan_fails_before_upload(db_session, resource_ca
     assert case.item.status == "failed"
     assert "Invalid resource job plan" in case.item.error_message
     assert case.plugin.requests == []
+
+
+async def test_provider_plate_hold_defers_before_budget_upload_or_start_with_global_setting_off(
+    db_session, resource_case
+):
+    case = resource_case
+    case.plugin.connection.state.plate_clear_required = True
+    assert case.scheduler._can_dispatch_to_printer(case.printer.id, require_plate_clear=False) is False
+    assert (
+        case.scheduler._pinned_hold_reason(case.printer.id, "Fixture", False)
+        == "Waiting for plate confirmation: Fixture"
+    )
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == "pending"
+    assert case.item.waiting_reason == "Waiting for plate confirmation"
+    assert case.item.error_message is None
+    case.budget.assert_not_awaited()
+    case.upload.assert_not_awaited()
+    assert case.plugin.requests == []
+
+
+async def test_provider_hold_arriving_during_upload_stays_pending_without_start(db_session, resource_case):
+    case = resource_case
+
+    async def upload(*args, **kwargs):
+        case.plugin.connection.state.plate_clear_required = True
+        return True
+
+    case.upload.side_effect = upload
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == "pending"
+    assert case.item.error_message is None
+    assert case.item.waiting_reason.startswith("Waiting for plate confirmation")
+    assert case.plugin.requests == []
+
+
+async def test_provider_hold_detected_at_final_send_is_deferred_not_generic_failure(
+    db_session, resource_case, monkeypatch
+):
+    from backend.app.printers import job_dispatch
+
+    case = resource_case
+
+    async def refuse(*args, **kwargs):
+        case.plugin.connection.state.plate_clear_required = True
+        return False
+
+    monkeypatch.setattr(job_dispatch, "start_queue_job", refuse)
+    monkeypatch.setattr(scheduler_module, "delete_file_async", AsyncMock(return_value=True))
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == "pending"
+    assert case.item.error_message is None
+    assert case.item.waiting_reason.startswith("Waiting for plate confirmation")
+    assert case.plugin.requests == []

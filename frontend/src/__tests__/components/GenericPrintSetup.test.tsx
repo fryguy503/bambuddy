@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -43,7 +43,7 @@ describe('generic print resource binding', () => {
   });
 
   it('uses plugin-native options and one logical shared material selection with reported sources', async () => {
-    api.state.mockResolvedValue({ resources: [
+    api.state.mockResolvedValue({ connected: true, observed_at: new Date().toISOString(), resources: [
       { resource_id: 'source:shared-router', available: true, properties: { material_type: { value: 'PLA', quality: 'known' }, color: { value: '#112233', quality: 'known' } } },
       { resource_id: 'source:empty', available: false, properties: {} },
     ] });
@@ -76,5 +76,40 @@ describe('generic print resource binding', () => {
     render(<QueryClientProvider client={new QueryClient()}><GenericPrintSetup printerId={44} printerName="Pending fixture" value={emptyGenericJobSetup()} onChange={vi.fn()} descriptionPending materials={[{ id: 'T0', label: 'Interim material' }]} /></QueryClientProvider>);
     expect(screen.getByRole('status')).toHaveTextContent('Reading print requirements');
     expect(screen.queryByText('Interim material')).not.toBeInTheDocument();
+  });
+
+  it('requires explicit opt-in for PLA Silk, shows the loaded type, and clears the choice when returning to strict matching', async () => {
+    api.state.mockResolvedValue({ connected: true, observed_at: new Date().toISOString(), resources: [
+      { resource_id: 'source:shared-router', available: true, status: 'loaded', properties: { material_type: { value: 'PLA Silk', quality: 'known' }, color: { value: '#112233', quality: 'known' } } },
+      { resource_id: 'source:empty', available: true, status: 'empty', properties: { material_type: { value: 'PLA Silk', quality: 'known' } } },
+    ] });
+    const description: PrinterJobDescription = {
+      artifact: { uri: 'library:8', format: 'gcode' },
+      inputs: [{ id: 'T7', label: 'Blue PLA', routing_key: 'blue', material_type: 'PLA', required: true, compatible_tool_ids: ['tool:bay-7'], compatible_source_ids: ['source:shared-router', 'source:empty'] }],
+      options_schema: { type: 'object', properties: { use_feeder: { type: 'boolean', title: 'Use feeder', default: true }, allow_material_type_mismatch: { type: 'boolean', title: 'Allow different filament types', default: false } }, additionalProperties: false },
+      default_options: {}, warnings: [], extensions: { 'bambuddy:ui': { material_mode: { option: 'use_feeder', external_source_id: 'source:external', require_reported_material: true,
+        type_override_option: 'allow_material_type_mismatch', type_override_help: 'Sliced temperatures stay unchanged. Re-slice to use another filament profile.' } } },
+    };
+    const changed = vi.fn();
+    function Setup() {
+      const [value, setValue] = useState(() => ({ ...emptyGenericJobSetup(), tool_ids: ['tool:bay-7'] }));
+      return <GenericPrintSetup printerId={48} printerName="Plugin fixture" value={value} description={description} defaultExpanded onChange={next => { changed(next); setValue(next); }} />;
+    }
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><Setup /></QueryClientProvider>);
+    const user = userEvent.setup();
+    const toggle = screen.getByRole('group', { name: 'Allow different filament types' });
+    expect(within(toggle).getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('option', { name: /Shared material router/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('group', { name: 'Allow different filament types' })).toHaveLength(1);
+    expect(screen.getByText('Sliced temperatures stay unchanged. Re-slice to use another filament profile.')).toBeInTheDocument();
+    await user.click(within(toggle).getByRole('button', { name: 'On' }));
+    await user.click(screen.getByRole('combobox', { name: 'Blue PLA' }));
+    await user.click(await screen.findByRole('option', { name: /Shared material router · PLA Silk/ }));
+    expect(screen.queryByRole('option', { name: /Empty source/ })).not.toBeInTheDocument();
+    expect(changed.mock.lastCall![0].job_options.allow_material_type_mismatch).toBe(true);
+    expect(changed.mock.lastCall![0].material_bindings).toEqual({ 'routing:blue': 'source:shared-router' });
+    await user.click(within(toggle).getByRole('button', { name: 'Off' }));
+    await waitFor(() => expect(changed.mock.lastCall![0].material_bindings).toEqual({}));
+    expect(changed.mock.lastCall![0].job_options.allow_material_type_mismatch).toBe(false);
   });
 });

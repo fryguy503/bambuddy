@@ -87,6 +87,38 @@ describe('ConnectionDiagnosticModal', () => {
     spy.mockRestore();
   });
 
+  it('sends unsaved model and plugin options to pre-add checks and renders plugin text as escaped text', async () => {
+    const markup = '<img src=x onerror="window.diagnosticInjected=true">';
+    const hint = '<script>window.diagnosticInjected=true</script>';
+    const spy = vi.spyOn(api, 'diagnoseConnection').mockResolvedValue({
+      printer_id: null, ip_address: '192.168.1.99', overall: 'warnings', checks: [
+        { id: 'third-party:certificate', status: 'warn', title: 'Approved printer certificate', message: markup, hint, params: {} },
+        { id: 'port_mqtt', status: 'pass', title: 'Native control channel', message: 'Authenticated using this printer certificate.', params: { port: 1884 } },
+      ],
+    });
+    const connection = { ip_address: '192.168.1.99', plugin_id: 'third-party', serial_number: 'native-id', model: 'Toolchanger 9', plugin_options: { tls_fingerprint: 'a'.repeat(64) } };
+    renderModal({ connection, onClose: vi.fn() });
+    expect(await screen.findByText('Approved printer certificate')).toBeInTheDocument();
+    expect(screen.getByText(markup)).toBeInTheDocument();
+    expect(screen.getByText(hint)).toBeInTheDocument();
+    expect(screen.getByText('Native control channel')).toBeInTheDocument();
+    expect(screen.queryByText(/Control port \(MQTT 8883\)/i)).not.toBeInTheDocument();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+    expect(document.querySelector('script')).toBeNull();
+    expect(spy).toHaveBeenCalledWith(connection);
+    spy.mockRestore();
+  });
+
+  it('uses an unknown check ID as a readable fallback when no plugin title is supplied', async () => {
+    const spy = vi.spyOn(api, 'diagnosePrinter').mockResolvedValue({ ...PROBLEM_RESULT,
+      checks: [{ id: 'third-party:future-check', status: 'skip', params: {} }],
+    });
+    renderModal({ printerId: 1, onClose: vi.fn() });
+    expect(await screen.findByText('third-party:future-check')).toBeInTheDocument();
+    expect(screen.queryByText('diagnostic.check.third-party:future-check.title')).not.toBeInTheDocument();
+    spy.mockRestore();
+  });
+
   it('re-runs the diagnostic when the user clicks Run again', async () => {
     const spy = vi.spyOn(api, 'diagnosePrinter').mockResolvedValue(PROBLEM_RESULT);
 

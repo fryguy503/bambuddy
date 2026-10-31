@@ -287,16 +287,21 @@ export interface CameraDiagnoseResult {
 export type DiagnosticStatus = 'pass' | 'fail' | 'warn' | 'skip';
 
 export interface DiagnosticCheck {
-  id:
-    | 'port_mqtt'
-    | 'port_ftps'
-    | 'port_rtsps'
-    | 'network_mode'
-    | 'subnet'
-    | 'mqtt_auth'
-    | 'developer_mode';
+  id: string;
   status: DiagnosticStatus;
-  params: Record<string, string | number>;
+  params: Record<string, unknown>;
+  title?: string | null;
+  message?: string | null;
+  hint?: string | null;
+}
+
+export interface PrinterDiagnosticRequest {
+  ip_address: string;
+  plugin_id?: string;
+  serial_number?: string;
+  access_code?: string;
+  model?: string | null;
+  plugin_options?: Record<string, unknown>;
 }
 
 export interface PrinterDiagnosticResult {
@@ -759,6 +764,7 @@ export interface PrinterStatus {
   // Queue: printer is awaiting user ack that the build plate was cleared after a
   // finished/failed print. Persisted across restarts (#961).
   awaiting_plate_clear: boolean;
+  plate_clear_required?: boolean;
   // AMS drying support
   supports_drying: boolean;
   // The AMS can dry, but only from the printer's own screen (P1 series, #2533).
@@ -7620,12 +7626,7 @@ export const api = {
     request<CameraDiagnoseResult>(`/printers/${printerId}/camera/diagnose`, { method: 'POST' }),
   diagnosePrinter: (printerId: number) =>
     request<PrinterDiagnosticResult>(`/printers/${printerId}/diagnostic`),
-  diagnoseConnection: (body: {
-    ip_address: string;
-    plugin_id?: string;
-    serial_number?: string;
-    access_code?: string;
-  }) =>
+  diagnoseConnection: (body: PrinterDiagnosticRequest) =>
     request<PrinterDiagnosticResult>('/printers/diagnostic', {
       method: 'POST',
       body: JSON.stringify(body),

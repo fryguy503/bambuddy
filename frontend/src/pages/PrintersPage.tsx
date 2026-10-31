@@ -162,7 +162,8 @@ import { Card, CardContent } from '../components/Card';
 import { Collapsible } from '../components/Collapsible';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
 import { ConfirmModal } from '../components/ConfirmModal';
-import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
+import { ConnectionDiagnosticModal, ConnectionPreflightReview } from '../components/ConnectionDiagnostic';
+import { shouldReviewDiagnostic } from '../printer-plugins/diagnostics';
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { FeedDirectionModal } from '../components/FeedDirectionModal';
 import { FileManagerModal } from '../components/FileManagerModal';
@@ -1333,7 +1334,8 @@ function PrinterCard({
   });
   const isPrintingOrPaused = status?.state === 'RUNNING' || status?.state === 'PAUSE';
   const hasActivePrintState = isPrintingOrPaused || status?.state === 'PREPARE' || status?.state === 'SLICING';
-  const needsPlateClear = requirePlateClear && status?.awaiting_plate_clear === true;
+  const plateClearEnabled = requirePlateClear || status?.plate_clear_required === true;
+  const needsPlateClear = plateClearEnabled && status?.awaiting_plate_clear === true;
   // Post-print outcome confirmation on the card (#1898): while the plate-clear
   // gate is up and the just-finished print asked for a verdict, offer
   // Good/Reject right where the operator releases the plate. Releasing the
@@ -1368,7 +1370,7 @@ function PrinterCard({
     // Connected-only because the pill's only render site sits inside the live-status
     // panel. For a powered-down printer the plate-clear button itself carries the
     // state — see the standalone slot below the status block (#2864).
-    if (!requirePlateClear || !status?.connected) return null;
+    if (!plateClearEnabled || !status?.connected) return null;
     if (isPrintingOrPaused) {
       return {
         label: t('printers.plateStatus.inUse'),
@@ -1556,7 +1558,7 @@ function PrinterCard({
     onSuccess: () => {
       showToast(t('queue.clearPlateSuccess'));
       queryClient.setQueryData(['printerStatus', printer.id], (old: PrinterStatus | undefined) =>
-        old ? { ...old, awaiting_plate_clear: false } : old
+        old ? { ...old, awaiting_plate_clear: false, plate_clear_required: false } : old
       );
       queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
       queryClient.invalidateQueries({ queryKey: ['queue', printer.id] });
@@ -4570,6 +4572,7 @@ export function AddPrinterModal({
   // failed result awaiting an explicit "save anyway".
   const [checkingSave, setCheckingSave] = useState(false);
   const [saveWarning, setSaveWarning] = useState<PrinterDiagnosticResult | null>(null);
+  const [saveDiagnosticError, setSaveDiagnosticError] = useState<string | null>(null);
 
   // Fetch discovery info on mount + restore the last custom CIDR the user
   // typed (kept in localStorage so they don't retype `10.1.1.0/24` every
@@ -4595,22 +4598,27 @@ export function AddPrinterModal({
   // Filter out already-added printers
   const newPrinters = discovered.filter(p => !existingSerials.includes(p.serial));
 
-  const handleAddSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAddSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     setCheckingSave(true);
+    setSaveWarning(null);
+    setSaveDiagnosticError(null);
     try {
       const result = await api.diagnoseConnection({
         ip_address: form.ip_address.trim(),
         plugin_id: form.plugin_id || 'bambu',
         serial_number: form.serial_number.trim() || undefined,
         access_code: form.access_code || undefined,
+        model: form.model || undefined,
+        plugin_options: form.plugin_options || {},
       });
-      if (result.checks.some((c) => c.status === 'fail')) {
+      if (shouldReviewDiagnostic(result)) {
         setSaveWarning(result);
         return;
       }
-    } catch {
-      // Diagnostic infrastructure failed — never block the save on it.
+    } catch (error) {
+      setSaveDiagnosticError(error instanceof Error ? error.message : t('common.error'));
+      return;
     } finally {
       setCheckingSave(false);
     }
@@ -4936,27 +4944,10 @@ export function AddPrinterModal({
               <Stethoscope className="w-4 h-4" />
               {t('diagnostic.runButton')}
             </button>
-            {saveWarning ? (
-              <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                  <p className="text-sm text-amber-700 dark:text-amber-300">{t('printers.addPreflight.warning')}</p>
-                </div>
-                <DiagnosticChecklist result={saveWarning} />
-                <div className="flex gap-3">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => setSaveWarning(null)}
-                    className="flex-1"
-                  >
-                    {t('printers.addPreflight.back')}
-                  </Button>
-                  <Button type="button" onClick={() => onAdd(form)} className="flex-1">
-                    {t('printers.addPreflight.saveAnyway')}
-                  </Button>
-                </div>
-              </div>
+            {saveWarning || saveDiagnosticError ? (
+              <ConnectionPreflightReview result={saveWarning} error={saveDiagnosticError} checking={checkingSave}
+                onBack={() => { setSaveWarning(null); setSaveDiagnosticError(null); }}
+                onRetry={() => { void handleAddSubmit(); }} onSave={() => onAdd(form)} />
             ) : (
               <div className="flex gap-3 pt-2">
                 <Button type="button" variant="secondary" onClick={onClose} className="flex-1">
@@ -4978,6 +4969,8 @@ export function AddPrinterModal({
           plugin_id: form.plugin_id || 'bambu',
           serial_number: form.serial_number.trim() || undefined,
           access_code: form.access_code || undefined,
+          model: form.model || undefined,
+          plugin_options: form.plugin_options || {},
         }}
         printerName={form.name || null}
         onClose={() => setShowDiagnostic(false)}
@@ -5333,6 +5326,7 @@ function EditPrinterModal({
   // edit that breaks connectivity (e.g. a mistyped IP) is caught before save.
   const [checkingSave, setCheckingSave] = useState(false);
   const [saveWarning, setSaveWarning] = useState<PrinterDiagnosticResult | null>(null);
+  const [saveDiagnosticError, setSaveDiagnosticError] = useState<string | null>(null);
 
   const updateMutation = useMutation({
     mutationFn: (data: Partial<PrinterCreate>) => api.updatePrinter(printer.id, data),
@@ -5373,22 +5367,27 @@ function EditPrinterModal({
     updateMutation.mutate(data);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     setCheckingSave(true);
+    setSaveWarning(null);
+    setSaveDiagnosticError(null);
     try {
       const result = await api.diagnoseConnection({
         ip_address: form.ip_address.trim(),
         plugin_id: form.plugin_id,
         serial_number: printer.serial_number,
         access_code: form.access_code || undefined,
+        model: form.model || undefined,
+        plugin_options: form.plugin_options || {},
       });
-      if (result.checks.some((c) => c.status === 'fail')) {
+      if (shouldReviewDiagnostic(result)) {
         setSaveWarning(result);
         return;
       }
-    } catch {
-      // Diagnostic infrastructure failed — never block the save on it.
+    } catch (error) {
+      setSaveDiagnosticError(error instanceof Error ? error.message : t('common.error'));
+      return;
     } finally {
       setCheckingSave(false);
     }
@@ -5496,32 +5495,10 @@ function EditPrinterModal({
                 {t('printers.maintenance.editFieldHelp')}
               </p>
             </div>
-            {saveWarning ? (
-              <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                  <p className="text-sm text-amber-700 dark:text-amber-300">{t('printers.addPreflight.warning')}</p>
-                </div>
-                <DiagnosticChecklist result={saveWarning} />
-                <div className="flex gap-3">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => setSaveWarning(null)}
-                    className="flex-1"
-                  >
-                    {t('printers.addPreflight.back')}
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={doSave}
-                    className="flex-1"
-                    disabled={updateMutation.isPending}
-                  >
-                    {t('printers.addPreflight.saveAnyway')}
-                  </Button>
-                </div>
-              </div>
+            {saveWarning || saveDiagnosticError ? (
+              <ConnectionPreflightReview result={saveWarning} error={saveDiagnosticError} checking={checkingSave} saving={updateMutation.isPending}
+                onBack={() => { setSaveWarning(null); setSaveDiagnosticError(null); }}
+                onRetry={() => { void handleSubmit(); }} onSave={doSave} />
             ) : (
               <div className="flex gap-3 pt-4">
                 <Button type="button" variant="secondary" onClick={onClose} className="flex-1">

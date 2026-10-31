@@ -294,6 +294,8 @@ def validate_plugin_contract(
             inspect.signature(plugin.connection_diagnostics).bind(
                 placeholder, connection=None, wait_for_publish_seconds=0.0, progress=None
             )
+            if not inspect.iscoroutinefunction(plugin.connection_diagnostics):
+                raise SDKValidationError("Plugin connection diagnostics hook must be async")
             inspect.signature(plugin.snapshot_device).bind(placeholder, object())
             inspect.signature(plugin.invoke).bind(
                 placeholder, object(), OperationRequest(operation_id="conformance.check")

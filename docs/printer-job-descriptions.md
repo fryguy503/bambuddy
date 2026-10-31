@@ -1,4 +1,4 @@
-# File-specific print setup (SDK 2.2)
+# File-specific print setup (SDK 2.2 and later)
 
 `PrinterPlugin.describe_job(config, artifact, path)` inspects an authorized local
 artifact and returns a `JobDescription`. It must not send printer commands. The
@@ -31,3 +31,19 @@ option schema key), `external_source_id`, `enabled_help`, `disabled_help`,
 the form offers only available sources with a known reported matching material.
 Other options render from their schema titles, descriptions and defaults.
 Use `requires_api: ">=2.2.0,<3.0.0"` when a package imports this contract.
+
+SDK 2.3 also recognizes `material_mode.type_override_option`, naming a declared
+boolean option, and optional `type_override_help`. The form displays an explicit
+opt-in beside material mapping. When enabled, sources with a different reported
+material type may be selected. Without this declaration, or when the option is
+off, read-only or constrained to false, normal type filtering remains in force.
+This flag never relaxes tool/source identity, reported availability, freshness,
+nonempty-slot requirements or physical compatibility constraints.
+
+The provider must implement the same opt-in in its actual job validation and
+native dispatch. A UI filter alone cannot authorize a mismatched material. The
+selected option is saved in `sdk_job.options`, including edit, batch and retry
+flows. Document its exact behavior. For example, Anycubic's
+`allow_material_type_mismatch` keeps the original G-code temperatures and toolpath;
+changing a temperature profile requires a new sliced file. Do not infer a
+temperature rewrite from a material-type substitution.

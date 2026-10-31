@@ -1,5 +1,6 @@
 """The diagnostic contract carries plugin configuration without vendor branches."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +8,12 @@ from pydantic import ValidationError
 
 from backend.app.printers import api, diagnostic, registry as registry_module
 from backend.app.printers.contracts import PrinterConfig, PrinterPluginError
-from backend.app.printers.sdk import ConnectionDiagnosticResult, DiagnosticCheck, validate_plugin_contract
+from backend.app.printers.sdk import (
+    ConnectionDiagnosticResult,
+    DiagnosticCheck,
+    SDKValidationError,
+    validate_plugin_contract,
+)
 from examples.printer_plugins.reference.payload.plugin import ReferencePlugin
 
 
@@ -122,8 +128,26 @@ async def test_provider_cannot_return_a_different_printer(provider, monkeypatch)
         return ConnectionDiagnosticResult(ip_address="192.168.50.99", overall="ok", checks=[])
 
     monkeypatch.setattr(provider, "connection_diagnostics", wrong)
-    with pytest.raises(PrinterPluginError, match="requested printer"):
+    with pytest.raises(SDKValidationError, match="requested printer"):
         await diagnostic.run_connection_diagnostic("192.168.50.42", plugin_id=provider.id)
+
+
+@pytest.mark.asyncio
+async def test_timeout_cancels_probe_and_releases_provider_after_cleanup(provider, monkeypatch):
+    cleaned_up = False
+
+    async def stalled(config, **kwargs):
+        nonlocal cleaned_up
+        try:
+            await asyncio.sleep(1000)
+        finally:
+            cleaned_up = True
+
+    monkeypatch.setattr(provider, "connection_diagnostics", stalled)
+    monkeypatch.setattr(diagnostic, "DIAGNOSTIC_TIMEOUT_SECONDS", 0.01)
+    with pytest.raises(PrinterPluginError, match="timed out"):
+        await diagnostic.run_connection_diagnostic("192.168.50.42", plugin_id=provider.id)
+    assert cleaned_up and not registry_module.registry._runtime_refs
 
 
 def test_diagnostic_results_validate_open_ids_and_bounded_text():

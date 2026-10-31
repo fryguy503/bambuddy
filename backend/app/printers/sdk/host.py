@@ -39,6 +39,9 @@ class HostPrinterState:
     status_name: str | None = None
     plugin_id: str | None = None
     device_snapshot: DeviceSnapshot | None = None
+    # A provider's durable dispatch safety gate is independent of the optional
+    # host-wide plate confirmation preference.
+    plate_clear_required: bool = False
     temperatures: dict[str, float] = field(default_factory=dict)
     material_inventory: list[dict] = field(default_factory=list)
     filament_units: list[dict] = field(default_factory=list)
@@ -181,6 +184,7 @@ def state_for_host(config, plugin, state):
         plugin_id=config.plugin_id,
         firmware_version=firmware_version if isinstance(firmware_version, str) else None,
         device_snapshot=snapshot,
+        plate_clear_required=snapshot.extensions.get("plate_clear_required") is True,
     )
     result._printer_provider = plugin
     result.material_inventory = [item.model_dump(mode="json") for item in material_inventory(device, snapshot)]
