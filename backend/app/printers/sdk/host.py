@@ -159,6 +159,7 @@ def state_for_host(config, plugin, state):
         "cancelled": "FAILED",
         "unknown": "unknown",
     }.get(phase.casefold(), phase.upper())
+    firmware_version = snapshot.extensions.get("firmware_version")
     result = HostPrinterState(
         connected=snapshot.connected,
         state=host_phase,
@@ -178,6 +179,7 @@ def state_for_host(config, plugin, state):
             else None
         ),
         plugin_id=config.plugin_id,
+        firmware_version=firmware_version if isinstance(firmware_version, str) else None,
         device_snapshot=snapshot,
     )
     result._printer_provider = plugin

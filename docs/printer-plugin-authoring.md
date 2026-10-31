@@ -25,6 +25,7 @@ python -m backend.app.printers.sdk schema request
 python -m backend.app.printers.sdk schema receipt
 python -m backend.app.printers.sdk schema event
 python -m backend.app.printers.sdk schema job-event-data
+python -m backend.app.printers.sdk schema job-description
 ```
 
 ## Compatibility and package identity
@@ -90,6 +91,7 @@ model descriptors. Supply the methods below:
 | --- | --- |
 | `create_connection(config, *, on_event=None)` | Return a managed connection; explicitly opt into typed events without requiring `**kwargs` |
 | `describe_device(config)` | Return a validated `DeviceDescriptor` |
+| `describe_job(config, artifact, path)` | SDK 2.2: inspect an authorized local artifact and return its material inputs, option schema and defaults without sending printer commands |
 | `snapshot_device(config, connection)` | Return a `DeviceSnapshot` with normalized resource values |
 | `operation_handlers(connection)` | Map declared operation IDs to handlers accepting one `OperationRequest` |
 | `invoke(config, connection, request)` | Default implementation validates, calls the matching handler and validates its result; override only while retaining that contract |
@@ -288,6 +290,24 @@ fresh measurement. State resource IDs must match the descriptor.
 
 ## Job plans and material routing
 
+SDK 2.2 adds `JobDescription` and `JobInput`. Plugins that rely on this print
+setup contract must declare `requires_api = ">=2.2.0,<3.0.0"`. The host authorizes
+the library file or archive before passing its resolved local path to
+`describe_job`; the plugin owns parsing that file's printer-specific format.
+Return an `options_schema` with the actual supported print settings and their
+labels, descriptions, defaults and limits. Keep the `job.start` schema consistent
+with those options. An unrestricted options dictionary cannot describe the
+controls a user should see.
+
+Each input supplies its original artifact `id`, human-readable `label`, optional
+material/color/weight requirements and compatible tool/source resource IDs.
+Declare `routing_key` only when that input may share a material choice with the
+same logical input in another artifact. Without it, inputs remain qualified by
+their artifact URI. The batch dialog shares compatible choices but constructs
+and validates a separate job plan for every file, retaining each file's original
+input IDs and usage. Several selected files create several queue items;
+cross-model alternatives remain an explicit, separate action.
+
 `JobArtifact` describes the server-authorized uploaded file, format, optional
 media type, filename, byte count, SHA-256, storage resource and metadata.
 `JobRequest` contains job identity, artifact, optional name, material bindings,
@@ -324,10 +344,41 @@ and host checks are retained.
 | `GET /api/v1/printer-plugins` | Running plugin/model/configuration descriptors |
 | `GET /api/v1/printers/{id}/device` | Device topology and typed operations |
 | `GET /api/v1/printers/{id}/device-state` | Normalized snapshot |
+| `POST /api/v1/printers/{id}/job-description` | Authorized `library_file_id` or `archive_id`, optional `plate_id`; returns plugin-owned inputs and print settings |
 | `POST /api/v1/printers/{id}/operations/{operation_id}` | Invoke an allowed scoped operation |
 | `GET /api/v1/printers/{id}/operation-tasks/{task_id}` | Task receipt/status |
 | `POST /api/v1/printers/{id}/operation-tasks/{task_id}/cancel` | Request supported cancellation |
 | `POST /api/v1/queue/` | Host-managed job creation with optional `sdk_job` |
+
+## Familiar card controls and presentation hints
+
+The normal printer card keeps its temperature tiles, fan strip, control icons
+and material panels. Additional typed operations and resource details are under
+**More → Advanced controls**. A plugin does not need to replace these screens
+to describe a new printer.
+
+Standard heater, fan and light widgets use resource kinds, roles and readable
+property bindings (`operation_id` and `parameter`). Optional operation metadata
+can select another host-owned editor:
+
+```json
+{"bambuddy:ui":{"group":"controls","icon":"home","editor":"home","parameters":{"axes":"axes"}}}
+```
+
+Place this object in `OperationDescriptor.extensions`. Supported groups are
+`controls`, `material` and `drying`. Editors cover home, speed, jog, extrusion,
+material configuration/feed/refresh, inventory assignment and drying controls.
+The `parameters` map links semantic roles to the operation's real schema keys;
+`state` can link drying readouts to JSON pointers within the resource's readable
+properties. Enum schemas may provide `x-enum-labels` in the same order as their
+enum values. Unknown hints retain the generic advanced editor. These hints
+neither grant permission nor override operation schemas, telemetry quality or
+the printer's supported capabilities.
+
+Static model device-template extensions are also exposed as the model's
+`presentation` metadata in the plugin catalog. This preserves the same print
+options when choosing a model rather than a specific printer, without
+identifying a vendor in the shared UI.
 
 An operation body is `{ "resource_id": "heater:tool-7", "parameters":
 { "target": 450 }, "request_id": "542a1e30-3679-4c66-8dfa-343d624352bc" }`. The resource's declared
@@ -341,6 +392,23 @@ Use `file_operation_for(config, operation, ...)` and
 `camera_operation_for(config, operation, ...)` to access persisted options even
 for an inactive printer. Core owns caches and retry policy. Network/format
 translation belongs in the plugin; no printer is required to use FTP.
+
+The `file_upload` model capability exposes the card's separate **Upload** action
+and the shared native-file transfer API. Implement `file_operation_for` for
+`upload_file_async`, accepting the staged local path, requested filename and
+`progress_callback(sent, total)`. Validate supported file formats in the plugin,
+return `True` only after confirming the upload, and unwind all transfer I/O
+before propagating cancellation. Uploading must never start a print. The host
+retains the original provider and temporary file for the transfer, including
+during a plugin refresh.
+
+Optional `DeviceDescriptor.extensions["bambuddy:file_upload"]` metadata can
+declare `accept` filename extensions and `max_bytes` for the file chooser. The
+host independently enforces its 512 MiB transfer limit and printer-scoped
+permissions. The upload endpoint is `POST /printers/{id}/files/upload`; status
+and cancellation use `GET` and `DELETE /printers/{id}/files/uploads/{upload_id}`
+under `/api/v1`. A client-provided upload identity makes receiving-phase
+cancellation and recovery possible without replaying the transfer.
 
 Storage rules default to normalized `state.storage` metadata and can be
 overridden. Discovery, connection diagnostics, firmware, cloud access,
