@@ -100,6 +100,44 @@ async def _network_advice(host: str) -> list[DiagnosticCheck]:
         return [check("host_network_advice", "warn", "Host network", "Host network advice could not be completed.")]
 
 
+def _dispatch_hold_check(config: PrinterConfig, connection: PrinterConnection | None) -> DiagnosticCheck:
+    if config.printer_id is None:
+        return check(
+            "anycubic_dispatch_holds",
+            "skip",
+            "Previous dispatch holds",
+            "Saved-printer dispatch state was not inspected for this unsaved connection.",
+        )
+    try:
+        from .dispatch_status import read
+
+        refresh = getattr(connection, "refresh_dispatch_holds", None)
+        if connection is not None and getattr(connection, "config", None) == config and callable(refresh):
+            holds = refresh()
+        else:
+            holds = read(config)
+        if not isinstance(holds, list):
+            raise ValueError("Dispatch status is unavailable")
+    except Exception:
+        return check(
+            "anycubic_dispatch_holds",
+            "fail",
+            "Previous dispatch holds",
+            "The durable dispatch state could not be read; no held operation was changed.",
+            "An operator should inspect the saved printer's dispatch state before trying another print.",
+        )
+    return check(
+        "anycubic_dispatch_holds",
+        "fail" if holds else "pass",
+        "Previous dispatch holds",
+        "A previous native dispatch is still held." if holds else "No previous native dispatch is held.",
+        "An operator can inspect dispatch holds, then use Advanced controls → Resolve uncertain job only after verifying the printer is idle. Held jobs are never automatically resent or cleared."
+        if holds
+        else None,
+        count=len(holds),
+    )
+
+
 def _native(connection: PrinterConnection | None) -> AnycubicMQTTClient | None:
     native = getattr(connection, "native", None) if connection is not None else None
     return native if isinstance(native, AnycubicMQTTClient) else None
@@ -251,6 +289,7 @@ async def diagnose(
         )
         return result()
     native = _native(connection)
+    checks.append(await asyncio.to_thread(_dispatch_hold_check, config, connection))
     connection_matches = native is None or (
         getattr(connection, "config", None) == config
         and native.ip_address == host

@@ -47,7 +47,7 @@ def config_for(model="Kobra S1"):
 
 @pytest.fixture(scope="module")
 def release(tmp_path_factory):
-    output = tmp_path_factory.mktemp("anycubic-release") / "anycubic-0.1.5.bbp"
+    output = tmp_path_factory.mktemp("anycubic-release") / "anycubic-0.1.6.bbp"
     manifest = build(SOURCE, output)
     return manifest, output
 
@@ -67,7 +67,7 @@ def installed(release, tmp_path, tmp_path_factory, monkeypatch):
     manager = PluginManager()
     manifest, output = release
     staged = manager.stage(output.read_bytes())
-    assert (staged["plugin_id"], staged["version"], staged["activation"]) == ("anycubic", "0.1.5", "staged")
+    assert (staged["plugin_id"], staged["version"], staged["activation"]) == ("anycubic", "0.1.6", "staged")
     with pytest.raises(UnknownPrinterPlugin):
         before.get("anycubic")
     manager.select("anycubic", manifest.version)
@@ -86,7 +86,7 @@ def test_release_inventory_images_and_identity_are_installable(release):
     inspected = inspect_package(output.read_bytes())
     assert (manifest.plugin_id, manifest.version, manifest.publisher_id, manifest.api_version) == (
         "anycubic",
-        "0.1.5",
+        "0.1.6",
         "fryguy503",
         2,
     )
@@ -114,7 +114,7 @@ def test_release_inventory_images_and_identity_are_installable(release):
 
 def test_committed_release_matches_current_payload(release):
     _manifest, rebuilt = release
-    committed = SOURCE.parents[2] / "packages" / "anycubic" / "anycubic-0.1.5.bbp"
+    committed = SOURCE.parents[2] / "packages" / "anycubic" / "anycubic-0.1.6.bbp"
     assert committed.is_file(), "Run python plugins/anycubic/build.py before publishing this release"
     assert committed.read_bytes() == rebuilt.read_bytes(), "Rebuild the release after changing its payload"
     expected = hashlib.sha256(committed.read_bytes()).hexdigest()
@@ -139,14 +139,14 @@ def test_published_010_manual_selection_loads_current_release_on_new_registry(re
     assert running.get("anycubic").version == "0.1.0"
     _, updated = release
     manager.stage(updated.read_bytes())
-    manager.select("anycubic", "0.1.5", loaded_version="0.1.0")
+    manager.select("anycubic", "0.1.6", loaded_version="0.1.0")
     assert running.get("anycubic").version == "0.1.0"
     restarted = PrinterPluginRegistry()
     monkeypatch.setattr(registry_module, "registry", restarted)
-    assert restarted.get("anycubic").version == "0.1.5"
+    assert restarted.get("anycubic").version == "0.1.6"
     assert restarted.get("anycubic").__class__.__module__ != running.get("anycubic").__class__.__module__
     state = manager.read_state()["plugins"]["anycubic"]
-    assert {"0.1.0", "0.1.5"} <= state["versions"].keys()
+    assert {"0.1.0", "0.1.6"} <= state["versions"].keys()
     assert state["previous_version"] == "0.1.0"
     assert original.read_bytes() == original_bytes
 
@@ -158,6 +158,7 @@ def test_previously_published_packages_remain_immutable():
         "0.1.2": "fb316fc54581b3e1f75f9da3eb86a2032851faf1216a813b76f7544db1b3f36a",
         "0.1.3": "85376ab7f57c0df9e6fa7d974d55bcd27b3f6ecba3925470e886439e724d3c3d",
         "0.1.4": "ebd9568ffe4b5dfcffb263329495cd6c8b51873c125b15f58a1050f4b7f4adce",
+        "0.1.5": "bc5c3b575f059677039507bc2c96d96c1cd1f5b32aeca1dc1614bb1b2c91f132",
     }.items():
         package = SOURCE.parents[2] / "packages" / "anycubic" / f"anycubic-{version}.bbp"
         assert hashlib.sha256(package.read_bytes()).hexdigest() == expected

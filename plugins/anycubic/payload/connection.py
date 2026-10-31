@@ -66,6 +66,23 @@ class AnycubicConnection:
             if saved_name:
                 self.unit_names[resource] = saved_name.get("name", "")
         self.native._display_names = self.unit_names
+        self.dispatch_holds = []
+        self._read_dispatch_records()
+
+    def _set_dispatch_holds(self, records):
+        from .dispatch_status import summarize
+
+        self.dispatch_holds = summarize(records)
+        self.native._dispatch_holds = self.dispatch_holds
+
+    def _read_dispatch_records(self):
+        records = self.journal.unresolved(self.printer_key)
+        self._set_dispatch_holds(records)
+        return records
+
+    def refresh_dispatch_holds(self):
+        self._read_dispatch_records()
+        return self.dispatch_holds
 
     @property
     def state(self) -> DeviceSnapshot:
@@ -181,22 +198,59 @@ class AnycubicConnection:
                 logger.exception("Anycubic typed status projection failed")
 
     def _observe_jobs(self):
+        from datetime import datetime
+
+        records = self._read_dispatch_records()
         state = self.native.state
         if not state.connected or self.native.is_stale or not self.native._telemetry.lifecycle_observed:
             return
         filename = PurePosixPath(state.gcode_file or "").name
         task = native_task_id(state.subtask_id)
-        for record in self.journal.unresolved(self.printer_key):
+        filename_matches = sum(record.get("native_filename") == filename for record in records)
+        for record in records:
             job_id = record["job_id"]
             if filename != record.get("native_filename"):
                 continue
             expected = native_task_id(record.get("native_job_id"))
-            if expected is None or task != expected:
-                # A filename alone cannot attribute a printer-started job to
-                # this durable dispatch. The native receipt must establish its
-                # real identity first; a later report can then acquire it.
+            if expected is not None and task is not None and task != expected:
                 continue
             active = state.state in {"RUNNING", "PAUSE", "PREPARE"}
+            filename_verified = False
+            if expected is None or task is None:
+                # A retained older writer can have raced another reservation
+                # for this same uploaded file. Its name then cannot identify
+                # which SDK intent actually reached the printer.
+                if filename_matches != 1:
+                    continue
+                # Stock S1 LAN prints can report -1 instead of an assigned task
+                # ID. Correlate only our retained per-upload random filename,
+                # never an arbitrary source/display name or an unowned job.
+                binding = record.get("bindings")
+                artifact = record.get("artifact")
+                if not (
+                    re.fullmatch(r".+-[0-9a-f]{12}\.gcode", filename)
+                    and isinstance(binding, dict)
+                    and binding.get("job_id") == job_id
+                    and isinstance(binding.get("artifact"), dict)
+                    and binding["artifact"].get("uri") == record.get("uri")
+                    and isinstance(artifact, dict)
+                    and artifact.get("native_filename") == filename
+                    and isinstance(record.get("sha256"), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
+                    and artifact.get("sha256") == record["sha256"]
+                ):
+                    continue
+                try:
+                    created = datetime.fromisoformat(record["created_at"])
+                    # A cached project that predates our intent cannot establish
+                    # ownership, even when a later non-lifecycle report is fresh.
+                    if created.tzinfo is None or not self.native._last_message_time >= created.timestamp():
+                        continue
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    continue
+                if not active and not record.get("observed_active"):
+                    continue
+                filename_verified = True
             terminal = {"FINISH": "completed", "FAILED": "failed"}.get(state.state)
             if state.state == "FAILED" and self.native._telemetry.phase in {"stoped", "stopped"}:
                 terminal = "cancelled"
@@ -214,9 +268,14 @@ class AnycubicConnection:
                 layer=max(0, state.layer_num),
                 total_layers=max(0, state.total_layers),
                 active_tool_ids=["tool:primary"],
-                extensions={"native_job_id": task, "native_filename": filename},
+                extensions={
+                    "native_job_id": task or expected,
+                    "native_filename": filename,
+                    "native_filename_verified": filename_verified,
+                    "native_observation_active": active or record.get("observed_active") is True,
+                    "native_observation_time": self.native._last_state_time,
+                },
             )
-            self.current_job = job
             artifact = JobArtifact(
                 uri=record["uri"],
                 filename=record["uri"],
@@ -225,26 +284,50 @@ class AnycubicConnection:
                 metadata=record.get("artifact", {}).get("estimates", {}),
             )
             if active:
-                self.journal.update(job_id, status="running", native_job_id=task or expected)
+                updated = self.journal.update(
+                    job_id, status="running", native_job_id=task or expected, observed_active=True
+                )
+                if isinstance(updated, dict):
+                    record.update(updated)
+                if updated is None or updated.get("status") != "running":
+                    continue
+                self.current_job = job
                 if job_id not in self.started:
                     self.started.add(job_id)
                     self._emit(
                         "job.started",
-                        {"job": job.model_dump(mode="json"), "artifact": artifact.model_dump(mode="json")},
+                        {
+                            "job": job.model_dump(mode="json"),
+                            "artifact": artifact.model_dump(mode="json"),
+                            "snapshot": self.state.model_dump(mode="json"),
+                        },
                     )
                 else:
-                    self._emit("job.progress", {"job": job.model_dump(mode="json")})
+                    self._emit(
+                        "job.progress",
+                        {"job": job.model_dump(mode="json"), "snapshot": self.state.model_dump(mode="json")},
+                    )
             elif terminal is not None and job_id not in self.terminal:
-                self.terminal.add(job_id)
                 # Keep the durable intent pending until the host commits its
                 # archive callback. A restart can then replay this observation,
                 # never the original hardware command.
-                self.journal.update(job_id, pending_outcome=terminal)
+                updated = self.journal.update(job_id, pending_outcome=terminal)
+                if isinstance(updated, dict):
+                    record.update(updated)
+                if updated is None or updated.get("status") != "running" or updated.get("pending_outcome") != terminal:
+                    continue
+                self.current_job = job
+                self.terminal.add(job_id)
                 self._plate(True)
                 self._emit(
                     "job." + terminal,
-                    {"job": job.model_dump(mode="json"), "artifact": artifact.model_dump(mode="json")},
+                    {
+                        "job": job.model_dump(mode="json"),
+                        "artifact": artifact.model_dump(mode="json"),
+                        "snapshot": self.state.model_dump(mode="json"),
+                    },
                 )
+        self._set_dispatch_holds(records)
 
     def can_deactivate(self):
         return not (
@@ -303,8 +386,11 @@ class AnycubicConnection:
                     task_id=job.job_id,
                 )
             raise AnycubicError("This dispatch was already attempted; resolve its outcome before creating a new job")
-        if self.journal.unresolved(self.printer_key):
-            raise AnycubicError("Resolve the previous native dispatch before starting another")
+        holds = self.refresh_dispatch_holds()
+        if holds:
+            from .dispatch_status import rejection_message
+
+            raise AnycubicError(rejection_message(holds))
         saved = self.journal.artifact(self.printer_key, job.artifact.uri)
         if saved is None:
             raise AnycubicError("Upload and confirm this sliced artifact before starting it")
@@ -395,8 +481,14 @@ class AnycubicConnection:
             "usage_snapshot": usage,
             "request_id": request.request_id,
         }
-        if not self.journal.begin(job.job_id, record):
+        if not self.journal.reserve_dispatch(job.job_id, record):
+            holds = self.refresh_dispatch_holds()
+            if holds:
+                from .dispatch_status import rejection_message
+
+                raise AnycubicError(rejection_message(holds))
             raise AnycubicError("This dispatch identity was already recorded")
+        self.refresh_dispatch_holds()
         try:
             context = await asyncio.to_thread(self.native.file_session, require_upload=False)
             result = await asyncio.to_thread(
@@ -415,7 +507,9 @@ class AnycubicConnection:
                 if status != "rejected"
                 else "failed",
                 native_job_id=native_task_id(result.get("task_id")),
+                native_response_code=result.get("response_code") if type(result.get("response_code")) is int else None,
             )
+            self.refresh_dispatch_holds()
             if status == "accepted":
                 return self._receipt(
                     request, "accepted", {"delivery": "native_receipt", "hardware_confirmed": False}, task_id=job.job_id
@@ -423,12 +517,15 @@ class AnycubicConnection:
             raise AnycubicError(
                 "Native dispatch outcome is uncertain; inspect the printer and resolve the hold without replaying it"
                 if status != "rejected"
+                else f"The printer rejected start (response code {result['response_code']})"
+                if type(result.get("response_code")) is int and -(2**63) <= result["response_code"] < 2**64
                 else "The printer rejected this print"
             )
         except BaseException:
             saved_record = self.journal.get(job.job_id)
             if saved_record and saved_record.get("status") == "intent":
                 self.journal.update(job.job_id, status="unknown")
+            self.refresh_dispatch_holds()
             raise
 
     async def invoke(self, request):
@@ -479,6 +576,7 @@ class AnycubicConnection:
                     ):
                         raise AnycubicError("Select an unresolved dispatch belonging to this printer")
                     self.journal.update(p["job_id"], status="resolved")
+                    self.refresh_dispatch_holds()
                     self._plate(True)
                 else:
                     if self.journal.unresolved(self.printer_key):

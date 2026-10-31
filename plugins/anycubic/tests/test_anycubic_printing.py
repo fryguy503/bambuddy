@@ -263,6 +263,7 @@ def test_a_correlated_rejection_or_disconnect_is_not_replayed(tmp_path):
     value._publish = MagicMock(side_effect=reject)
     result = value.submit_print(context, selected, {}, "queue-rejected", timeout=0.01)
     assert result["status"] == "rejected"
+    assert result["response_code"] == 403
     assert value.submit_print(context, selected, {}, "queue-rejected") == result
     value._publish.assert_called_once()
     value._publish = MagicMock(side_effect=lambda *args, **kwargs: value._reset_print_request() or True)

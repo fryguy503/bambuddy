@@ -1,17 +1,24 @@
 # Anycubic printer plugin
 
 The independent Anycubic provider uses Bambuddy's printer SDK v2. Its current
-release is `anycubic` **0.1.5**, published under `fryguy503`. The included Bambu
+release is `anycubic` **0.1.6**, published under `fryguy503`. The included Bambu
 provider remains a separate plugin.
 
 This package requires the printer plugin implementation from
 `Feat/Printer_modularization` or `codex/printer-modularization-https`. An upstream
 application without the SDK v2 package manager cannot install it; the
 application version string alone does not establish SDK availability.
-Version 0.1.5 requires SDK 2.3; update the host before uploading it. Earlier
+Version 0.1.6 requires SDK 2.3; update the host before uploading it. Earlier
 SDK hosts reject this package during compatibility validation.
 
-Version 0.1.5 adds provider-owned LAN connection diagnostics and corrects the
+Version 0.1.6 adds scoped pending-dispatch visibility, atomic new-dispatch
+reservation, and conservative ownership tracking for firmware reports without a
+real native task ID. It never replays a held job or guesses that an old job
+completed. Exact randomized uploaded filename, retained artifact/hash and fresh
+post-intent activity must agree; ambiguous filenames or conflicting real IDs
+are rejected. A later terminal event needs that verified active observation.
+
+The package includes provider-owned LAN connection diagnostics and corrects the
 Kobra S1 capability description: it does not expose a chamber temperature
 sensor or heater. Other models expose a chamber reading only when supported
 and actually reported; no chamber heater command was added.
@@ -31,17 +38,17 @@ The 0.1.2 durability behavior remains: finalized dispatch outcomes stay authorit
 older observers report stale progress. It preserves pending accounting and
 repairs legacy journal fields under the existing storage lock. A terminal
 observation awaiting host cleanup remains replayable; no print command is
-replayed. The published 0.1.0 through 0.1.4 archives are unchanged.
+replayed. The published 0.1.0 through 0.1.5 archives are unchanged.
 
 ## Install or update
 
 The release artifact is
-[`packages/anycubic/anycubic-0.1.5.bbp`](../../packages/anycubic/anycubic-0.1.5.bbp).
+[`packages/anycubic/anycubic-0.1.6.bbp`](../../packages/anycubic/anycubic-0.1.6.bbp).
 Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
 1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
    `.bbp` file and optionally paste its expected SHA-256 digest.
-2. Review the validation result, then apply version `0.1.5`. Staging alone does
+2. Review the validation result, then apply version `0.1.6`. Staging alone does
    not load or enable its code.
 3. Add or edit a printer, select **Anycubic**, and choose its model.
 
@@ -93,6 +100,28 @@ works. Host/container/subnet guidance is supplied by the shared SDK.
 ACE is optional by default. The package's `require_ace` configuration option
 can require an attached unit: absent optional ACE is skipped, a missing required
 unit fails, and detected but stale material information produces a warning.
+
+## Pending dispatches and recovery
+
+`GET /api/v1/printer-plugins/anycubic/printers/{printer_id}/dispatch-holds`
+requires `printers:control` and access to that printer. It uses the current
+managed provider and returns only pending `job_id`, `status`, native filename
+basename and creation time. It never returns a local artifact path, token,
+credential or private archive metadata, and never clears or resends a job.
+The ordinary read-permission connection diagnostic reports only the hold count
+and a safe recovery hint.
+
+Advanced controls → **Confirm uncertain job is not printing** offers cached
+opaque held IDs/statuses, with a default when exactly one eligible hold exists.
+Those IDs/statuses are operational device state in its readable descriptor;
+filenames are available only through the controlled status endpoint. Resolve
+only after verifying fresh idle state and the actual printer. A hold from a
+previous version is retained when its outcome cannot be proven. Confirm the
+plate separately when required. No status query authorizes automatic replay.
+
+New dispatches check and persist their intent atomically under the printer's
+existing storage lock. Older versions do not use this new reservation method;
+ambiguous legacy records remain held rather than being attributed to one print.
 
 ## LAN connection
 
@@ -204,7 +233,7 @@ ordering, timestamps and file modes are fixed for reproducible builds.
 For an alternate output location:
 
 ```console
-python plugins/anycubic/build.py --output work/anycubic-0.1.5.bbp
+python plugins/anycubic/build.py --output work/anycubic-0.1.6.bbp
 ```
 
 For a later release, update the version in the payload's plugin factory, then

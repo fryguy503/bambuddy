@@ -229,18 +229,35 @@ class Journal:
             value = read_json(path, {"format_version": 1})
             return self._validated_record(value, path, job_id) if path.exists() else None
 
+    def _begin_locked(self, job_id, record) -> bool:
+        path = self._path(job_id)
+        if path.exists():
+            self._validated_record(read_json(path, {}), path, job_id)
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        value = {**record, "job_id": job_id, "printer_key": self.printer_key, "created_at": now, "updated_at": now}
+        value.setdefault("status", "intent")
+        self._record({"record": value}, job_id)
+        write_json(path, {"format_version": 1, "record": value})
+        return True
+
     def begin(self, job_id, record) -> bool:
         with storage_lock(self.printer_key):
-            path = self._path(job_id)
-            if path.exists():
-                self._validated_record(read_json(path, {}), path, job_id)
-                return False
-            now = datetime.now(timezone.utc).isoformat()
-            value = {**record, "job_id": job_id, "printer_key": self.printer_key, "created_at": now, "updated_at": now}
-            value.setdefault("status", "intent")
-            self._record({"record": value}, job_id)
-            write_json(path, {"format_version": 1, "record": value})
-            return True
+            return self._begin_locked(job_id, record)
+
+    def reserve_dispatch(self, job_id, record) -> bool:
+        """Reserve one printer across distinct job IDs and current writers.
+
+        The preliminary async checks are advisory. This check and durable write
+        share the existing OS lock, so concurrent new dispatches have one winner.
+        Legacy records are inspected without changing the journal format.
+        """
+        with storage_lock(self.printer_key):
+            for path in sorted((self.directory / "jobs").glob("*.json")):
+                existing = self._validated_record(read_json(path, {}), path)
+                if existing["status"] in _PENDING:
+                    return False
+            return self._begin_locked(job_id, record)
 
     def update(self, job_id, **fields):
         with storage_lock(self.printer_key):

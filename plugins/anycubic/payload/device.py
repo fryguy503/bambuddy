@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
@@ -425,6 +426,26 @@ def describe(plugin, config, native=None):
         return properties
 
     parameters("job.start")["options"] = options_schema(native)
+    held = (
+        [
+            item
+            for item in getattr(native, "_dispatch_holds", [])
+            if item.get("status") in {"intent", "unknown", "accepted"}
+        ]
+        if native is not None
+        else []
+    )
+    recovery = parameters("anycubic.job.resolve")["job_id"]
+    recovery.update(
+        minLength=1,
+        maxLength=4096,
+        description="Select a held dispatch only after verifying the printer is idle. Resolving it never resends the print.",
+    )
+    if held:
+        recovery["enum"] = [item["job_id"] for item in held]
+        recovery["x-enum-labels"] = [item["job_id"] + " (" + item["status"] + ")" for item in held]
+        if len(held) == 1:
+            recovery["default"] = held[0]["job_id"]
     hints = {
         "anycubic.motion.home": ("controls", "home", "home", {"axes": "axes"}),
         "anycubic.settings.speed": ("controls", "gauge", "speed", {"value": "mode"}),
@@ -602,10 +623,30 @@ def observed_job(native, owned: JobProgress | None = None) -> JobProgress | None
     )
     expected = task_id(owned.extensions.get("native_job_id")) if owned else None
     expected_filename = owned.extensions.get("native_filename") if owned else None
+    if (
+        owned is not None
+        and owned.state in {"completed", "failed", "cancelled"}
+        and phase in {"printing", "paused", "preparing"}
+    ):
+        return observation
+    verified_filename = bool(
+        owned is not None
+        and owned.extensions.get("native_filename_verified") is True
+        and owned.extensions.get("native_observation_active") is True
+        and isinstance(expected_filename, str)
+        and expected_filename == filename
+        and re.fullmatch(r".+-[a-f0-9]{12}\.gcode", expected_filename)
+        and owned.state == phase
+        and owned.extensions.get("native_observation_time") == native._last_state_time
+        and not (expected is not None and identity is not None and expected != identity)
+    )
     if owned is not None and (
-        expected is not None
-        and identity == expected
-        and (not expected_filename or not filename or expected_filename == filename)
+        verified_filename
+        or (
+            expected is not None
+            and identity == expected
+            and (not expected_filename or not filename or expected_filename == filename)
+        )
     ):
         return owned.model_copy(
             update={

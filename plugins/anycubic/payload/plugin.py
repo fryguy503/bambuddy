@@ -40,7 +40,7 @@ _CAPABILITIES = frozenset(
 class AnycubicPrinterPlugin(PrinterPlugin):
     id = "anycubic"
     name = "Anycubic signed LAN"
-    version = "0.1.5"
+    version = "0.1.6"
     api_version = 2
     publisher_id = "fryguy503"
     capabilities = _CAPABILITIES
@@ -223,9 +223,21 @@ class AnycubicPrinterPlugin(PrinterPlugin):
 
     def legacy_http_routers(self):
         from .cloud_routes import router as cloud_router
+        from .diagnostic_routes import router as diagnostic_router
         from .routes import router
 
-        return (router, cloud_router)
+        return (router, cloud_router, diagnostic_router)
+
+    async def dispatch_holds(self, config, connection):
+        import asyncio
+
+        self.validate_config(config)
+        connection = self._typed_connection(connection)
+        if connection.config != config:
+            raise PrinterPluginError(
+                "Printer configuration changed; refresh its connection before reading dispatch holds"
+            )
+        return await asyncio.to_thread(connection.refresh_dispatch_holds)
 
     def cloud_operation(self, operation, *args, **kwargs):
         from .cloud import cloud_operation

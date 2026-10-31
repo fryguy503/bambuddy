@@ -90,6 +90,7 @@ class AnycubicMQTTClient:
         self._subscribed = False
         self._connection_lost = False
         self._device_id = None
+        self._dispatch_holds: list[dict] = []
         self._last_message_time = 0.0
         self._last_message_monotonic = 0.0
         self._last_state_time = 0.0
@@ -520,6 +521,7 @@ class AnycubicMQTTClient:
             return
         if code not in (0, 200):
             pending["result"]["status"] = "rejected"
+            pending["result"]["response_code"] = code
             pending["event"].set()
             return
         data = envelope.get("data")
