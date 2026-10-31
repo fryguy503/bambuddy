@@ -275,6 +275,12 @@ completed/total/unit values. Cancellation is valid only for operations declared
 as asynchronous and cancellable. A cancellation request is not proof the
 physical device has stopped; report the confirmed state.
 
+`error.message` is public recovery text: the queue preserves it in job history
+and dispatch notifications instead of replacing every rejection with a generic
+connection error. Keep credentials, raw exceptions and private diagnostic data
+out of this field. Optional structured `error.details` are not included in the
+public dispatch-failure message.
+
 ## Snapshots and freshness
 
 `DeviceSnapshot` carries device identity, descriptor revision, sequence,
@@ -376,6 +382,12 @@ For a queued dispatch, core assigns the authoritative job identity (currently
 `queue:<queue-item-id>`). Echo the supplied identity in progress and lifecycle
 events; do not reconstruct it from the filename or display name. Device-originated
 jobs may use their own stable SDK job IDs, up to 256 characters.
+An omitted native task ID is not an omitted SDK job ID. When a supported
+protocol cannot supply a real task ID, the provider may correlate fresh
+post-dispatch telemetry with its own durable dispatch and unique uploaded file,
+then echo that dispatch's existing SDK identity. A generic display filename or
+unrelated printer-started job is not sufficient evidence of ownership. Real
+native task IDs, when available on both sides, must still agree.
 The host resolves `library:<id>` or `archive:<id>` against authorized stored
 files and substitutes the actual uploaded artifact URI. Submit print jobs
 through the normal queue workflow so permissions, budget, plate-clear gates

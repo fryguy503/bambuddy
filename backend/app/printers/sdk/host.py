@@ -13,7 +13,14 @@ from typing import Any
 
 from pydantic import model_validator
 
-from backend.app.printers.sdk.domain import DeviceEvent, DeviceSnapshot, JobProgress, OperationError, SDKModel
+from backend.app.printers.sdk.domain import (
+    DeviceDescriptor,
+    DeviceEvent,
+    DeviceSnapshot,
+    JobProgress,
+    OperationError,
+    SDKModel,
+)
 from backend.app.printers.sdk.jobs import JobArtifact, material_inventory
 
 
@@ -139,14 +146,14 @@ class HostPrinterState:
         return value
 
 
-def state_for_host(config, plugin, state):
+def state_for_host(config, plugin, state, *, device: DeviceDescriptor | None = None):
     if not isinstance(state, DeviceSnapshot):
         state.plugin_id = config.plugin_id
         state._printer_provider = plugin
         return state
     from backend.app.printers.sdk.validation import validate_snapshot
 
-    device = plugin.describe_device(config)
+    device = device if device is not None else plugin.describe_device(config)
     snapshot = validate_snapshot(device, state)
     job = snapshot.job
     phase = job.state if job is not None else snapshot.status
@@ -234,10 +241,16 @@ class HostEventBridge:
         self.plugin = plugin
         self.callbacks = callbacks
         self.latest_snapshot: DeviceSnapshot | None = None
+        self.latest_descriptor: DeviceDescriptor | None = None
         self._sequence = -1
         self._started_jobs: dict[str, None] = {}
         self._terminal_jobs: dict[str, None] = {}
         self._lock = RLock()
+
+    def snapshot_context(self) -> tuple[DeviceSnapshot | None, DeviceDescriptor | None]:
+        """Read the validated telemetry and its resource contract atomically."""
+        with self._lock:
+            return self.latest_snapshot, self.latest_descriptor
 
     def _remember(self, collection, job_id):
         collection[job_id] = None
@@ -270,7 +283,10 @@ class HostEventBridge:
         from backend.app.printers.sdk.validation import SDKValidationError, validate_snapshot
 
         event = event if isinstance(event, DeviceEvent) else DeviceEvent.model_validate(event)
-        descriptor = self.plugin.describe_device(self.config)
+        # A provider can update capability limits between native reports. Keep
+        # this contract detached from any mutable provider-owned descriptors.
+        descriptor = self.plugin.describe_device(self.config).model_copy(deep=True)
+        snapshot_descriptor = descriptor
         if event.device_id != descriptor.device_id:
             raise SDKValidationError("Event belongs to another device")
         if event.observed_at.tzinfo is None:
@@ -315,6 +331,7 @@ class HostEventBridge:
                     base = self.latest_snapshot or DeviceSnapshot(
                         device_id=descriptor.device_id, descriptor_revision=descriptor.revision
                     )
+                    snapshot_descriptor = self.latest_descriptor or descriptor
                     snapshot = base.model_copy(
                         update={
                             "job": job_data.job,
@@ -341,8 +358,12 @@ class HostEventBridge:
                 raise SDKValidationError("Event snapshot sequence moved backwards")
             self._sequence = event.sequence
             if snapshot is not None:
+                snapshot = validate_snapshot(snapshot_descriptor, snapshot)
                 self.latest_snapshot = snapshot
-                self._notify("on_state_change", state_for_host(self.config, self.plugin, snapshot))
+                self.latest_descriptor = snapshot_descriptor
+                self._notify(
+                    "on_state_change", state_for_host(self.config, self.plugin, snapshot, device=snapshot_descriptor)
+                )
             if job_data is None:
                 return True
             job = job_data.job

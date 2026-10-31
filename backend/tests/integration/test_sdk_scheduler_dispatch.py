@@ -9,7 +9,13 @@ from backend.app.models.print_queue import PrintQueueItem
 from backend.app.printers.api import PrinterConnectionAdapter
 from backend.app.printers.contracts import PrinterConfig, PrinterModel, PrinterPlugin
 from backend.app.printers.registry import PrinterPluginRegistry
-from backend.app.printers.sdk import DeviceDescriptor, OperationDescriptor, ResourceDescriptor
+from backend.app.printers.sdk import (
+    DeviceDescriptor,
+    OperationDescriptor,
+    OperationError,
+    OperationReceipt,
+    ResourceDescriptor,
+)
 from backend.app.printers.sdk.host import HostPrinterState
 from backend.app.services import print_scheduler as scheduler_module
 from backend.app.services.print_scheduler import PrintScheduler
@@ -249,3 +255,36 @@ async def test_provider_hold_detected_at_final_send_is_deferred_not_generic_fail
     assert case.item.error_message is None
     assert case.item.waiting_reason.startswith("Waiting for plate confirmation")
     assert case.plugin.requests == []
+
+
+async def test_core_scheduler_preserves_validated_public_sdk_rejection(db_session, resource_case, monkeypatch):
+    case = resource_case
+    message = "The selected ACE material does not match the sliced filament type"
+
+    def reject(request):
+        case.plugin.requests.append(request)
+        return OperationReceipt(
+            operation_id=request.operation_id,
+            request_id=request.request_id,
+            status="failed",
+            error=OperationError(
+                code="fixture.material_mismatch", message=message, details={"private_token": "PRIVATE-DETAILS"}
+            ),
+        )
+
+    monkeypatch.setattr(case.plugin, "operation_handlers", lambda connection: {"job.start": reject})
+    monkeypatch.setattr(scheduler_module, "delete_file_async", AsyncMock(return_value=True))
+    notify = AsyncMock()
+    failed_toast = AsyncMock()
+    monkeypatch.setattr(scheduler_module.notification_service, "on_queue_job_failed", notify)
+    monkeypatch.setattr(scheduler_module.ws_manager, "send_queue_item_failed", failed_toast)
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == "failed"
+    assert case.item.error_message == message
+    assert "PRIVATE-DETAILS" not in case.item.error_message
+    assert notify.call_args.kwargs["reason"] == message
+    assert failed_toast.call_args.kwargs["error_message"] == message
+    assert "PRIVATE-DETAILS" not in str(failed_toast.call_args.kwargs)
+    assert len(case.plugin.requests) == 1
+    case.legacy_start.assert_not_called()
