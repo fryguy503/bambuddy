@@ -335,7 +335,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           (#2612): the 5rem right offset keeps clearance for the bug bubble. */}
       <div
         data-testid="toast-viewport"
-        className={`fixed z-[60] flex flex-col items-end gap-2 ${viewportSuppressed ? 'hidden' : ''}`}
+        className={`fixed z-[1100] flex flex-col items-end gap-2 ${viewportSuppressed ? 'hidden' : ''}`}
         style={{
           bottom: 'calc(1rem + env(safe-area-inset-bottom))',
           right: 'calc(5rem + env(safe-area-inset-right))',

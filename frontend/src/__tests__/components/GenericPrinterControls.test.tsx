@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GenericPrinterControls } from '../../components/GenericPrinterControls';
@@ -8,6 +8,7 @@ import { printerDeviceApi } from '../../printer-plugins/api';
 import type { OperationReceipt, PrinterDevice, PrinterDeviceState, PrinterOperation, PrinterResource, ResourceProperty } from '../../printer-plugins/types';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
+import { ToastProvider } from '../../contexts/ToastContext';
 
 vi.mock('../../printer-plugins/api', () => ({ printerDeviceApi: { execute: vi.fn(), task: vi.fn(), cancel: vi.fn() } }));
 
@@ -25,7 +26,7 @@ const device = (): PrinterDevice => ({
 });
 function renderControls(value: PrinterDevice, canControl: boolean | ((permission: string) => boolean) = true, snapshot?: PrinterDeviceState, compact = false, extra: Partial<Pick<React.ComponentProps<typeof GenericPrinterControls>, 'presets' | 'advancedMode' | 'advancedOnly' | 'printerName'>> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<MemoryRouter><QueryClientProvider client={client}><GenericPrinterControls printerId={42} device={value} compact={compact} snapshot={snapshot} {...extra} hasPermission={typeof canControl === 'function' ? canControl : () => canControl} /></QueryClientProvider></MemoryRouter>);
+  return { ...render(<MemoryRouter><QueryClientProvider client={client}><ToastProvider><GenericPrinterControls printerId={42} device={value} compact={compact} snapshot={snapshot} {...extra} hasPermission={typeof canControl === 'function' ? canControl : () => canControl} /></ToastProvider></QueryClientProvider></MemoryRouter>), client };
 }
 
 const property = (label: string, type = 'number', unit?: string): ResourceProperty => ({ label, value_schema: { type }, unit, readable: true, writable: false, read_permission: 'printers:read' });
@@ -34,6 +35,15 @@ const snapshot = (status = 'idle'): PrinterDeviceState => ({ schema_version: 2, 
 
 async function showControls(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByText('Advanced device details', { selector: 'summary' }));
+}
+
+function lightFixture() {
+  const value = device();
+  value.resources = [{ ...resource('lamp/opaque', 'light', 'Chamber light'), properties: { on: { ...property('Power', 'boolean'), writable: true, operation_id: 'fixture.lamp', parameter: 'enabled' } } }];
+  value.operations = [{ ...operation('fixture.lamp', 'Set light', ['light']), parameters_schema: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'], additionalProperties: false } }];
+  const state = snapshot();
+  state.resources = [{ resource_id: 'lamp/opaque', properties: { on: reading(false) } }];
+  return { value, state };
 }
 
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(printerDeviceApi.execute).mockResolvedValue(receipt); });
@@ -148,6 +158,59 @@ describe('generic printer resources', () => {
     await user.click(screen.getByRole('button', { name: 'Controls for Chamber light' }));
     expect(printerDeviceApi.execute).toHaveBeenCalledWith(42, 'fixture.lamp', { enabled: true }, 'lamp/opaque');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Set light: Command completed')).toBeVisible();
+    expect(within(screen.getByRole('region', { name: 'Printer resources and controls' })).queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('shows queued commands as pop-up toasts without repeating them on task polling', async () => {
+    const user = userEvent.setup();
+    const { value, state } = lightFixture();
+    const queued: OperationReceipt = { ...receipt, operation_id: 'fixture.lamp', status: 'accepted', task_id: 'lamp-task' };
+    vi.mocked(printerDeviceApi.execute).mockResolvedValue(queued);
+    vi.mocked(printerDeviceApi.task).mockResolvedValue(queued);
+    const { client } = renderControls(value, true, state);
+    await user.click(screen.getByRole('button', { name: 'Controls for Chamber light' }));
+    const toasts = within(screen.getByTestId('toast-viewport'));
+    expect(await toasts.findByText('Set light: Command queued')).toBeVisible();
+    await waitFor(() => expect(printerDeviceApi.task).toHaveBeenCalledWith(42, 'lamp-task'));
+    await act(async () => { await client.refetchQueries({ queryKey: ['printer-operation-task', 42, 'lamp-task'] }); });
+    expect(toasts.getAllByText('Set light: Command queued')).toHaveLength(1);
+    const card = within(screen.getByRole('region', { name: 'Printer resources and controls' }));
+    expect(card.queryByText(/Command queued/)).not.toBeInTheDocument();
+    expect(card.queryByRole('status')).not.toBeInTheDocument();
+    vi.mocked(printerDeviceApi.task).mockResolvedValue({ ...queued, status: 'succeeded' });
+    await act(async () => { await client.refetchQueries({ queryKey: ['printer-operation-task', 42, 'lamp-task'] }); });
+    expect(await toasts.findByText('Set light: Command completed')).toBeVisible();
+  });
+
+  it.each(['receipt', 'request', 'false-result'])('shows %s command failures in the toast viewport instead of under the controls', async failure => {
+    const user = userEvent.setup();
+    const { value, state } = lightFixture();
+    if (failure === 'request') vi.mocked(printerDeviceApi.execute).mockRejectedValue(new Error('Printer unavailable'));
+    else vi.mocked(printerDeviceApi.execute).mockResolvedValue(failure === 'receipt'
+      ? { ...receipt, status: 'failed', error: { code: 'not_ready', message: '<b>Not ready</b>', details: { private: 'PRIVATE-DETAILS' } } }
+      : { ...receipt, result: false });
+    renderControls(value, true, state);
+    await user.click(screen.getByRole('button', { name: 'Controls for Chamber light' }));
+    const message = failure === 'request' ? 'Printer unavailable' : failure === 'receipt' ? 'Set light: <b>Not ready</b>' : 'Set light: Failed to send command';
+    expect(await within(screen.getByTestId('toast-viewport')).findByText(message)).toBeVisible();
+    const card = within(screen.getByRole('region', { name: 'Printer resources and controls' }));
+    expect(card.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('PRIVATE-DETAILS')).not.toBeInTheDocument();
+    expect(screen.getByTestId('toast-viewport').querySelector('b')).toBeNull();
+  });
+
+  it('uses the same failure toast for advanced controls and leaves the form available to correct the request', async () => {
+    const user = userEvent.setup();
+    vi.mocked(printerDeviceApi.execute).mockResolvedValue({ ...receipt, status: 'failed', error: { code: 'not_ready', message: 'Tool is unavailable' } });
+    renderControls(device());
+    await user.click(screen.getByRole('button', { name: 'Controls for Tool 5' }));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Select tool: Tool is unavailable')).toBeVisible();
+    const dialog = within(screen.getByRole('dialog', { name: 'Select tool' }));
+    expect(dialog.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    expect(dialog.queryByRole('alert')).not.toBeInTheDocument();
+    expect(dialog.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('uses semantic metadata for home choices and custom speed enums without guessing operation names', async () => {
@@ -472,10 +535,10 @@ describe('generic printer resources', () => {
     const dialog = screen.getByRole('dialog', { name: 'Stop Print' });
     expect(within(dialog).getByText(/Are you sure you want to stop/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Stop Print', exact: true }));
-    expect(await screen.findByText('In progress…')).toBeInTheDocument();
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Stop print: In progress…')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Cancel operation' }));
     await waitFor(() => expect(printerDeviceApi.cancel).toHaveBeenCalledWith(42, 'task-one'));
-    expect(await screen.findByText('Cancelled')).toBeInTheDocument();
+    expect(await within(screen.getByTestId('toast-viewport')).findByText('Stop print: Cancelled')).toBeVisible();
   });
 
   it('renders arbitrary plugin configuration and masks secret inputs', async () => {
