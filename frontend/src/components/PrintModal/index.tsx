@@ -45,10 +45,13 @@ import { NumberInput } from '../NumberInput';
 import { hasGcodeSnippets, useUiSettings } from '../../hooks/useUiSettings';
 import { usePrinterPlugins } from '../../hooks/usePrinterPlugins';
 import { usePrinterDevice } from '../../hooks/usePrinterDevice';
+import { jobDescriptionQueryKey, usePrinterJobDescription } from '../../hooks/usePrinterJobDescription';
+import { printerDeviceApi } from '../../printer-plugins/api';
 import { printerModelSupports } from '../../printer-plugins/catalog';
 import { GenericPrintSetup } from '../GenericPrintSetup';
-import { buildSdkJobPlan, emptyGenericJobSetup } from '../../printer-plugins/forms';
-import type { GenericJobSetup, PrinterDevice } from '../../printer-plugins/types';
+import { emptyGenericJobSetup, jobInputKey, remapJobSetupForDescription } from '../../printer-plugins/forms';
+import type { GenericJobSetup, PrinterDevice, PrinterJobDescription } from '../../printer-plugins/types';
+import { describedJobPayload, mergeQueueJobDescriptions } from './batchJobs';
 
 /** Same filament: type ignoring case, colour as RRGGBB ignoring `#`, case and alpha. */
 function isSameFilament(a: { type: string; color: string }, b: { type: string; color: string }): boolean {
@@ -104,6 +107,7 @@ export function PrintModal({
   projectId,
   cleanupLibraryAfterDispatch,
   variantFiles,
+  queueFiles,
 }: PrintModalProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -119,7 +123,11 @@ export function PrintModal({
 
   // Cross-model alternatives (#671). One candidate is not a choice, so a
   // single-entry list behaves exactly like an ordinary print.
-  const isCrossModel = mode === 'create' && (variantFiles?.length ?? 0) > 1;
+  const isIndependentQueue = mode === 'create' && (queueFiles?.length ?? 0) > 0;
+  const isCrossModel = !isIndependentQueue && mode === 'create' && (variantFiles?.length ?? 0) > 1;
+  const [independentFiles, setIndependentFiles] = useState<VariantCandidate[]>(queueFiles ?? []);
+  const [independentQueuedCount, setIndependentQueuedCount] = useState(0);
+  const independentAsapInserted = useRef(0);
   // Editing an already-queued cross-model item. The candidates are shown so the
   // dialog doesn't misrepresent the job as a plain "Any H2D" — which is what it
   // did before, offering a printer picker whose Save would have left a row with
@@ -160,7 +168,7 @@ export function PrintModal({
     }
     return [];
   });
-  const { data: printerPlugins = [] } = usePrinterPlugins();
+  const { data: printerPlugins = [], isPending: loadingPrinterPlugins, error: printerPluginsError } = usePrinterPlugins();
   const [genericSetups, setGenericSetups] = useState<Record<number, GenericJobSetup>>(() => queueItem?.printer_id ? {
     [queueItem.printer_id]: {
       tool_ids: queueItem.sdk_job?.selected_tool_ids || queueItem.tool_ids || [],
@@ -387,6 +395,70 @@ export function PrintModal({
   const effectivePlugin = printerPlugins.find(plugin => plugin.id === (effectivePrinter?.plugin_id || 'bambu'));
   const effectiveDevice = usePrinterDevice(effectivePrinterId || 0, !!effectivePrinterId && (effectivePlugin?.api_version || 0) >= 2);
   const legacyMaterialUi = effectivePlugin?.api_version === 1 || effectiveDevice.data?.extensions.compatibility_ui === 'bambu-v1';
+  const needsTypedJobDescription = !!effectivePrinterId && !!effectiveDevice.data
+    && (effectivePlugin?.api_version || 0) >= 2 && !legacyMaterialUi;
+  const jobSource = isLibraryFile
+    ? { libraryFileId, plateId: selectedPlate }
+    : { archiveId, plateId: selectedPlate };
+  const jobDescription = usePrinterJobDescription(effectivePrinterId || 0,
+    needsTypedJobDescription && !isIndependentQueue && !isCrossModel ? jobSource : undefined);
+  // Saved queue plans use each artifact's input IDs. The shared form uses
+  // plugin-declared routing keys, so restore those choices after inspection.
+  useEffect(() => {
+    if (!queueItem?.sdk_job || !effectivePrinterId || !jobDescription.data) return;
+    const description = jobDescription.data;
+    setGenericSetups(previous => {
+      const saved = previous[effectivePrinterId] || emptyGenericJobSetup();
+      const material_bindings = { ...saved.material_bindings };
+      const material_tool_ids = { ...saved.material_tool_ids };
+      let changed = false;
+      for (const input of description.inputs) {
+        const key = jobInputKey(input, description.artifact.uri);
+        for (const bindings of [material_bindings, material_tool_ids]) {
+          if (!bindings[key] && bindings[input.id]) {
+            bindings[key] = bindings[input.id];
+            changed = true;
+          }
+        }
+      }
+      return changed ? { ...previous, [effectivePrinterId]: { ...saved, material_bindings, material_tool_ids } } : previous;
+    });
+  }, [queueItem?.sdk_job, effectivePrinterId, jobDescription.data]);
+  const independentMetadata = useQueries({ queries: isIndependentQueue ? independentFiles.map(file => ({
+    queryKey: ['library-file', file.id], queryFn: () => api.getLibraryFile(file.id), retry: false,
+  })) : [] });
+  const independentDescriptions = useQueries({ queries: isIndependentQueue && needsTypedJobDescription
+    ? independentFiles.map(file => {
+      const source = { libraryFileId: file.id, plateId: candidatePlates[file.id] ?? null };
+      return { queryKey: jobDescriptionQueryKey(effectivePrinterId!, source),
+        queryFn: () => printerDeviceApi.describeJob(effectivePrinterId!, source), retry: false };
+    }) : [] });
+  const sharedJobDescription = useMemo(() => {
+    if (!isIndependentQueue) return { data: jobDescription.data, error: null as string | null };
+    try {
+      return { data: mergeQueueJobDescriptions(independentDescriptions.flatMap(query => query.data ? [query.data] : [])), error: null };
+    } catch (error) { return { data: undefined, error: error instanceof Error ? error.message : String(error) }; }
+  }, [isIndependentQueue, jobDescription.data, independentDescriptions]);
+  const independentBlockingReason = !isIndependentQueue ? null
+    : (loadingPrinterPlugins ? 'Loading printer support…' : null)
+      || printerPluginsError?.message
+      || (effectivePrinter && !effectivePlugin ? 'Printer support is unavailable.' : null)
+      || (effectivePlugin?.api_version === 2 && effectiveDevice.isPending ? 'Loading printer resources…' : null)
+      || (effectivePlugin?.api_version === 2 ? effectiveDevice.error?.message : null)
+      || independentMetadata.find(query => query.isError)?.error?.message
+      || (independentMetadata.some(query => query.isPending) ? 'Loading the selected files…' : null)
+      || independentDescriptions.find(query => query.isError)?.error?.message
+      || (independentDescriptions.some(query => query.isPending) ? 'Reading material requirements for the selected files…' : null)
+      || sharedJobDescription.error;
+  const independentValidationReason = useMemo(() => {
+    if (!isIndependentQueue || !needsTypedJobDescription || !effectiveDevice.data
+      || independentDescriptions.some(query => !query.data)) return null;
+    try {
+      for (const query of independentDescriptions) remapJobSetupForDescription(
+        genericSetups[effectivePrinterId!] || emptyGenericJobSetup(), query.data!, effectiveDevice.data);
+      return null;
+    } catch (error) { return error instanceof Error ? error.message : String(error); }
+  }, [isIndependentQueue, needsTypedJobDescription, effectiveDevice.data, independentDescriptions, genericSetups, effectivePrinterId]);
 
   const { data: myCostCenters, isLoading: loadingCostCenters } = useQuery({
     queryKey: ['finance', 'cost-centers', 'mine'],
@@ -1072,33 +1144,115 @@ export function PrintModal({
   // another printer in the same submit was never checked against.
   const isGenericPrinter = (printerId: number) => {
     const printer = printers?.find(candidate => candidate.id === printerId);
-    return (printerPlugins.find(plugin => plugin.id === (printer?.plugin_id || 'bambu'))?.api_version || 0) >= 2;
+    const description = queryClient.getQueryData<PrinterDevice>(['printer-device', printerId]);
+    return (printerPlugins.find(plugin => plugin.id === (printer?.plugin_id || 'bambu'))?.api_version || 0) >= 2
+      && description?.extensions.compatibility_ui !== 'bambu-v1';
   };
   const genericPayloadFor = (printerId: number, plateId: number | null): Pick<PrintQueueItemCreate, 'tool_ids' | 'material_bindings' | 'job_options' | 'sdk_job'> => {
     if (!isGenericPrinter(printerId)) return {};
+    const device = queryClient.getQueryData<PrinterDevice>(['printer-device', printerId]);
+    const source = isLibraryFile ? { libraryFileId, plateId } : { archiveId, plateId };
+    const description = queryClient.getQueryData<PrinterJobDescription>(jobDescriptionQueryKey(printerId, source));
+    if (!device || !description) throw new Error('Wait for the printer job requirements before submitting.');
     const setup = genericSetups[printerId] || emptyGenericJobSetup();
-    const sourceName = libraryFileDetails?.filename || archiveName;
-    return {
-      tool_ids: setup.tool_ids,
-      material_bindings: setup.material_bindings,
-      job_options: setup.job_options,
-      sdk_job: buildSdkJobPlan(setup, {
-        jobId: queueItem?.sdk_job?.job_id || crypto.randomUUID(),
-        name: archiveName,
-        artifact: {
-          uri: isLibraryFile ? `library:${libraryFileId}` : `archive:${archiveId}`,
-          filename: sourceName,
-          format: libraryFileDetails?.file_type || (sourceName.toLowerCase().endsWith('.gcode') ? 'gcode' : '3mf'),
-        },
-        plateId,
-      }),
-    };
+    return describedJobPayload(setup, description, device, {
+      jobId: queueItem?.sdk_job?.job_id || crypto.randomUUID(), name: archiveName, plateId,
+    });
   };
   const handleSubmit = async (
     e?: React.FormEvent,
     options?: { skipFilamentCheck?: boolean; acknowledgedPrinters?: number[] },
   ) => {
     e?.preventDefault();
+
+    if (loadingPrinterPlugins || printerPluginsError) {
+      showToast(printerPluginsError?.message || 'Wait for printer support to finish loading.', 'error');
+      return;
+    }
+
+    if (isIndependentQueue) {
+      if (assignmentMode !== 'printer' || selectedPrinters.length !== 1 || !effectivePrinter) {
+        showToast('Select a printer for these files.', 'error');
+        return;
+      }
+      if (independentBlockingReason || independentValidationReason || independentFiles.length === 0) {
+        showToast(independentBlockingReason || independentValidationReason || 'No files remain to queue.', 'error');
+        return;
+      }
+      if (billingEnabled && selectedCostCenter == null) {
+        showToast(t('printModal.noPrintableCostCenters'), 'error');
+        return;
+      }
+      const printerId = selectedPrinters[0];
+      const prepared: Array<{ file: VariantCandidate; data: PrintQueueItemCreate }> = [];
+      try {
+        // Build and validate ALL file plans before creating the first row.
+        for (let index = 0; index < independentFiles.length; index++) {
+          const file = independentFiles[index];
+          const metadata = independentMetadata[index]?.data;
+          if (!metadata) throw new Error(`Wait for ${file.filename} to finish loading.`);
+          if (!isGcodeCompatible(metadata.sliced_for_model || file.sliced_for_model, effectivePrinter.model)) {
+            throw new Error(`${file.filename} was sliced for a different printer model.`);
+          }
+          const plateId = candidatePlates[file.id] ?? null;
+          let typed = {};
+          if (isGenericPrinter(printerId)) {
+            const device = effectiveDevice.data;
+            const description = independentDescriptions[index]?.data;
+            if (!device || !description) throw new Error(`Wait for ${file.filename} material requirements.`);
+            typed = describedJobPayload(genericSetups[printerId] || emptyGenericJobSetup(), description, device, {
+              jobId: crypto.randomUUID(), name: file.filename, plateId,
+            });
+          }
+          prepared.push({ file, data: {
+            library_file_id: file.id, printer_id: printerId, target_model: null, target_location: null,
+            plate_id: plateId, project_id: projectId ?? undefined,
+            quantity: quantity > 1 ? quantity : undefined,
+            manual_start: needsReview || (scheduleOptions.scheduleType === 'queue' && scheduleOptions.requireManualStart),
+            require_previous_success: scheduleOptions.requirePreviousSuccess,
+            auto_off_after: scheduleOptions.autoOffAfter, gcode_injection: scheduleOptions.gcodeInjection,
+            scheduled_time: scheduleOptions.scheduleType === 'scheduled' && scheduleOptions.scheduledTime
+              ? new Date(scheduleOptions.scheduledTime).toISOString() : undefined,
+            cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
+            ...printOptions, ...typed,
+          } });
+        }
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : String(error), 'error');
+        return;
+      }
+      setIsSubmitting(true);
+      setSubmitProgress({ current: 0, total: prepared.length });
+      const completed = new Set<number>();
+      let failure: string | null = null;
+      for (const { file, data } of prepared) {
+        try {
+          if (scheduleOptions.scheduleType === 'asap') {
+            data.insert_at_top = true;
+            data.insert_position = independentAsapInserted.current + 1;
+          }
+          await api.addToQueue(data);
+          completed.add(file.id);
+          if (scheduleOptions.scheduleType === 'asap') independentAsapInserted.current += quantity;
+          setSubmitProgress({ current: completed.size, total: prepared.length });
+        } catch (error) {
+          failure = `${file.filename}: ${error instanceof Error ? error.message : String(error)}`;
+          break;
+        }
+      }
+      if (completed.size) {
+        setIndependentQueuedCount(count => count + completed.size);
+        setIndependentFiles(files => files.filter(file => !completed.has(file.id)));
+        queryClient.invalidateQueries({ queryKey: ['queue'] });
+      }
+      setIsSubmitting(false);
+      if (failure) showToast(failure, 'error');
+      else {
+        showToast(t('queue.itemsQueued', { count: completed.size }), 'success');
+        onSuccess?.(); onClose();
+      }
+      return;
+    }
 
     for (const printerId of assignmentMode === 'printer' ? selectedPrinters : []) {
       if (!isGenericPrinter(printerId)) continue;
@@ -1107,13 +1261,9 @@ export function PrintModal({
         showToast('Wait for the printer resource description before submitting.', 'error');
         return;
       }
-      const setup = genericSetups[printerId] || emptyGenericJobSetup();
-      if (device.resources.filter(resource => resource.kind === 'tool').length > 1 && !setup.tool_ids.length && !Object.keys(setup.material_tool_ids).length) {
-        showToast('Select the tools to use for each printer.', 'error');
-        return;
-      }
-      if (Object.keys(setup.material_bindings).some(inputId => !setup.material_tool_ids[inputId])) {
-        showToast('Select a tool for each material source binding.', 'error');
+      try { genericPayloadFor(printerId, selectedPlate); }
+      catch (error) {
+        showToast(error instanceof Error ? error.message : String(error), 'error');
         return;
       }
     }
@@ -1679,6 +1829,14 @@ export function PrintModal({
 
   const canSubmit = useMemo(() => {
     if (isPending) return false;
+    if (loadingPrinterPlugins || printerPluginsError) return false;
+    if (effectivePlugin?.api_version === 2 && (effectiveDevice.isPending || effectiveDevice.isError)) return false;
+    if (isIndependentQueue) {
+      return selectedPrinters.length === 1 && independentFiles.length > 0
+        && !independentBlockingReason && !independentValidationReason
+        && (!billingEnabled || !loadingCostCenters && selectedCostCenter != null);
+    }
+    if (needsTypedJobDescription && (jobDescription.isPending || jobDescription.isError)) return false;
 
     // Billing requires a server-authorized cost center. Wait for the query and
     // keep submission disabled when the user has no printable center, rather
@@ -1724,6 +1882,18 @@ export function PrintModal({
     billingEnabled,
     loadingCostCenters,
     selectedCostCenter,
+    isIndependentQueue,
+    independentFiles.length,
+    independentBlockingReason,
+    independentValidationReason,
+    needsTypedJobDescription,
+    jobDescription.isPending,
+    jobDescription.isError,
+    loadingPrinterPlugins,
+    printerPluginsError,
+    effectivePlugin?.api_version,
+    effectiveDevice.isPending,
+    effectiveDevice.isError,
   ]);
 
   // Quantity only applies for single-printer or model-based assignment (not multi-printer)
@@ -1737,7 +1907,7 @@ export function PrintModal({
   // VariantCandidates, so there are no per-plate steppers to own the number
   // and the global Quantity field below is the only one there is (#3101).
   const usePerPlateQuantities =
-    mode === 'create' && !isCrossModel && isMultiPlate && plates.length > 1;
+    mode === 'create' && !isCrossModel && !isIndependentQueue && isMultiPlate && plates.length > 1;
 
   /** Runs to queue for one plate. `null` = the single-plate / whole-file case. */
   const quantityForPlate = (plateIndex: number | null): number => {
@@ -1768,7 +1938,10 @@ export function PrintModal({
       return {
         title: t('common.print'),
         icon: Printer,
-        submitText: t('common.print'),
+        submitText: isIndependentQueue
+          ? t('printModal.queueFiles', { count: independentFiles.length,
+            defaultValue: independentFiles.length === 1 ? 'Queue {{count}} file' : 'Queue {{count}} files' })
+          : t('common.print'),
         submitIcon: Printer,
         loadingText: submitProgress.total > 1
           ? t('queue.addingProgress', { current: submitProgress.current, total: submitProgress.total })
@@ -1795,7 +1968,7 @@ export function PrintModal({
   // - Single printer selected
   // - For archives: plate is selected (for multi-plate) or not required (single-plate)
   // - For library files: always show (no plate selection)
-  const showFilamentMapping = legacyMaterialUi && effectivePrinterId && selectedPlates.size <= 1 && (
+  const showFilamentMapping = !isIndependentQueue && legacyMaterialUi && effectivePrinterId && selectedPlates.size <= 1 && (
     isLibraryFile || (isMultiPlate ? selectedPlate !== null : true)
   );
 
@@ -1810,7 +1983,7 @@ export function PrintModal({
   // plate *per printer*, so those items ship without a mapping and the scheduler
   // computes one per plate when it picks the printer.
   const showPerPlateFilamentMapping =
-    legacyMaterialUi && !!effectivePrinterId && isMultiPlateSelection && selectedPrinters.length === 1;
+    !isIndependentQueue && legacyMaterialUi && !!effectivePrinterId && isMultiPlateSelection && selectedPrinters.length === 1;
 
   // Model mode has no printer and so no trays to map onto; what it offers instead
   // is the filament each slot must be printed in, which the scheduler matches
@@ -1837,11 +2010,9 @@ export function PrintModal({
     });
   }, [assignmentMode, targetModel, printers, selectedPrinters, printerPlugins]);
   const genericJobOptions = assignmentMode === 'printer' && selectedPrinters.length > 0
-    ? selectedPrinters.every(id => {
-      const printer = printers?.find(candidate => candidate.id === id);
-      return (printerPlugins.find(plugin => plugin.id === (printer?.plugin_id || 'bambu'))?.api_version || 0) >= 2;
-    })
-    : !!targetModel && printerPlugins.some(plugin => plugin.api_version >= 2 && plugin.models.some(model => model.id === targetModel));
+    ? selectedPrinters.every(isGenericPrinter)
+    : !!targetModel && printerPlugins.some(plugin => plugin.api_version >= 2
+      && plugin.models.some(model => model.id === targetModel && model.presentation?.compatibility_ui !== 'bambu-v1'));
 
   return (
     <div
@@ -1902,7 +2073,7 @@ export function PrintModal({
                 chosen per candidate in the list below, and this selector's own
                 choice never reached the request — it only decided which plate
                 the filament panel described (#3101). */}
-            {!isCrossModel && (
+            {!isCrossModel && !isIndependentQueue && (
               <PlateSelector
                 plates={plates}
                 isMultiPlate={isMultiPlate}
@@ -1938,6 +2109,21 @@ export function PrintModal({
             {/* Cross-model alternatives (#671) replace the printer picker entirely:
                 the user already answered "which printer" by choosing these files,
                 and the remaining question is only which they'd rather have. */}
+            {isIndependentQueue && (
+              <>
+                <VariantCandidates candidates={independentFiles} onReorder={setIndependentFiles}
+                  plateByFile={candidatePlates}
+                  onPlateChange={(fileId, plateId) => setCandidatePlates(previous => ({ ...previous, [fileId]: plateId }))}
+                  heading={t('printModal.filesToQueue', { defaultValue: 'Files to queue' })}
+                  help={t('printModal.independentFilesHelp', { defaultValue: 'Each file becomes a separate queue job, in this order.' })} />
+                {independentQueuedCount > 0 && <p role="status" className="text-sm text-bambu-green">
+                  {t('printModal.filesAlreadyQueued', { count: independentQueuedCount,
+                    defaultValue: independentQueuedCount === 1 ? '{{count}} file already queued. Retrying queues only the remaining files.'
+                      : '{{count}} files already queued. Retrying queues only the remaining files.' })}
+                </p>}
+                {(independentBlockingReason || independentValidationReason) && <p role="alert" className="text-sm text-bambu-gray">{independentBlockingReason || independentValidationReason}</p>}
+              </>
+            )}
             {isCrossModel && (
               <VariantCandidates
                 candidates={candidates}
@@ -1967,7 +2153,7 @@ export function PrintModal({
                 selectedPrinterIds={selectedPrinters}
                 onMultiSelect={setSelectedPrinters}
                 isLoading={loadingPrinters}
-                allowMultiple={true}
+                allowMultiple={!isIndependentQueue}
                 showInactive={mode === 'edit-queue-item'}
                 disableBusy={false}
                 printerMappingResults={multiPrinterMapping.printerResults}
@@ -1980,7 +2166,7 @@ export function PrintModal({
                 onAutoConfigurePrinter={multiPrinterMapping.autoConfigurePrinter}
                 onUpdatePrinterConfig={multiPrinterMapping.updatePrinterConfig}
                 assignmentMode={assignmentMode}
-                onAssignmentModeChange={setAssignmentMode}
+                onAssignmentModeChange={isIndependentQueue ? undefined : setAssignmentMode}
                 targetModel={targetModel}
                 onTargetModelChange={setTargetModel}
                 targetLocation={targetLocation}
@@ -2143,18 +2329,23 @@ export function PrintModal({
               {assignmentMode === 'printer' && selectedPrinters.map(printerId => {
               const printer = printers?.find(candidate => candidate.id === printerId);
               const plugin = printerPlugins.find(candidate => candidate.id === (printer?.plugin_id || 'bambu'));
-              return printer && (plugin?.api_version || 0) >= 2 ? <GenericPrintSetup key={printerId} printerId={printerId} printerName={printer.name}
+              return printer && (plugin?.api_version || 0) >= 2 && isGenericPrinter(printerId) ? <GenericPrintSetup key={printerId} printerId={printerId} printerName={printer.name}
                 value={genericSetups[printerId] || emptyGenericJobSetup()}
                 onChange={next => setGenericSetups(previous => ({ ...previous, [printerId]: next }))}
+                source={!isIndependentQueue ? jobSource : undefined}
+                description={printerId === effectivePrinterId ? sharedJobDescription.data : undefined}
+                descriptionPending={isIndependentQueue && (!!independentBlockingReason || !sharedJobDescription.data)}
+                descriptionError={isIndependentQueue ? sharedJobDescription.error || undefined : undefined}
+                defaultExpanded={!!initialSelectedPrinterIds?.length}
                 materials={(effectiveFilamentReqs?.filaments || []).map(material => ({ id: String(material.slot_id), label: `${material.type} (${material.slot_id})` }))} /> : null;
             })}
-            <PrintOptionsPanel
+            {!genericJobOptions && <PrintOptionsPanel
                 options={printOptions}
                 onChange={setPrintOptions}
                 defaultExpanded={!!initialSelectedPrinterIds?.length}
                 showDualNozzleOptions={showDualNozzleOptions}
                 genericDevice={genericJobOptions}
-              />
+              />}
               </>
             )}
 

@@ -539,3 +539,61 @@ describe('AssignSpoolModal — Spoolman enabled (T-Gap 7)', () => {
     expect(screen.queryByText(/Prusa/)).not.toBeInTheDocument();
   });
 });
+
+
+describe('AssignSpoolModal with an opaque SDK material target', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (api.getSpools as ReturnType<typeof vi.fn>).mockResolvedValue([manualSpool]);
+    vi.mocked(api.getAssignments).mockResolvedValue([]);
+    vi.mocked(api.getSpoolmanSlotAssignments).mockResolvedValue([]);
+  });
+
+  it('reuses the inventory picker but only calls the resource callback, without legacy addresses or printer commands', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    const assigned = vi.fn().mockResolvedValue(undefined);
+    const closed = vi.fn();
+    render(<AssignSpoolModal isOpen printerId={7} onClose={closed}
+      trayInfo={{ type: 'PLA', material: 'PLA', color: 'FF0000', location: 'Feeder violet' }}
+      resourceTarget={{ resourceId: 'material://violet/bay-9', label: 'Feeder violet', onAssign: assigned }} />);
+    await user.click(await screen.findByText(/Polymaker/));
+    await user.click(screen.getByRole('button', { name: /assign spool/i }));
+    await waitFor(() => expect(assigned).toHaveBeenCalledWith('material://violet/bay-9', 1, { move: false }));
+    expect(api.assignSpool).not.toHaveBeenCalled();
+    expect(api.assignSpoolmanSlot).not.toHaveBeenCalled();
+    expect(api.refreshPrinterStatus).not.toHaveBeenCalled();
+    await waitFor(() => expect(closed).toHaveBeenCalledOnce());
+  });
+
+  it('keeps a failed resource assignment visible and does not fall back to a legacy API', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    const assigned = vi.fn().mockRejectedValue(new Error('Provider declined this assignment.'));
+    const closed = vi.fn();
+    render(<AssignSpoolModal isOpen printerId={7} onClose={closed}
+      trayInfo={{ type: 'PLA', material: 'PLA', color: 'FF0000', location: 'Feeder violet' }}
+      resourceTarget={{ resourceId: 'material://violet/bay-9', label: 'Feeder violet', onAssign: assigned }} />);
+    await user.click(await screen.findByText(/Polymaker/));
+    await user.click(screen.getByRole('button', { name: /assign spool/i }));
+    expect(await screen.findByText('Provider declined this assignment.')).toBeInTheDocument();
+    expect(closed).not.toHaveBeenCalled();
+    expect(api.assignSpool).not.toHaveBeenCalled();
+    expect(api.refreshPrinterStatus).not.toHaveBeenCalled();
+  });
+
+  it('routes a supported Spoolman selection through its explicit SDK callback', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    const assigned = vi.fn().mockResolvedValue(undefined);
+    (api.getSpoolmanInventorySpools as ReturnType<typeof vi.fn>).mockResolvedValue([{ ...manualSpool, id: 88, brand: 'Shared spool' }]);
+    render(<AssignSpoolModal isOpen printerId={7} onClose={vi.fn()} spoolmanEnabled
+      trayInfo={{ type: 'PLA', material: 'PLA', color: 'FF0000', location: 'Feeder violet' }}
+      resourceTarget={{ resourceId: 'material://violet/bay-9', label: 'Feeder violet', onAssign: vi.fn(), onAssignSpoolman: assigned }} />);
+    await user.click(await screen.findByText(/Shared spool/));
+    await user.click(screen.getByRole('button', { name: /assign spool/i }));
+    await waitFor(() => expect(assigned).toHaveBeenCalledWith('material://violet/bay-9', 88, { move: undefined }));
+    expect(api.assignSpoolmanSlot).not.toHaveBeenCalled();
+    expect(api.refreshPrinterStatus).not.toHaveBeenCalled();
+  });
+});

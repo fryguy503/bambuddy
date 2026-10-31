@@ -14,12 +14,10 @@ import { getSwatchStyle, resolveSpoolColorName } from '../utils/colors';
 import { parseSpoolQr, scannedSpoolId } from '../utils/qrAssignTarget';
 import { useUiSettings } from '../hooks/useUiSettings';
 
-interface AssignSpoolModalProps {
+interface AssignSpoolModalBaseProps {
   isOpen: boolean;
   onClose: () => void;
   printerId: number;
-  amsId: number;
-  trayId: number;
   trayInfo?: {
     type: string;
     material?: string;
@@ -36,11 +34,27 @@ interface AssignSpoolModalProps {
   spoolmanEnabled?: boolean;
 }
 
+export interface ResourceSpoolTarget {
+  resourceId: string;
+  label: string;
+  assignedSpoolId?: number | null;
+  assignedSpoolmanSpoolId?: number | null;
+  onAssign: (resourceId: string, spoolId: number, options?: { move?: boolean }) => Promise<void>;
+  onAssignSpoolman?: (resourceId: string, spoolId: number, options?: { move?: boolean }) => Promise<void>;
+}
+
+type AssignSpoolModalProps = AssignSpoolModalBaseProps & (
+  | { amsId: number; trayId: number; resourceTarget?: never }
+  | { resourceTarget: ResourceSpoolTarget; amsId?: never; trayId?: never }
+);
+
 function spoolSummary(spool: InventorySpool): string {
   return [spool.brand, spool.material, spool.subtype].filter(Boolean).join(' ');
 }
 
-export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, trayInfo, spoolmanEnabled }: AssignSpoolModalProps) {
+export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, trayInfo: suppliedTrayInfo, spoolmanEnabled: requestedSpoolman, resourceTarget }: AssignSpoolModalProps) {
+  const spoolmanEnabled = requestedSpoolman && (!resourceTarget || !!resourceTarget.onAssignSpoolman);
+  const trayInfo: AssignSpoolModalBaseProps['trayInfo'] = suppliedTrayInfo ?? (resourceTarget ? { type: '', color: '', location: resourceTarget.label } : undefined);
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -123,10 +137,10 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
     if (!allSpoolmanAssignments) return new Set<number>();
     return new Set(
       allSpoolmanAssignments
-        .filter(a => !(a.printer_id === printerId && a.ams_id === amsId && a.tray_id === trayId))
+        .filter(a => resourceTarget ? a.spoolman_spool_id !== resourceTarget.assignedSpoolmanSpoolId : !(a.printer_id === printerId && a.ams_id === amsId && a.tray_id === trayId))
         .map(a => a.spoolman_spool_id),
     );
-  }, [allSpoolmanAssignments, printerId, amsId, trayId]);
+  }, [allSpoolmanAssignments, printerId, amsId, trayId, resourceTarget]);
 
   // #1414: nudge the printer to republish its state after we assign a
   // spool. The backend assign-spool path already issues an MQTT command,
@@ -138,14 +152,33 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
   // intentionally swallowed — the assignment itself succeeded; if the
   // refresh is offline the next poll / websocket update will catch up.
   const nudgePrinterRepublish = () => {
+    if (resourceTarget) {
+      queryClient.invalidateQueries({ queryKey: ['printer-device-state', printerId] });
+      queryClient.invalidateQueries({ queryKey: ['inventory-spools'] });
+      return;
+    }
     api.refreshPrinterStatus(printerId).catch(() => {});
     queryClient.invalidateQueries({ queryKey: ['printerStatus', printerId] });
   };
 
   const assignMutation = useMutation({
-    mutationFn: ({ spoolId, move }: { spoolId: number; move?: boolean }) =>
-      api.assignSpool({ spool_id: spoolId, printer_id: printerId, ams_id: amsId, tray_id: trayId, ...(move && { move }) }),
+    mutationFn: async ({ spoolId, move }: { spoolId: number; move?: boolean }) => {
+      if (resourceTarget) {
+        await resourceTarget.onAssign(resourceTarget.resourceId, spoolId, { move });
+        return null;
+      }
+      if (amsId === undefined || trayId === undefined) throw new Error('No printer material target was supplied.');
+      return api.assignSpool({ spool_id: spoolId, printer_id: printerId, ams_id: amsId, tray_id: trayId, ...(move && { move }) });
+    },
     onSuccess: (newAssignment, { move }) => {
+      if (resourceTarget) {
+        nudgePrinterRepublish();
+        showToast(t('inventory.assignSuccess'), 'success');
+        setMismatch(null);
+        onClose();
+        return;
+      }
+      if (!newAssignment) return;
       // Immediately update cache so UI reflects the new assignment without waiting for refetch
       queryClient.setQueryData<SpoolAssignment[]>(['spool-assignments'], (old) => {
         const filtered = (old || []).filter(a =>
@@ -181,14 +214,21 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
   });
 
   const assignSpoolmanMutation = useMutation({
-    mutationFn: ({ spoolmanSpoolId, move }: { spoolmanSpoolId: number; move?: boolean }) =>
-      api.assignSpoolmanSlot({
+    mutationFn: async ({ spoolmanSpoolId, move }: { spoolmanSpoolId: number; move?: boolean }) => {
+      if (resourceTarget) {
+        if (!resourceTarget.onAssignSpoolman) throw new Error('This plugin does not support Spoolman assignment.');
+        await resourceTarget.onAssignSpoolman(resourceTarget.resourceId, spoolmanSpoolId, { move });
+        return;
+      }
+      if (amsId === undefined || trayId === undefined) throw new Error('No printer material target was supplied.');
+      return api.assignSpoolmanSlot({
         spoolman_spool_id: spoolmanSpoolId,
         printer_id: printerId,
         ams_id: amsId,
         tray_id: trayId,
         ...(move && { move }),
-      }),
+      });
+    },
     onSuccess: (_data, { move }) => {
       queryClient.invalidateQueries({ queryKey: ['spoolman-inventory-spools'] });
       // Prefix match: also the all-printers list this dialog filters
@@ -217,7 +257,7 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
   // Filter out spools already assigned to other slots
   const assignedSpoolIds = new Set(
     (assignments || [])
-      .filter(a => !(a.printer_id === printerId && a.ams_id === amsId && a.tray_id === trayId))
+      .filter(a => resourceTarget ? a.spool_id !== resourceTarget.assignedSpoolId : !(a.printer_id === printerId && a.ams_id === amsId && a.tray_id === trayId))
       .map(a => a.spool_id)
   );
   // Show every spool that isn't already taken by another slot — including
@@ -376,6 +416,10 @@ export function AssignSpoolModal({ isOpen, onClose, printerId, amsId, trayId, tr
   // What the slot holds now, for the context box: the spool assigned to it,
   // else what the printer reports there.
   const currentSpool: { id: number; spool?: InventorySpool } | null = (() => {
+    if (resourceTarget) {
+      const id = spoolmanEnabled ? resourceTarget.assignedSpoolmanSpoolId : resourceTarget.assignedSpoolId;
+      return id ? { id, spool: (spoolmanEnabled ? spoolmanSpools : spools)?.find(spool => spool.id === id) } : null;
+    }
     if (spoolmanEnabled) {
       const row = allSpoolmanAssignments?.find(a => a.printer_id === printerId && a.ams_id === amsId && a.tray_id === trayId);
       return row ? { id: row.spoolman_spool_id, spool: spoolmanSpools?.find(s => s.id === row.spoolman_spool_id) } : null;

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
 import { server } from '../mocks/server';
@@ -48,6 +49,34 @@ beforeEach(() => {
 afterEach(() => vi.mocked(localStorage.getItem).mockReset());
 
 describe('plugin printer card job summary', () => {
+  it('keeps the included compatibility panels for API2 without duplicating the generic card', async () => {
+    status('RUNNING');
+    server.use(http.get('/api/v1/printers/:id/device', () => HttpResponse.json({
+      schema_version: 2, device_id: 'fixture:42', model_id: 'Fixture',
+      capabilities: ['print'], resources: [], operations: [], configuration_schema: {},
+      extensions: { compatibility_ui: 'bambu-v1' }, revision: '1',
+    })));
+    render(<PrintersPage />);
+    expect(await screen.findByTestId('speed-control')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Printer resources and controls' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Pause$/ })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /^Stop$/ })).toHaveLength(1);
+  });
+
+  it('keeps advanced plugin details behind the existing More menu', async () => {
+    status('IDLE');
+    render(<PrintersPage />);
+    await screen.findByText('No active job');
+    expect(screen.queryByText('Advanced device details')).not.toBeInTheDocument();
+    const card = document.getElementById('printer-card-42')!;
+    await userEvent.click(await within(card).findByTitle(/more/i));
+    await userEvent.click(await screen.findByRole('button', { name: 'Advanced controls' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Advanced controls' });
+    expect(dialog).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Advanced controls' })).not.toBeInTheDocument();
+  });
+
   it.each(['RUNNING', 'PAUSE', 'PREPARE', 'SLICING'])('shows an unnamed %s job with its progress and metrics', async state => {
     status(state);
     render(<PrintersPage />);

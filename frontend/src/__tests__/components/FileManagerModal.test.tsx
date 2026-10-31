@@ -65,6 +65,18 @@ describe('FileManagerModal', () => {
   });
 
   describe('rendering', () => {
+    it('honors upload-only printer storage without exposing unsupported download, delete or preview actions', async () => {
+      server.use(http.get('/api/v1/printers/:id/storage', () => HttpResponse.json({
+        used_bytes: null, free_bytes: null, supports_download: false, supports_delete: false,
+      })));
+      render(<FileManagerModal printerId={1} printerName="Upload-only printer" onClose={mockOnClose} />);
+      await screen.findByText('print_job.gcode');
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^Download/ })).not.toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /^Delete/ })).not.toBeInTheDocument();
+      expect(screen.queryByTitle('3D View')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /select file/i })).not.toBeInTheDocument();
+    });
+
     it('renders the modal with header', async () => {
       render(
         <FileManagerModal

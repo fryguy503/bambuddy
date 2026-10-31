@@ -50,14 +50,17 @@ export interface PrintModalProps {
    * Cross-model alternatives (#671): the same job sliced for several printers,
    * to be queued as ONE item that runs on whichever frees up first.
    *
-   * Supplied by the File Manager when the user multi-selects sliced files, or
-   * when the clicked file belongs to a variant group. Two or more entries put
+   * Supplied by an explicit alternatives action, or when the clicked file
+   * belongs to a variant group. Two or more entries put
    * the modal in cross-model mode: the printer picker is replaced by the ordered
    * candidate list, and submit posts `variants` instead of a single file.
    * `libraryFileId` must still be the first candidate — the shared filament and
    * plate preview reads from it.
    */
   variantFiles?: VariantCandidate[];
+  /** Independent files, queued once each with shared printer/setup choices.
+   * These are not alternatives, even when every file targets the same model. */
+  queueFiles?: VariantCandidate[];
 }
 
 /**

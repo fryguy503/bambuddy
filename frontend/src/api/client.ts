@@ -5664,7 +5664,7 @@ export const api = {
       method: 'DELETE',
     }),
   getPrinterStorage: (printerId: number) =>
-    request<{ used_bytes: number | null; free_bytes: number | null }>(`/printers/${printerId}/storage`),
+    request<{ used_bytes: number | null; free_bytes: number | null; supports_download?: boolean; supports_delete?: boolean }>(`/printers/${printerId}/storage`),
 
   // Archives
   getArchives: (printerId?: number, projectId?: number, limit = 10000, offset = 0, dateFrom?: string, dateTo?: string) => {
