@@ -26,6 +26,7 @@ _CAPABILITIES = frozenset(
         "resume",
         "stop",
         "files",
+        "file_upload",
         "camera",
         "discovery",
         "material",
@@ -39,7 +40,7 @@ _CAPABILITIES = frozenset(
 class AnycubicPrinterPlugin(PrinterPlugin):
     id = "anycubic"
     name = "Anycubic signed LAN"
-    version = "0.1.2"
+    version = "0.1.3"
     api_version = 2
     publisher_id = "fryguy503"
     capabilities = _CAPABILITIES
@@ -88,9 +89,9 @@ class AnycubicPrinterPlugin(PrinterPlugin):
         manifest = super().sdk_manifest()
         if self._installed_manifest is not None:
             return manifest
-        # Anonymous printer-origin snapshot jobs require SDK 2.1. Existing
-        # 2.0 hosts must reject this version from static metadata before import.
-        return manifest.model_copy(update={"requires_api": ">=2.1.0,<3.0.0"})
+        # File-specific print options/material requirements use SDK 2.2.
+        # Older hosts must reject this version from metadata before import.
+        return manifest.model_copy(update={"requires_api": ">=2.2.0,<3.0.0"})
 
     def connection_fields(self):
         return {
@@ -136,6 +137,11 @@ class AnycubicPrinterPlugin(PrinterPlugin):
             with native._lock:
                 return describe(self, config, native)
         return describe(self, config)
+
+    def describe_job(self, config, artifact, path):
+        from .job_description import describe_job
+
+        return describe_job(self, config, artifact, path)
 
     @staticmethod
     def _typed_connection(connection: PrinterConnection) -> AnycubicConnection:

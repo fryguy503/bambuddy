@@ -44,8 +44,22 @@ async def file_operation(connection, operation, *args, **kwargs):
         root = settings.base_dir / "printer-plugin-state" / "anycubic" / "artifacts"
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         staged = root / (uuid4().hex + ".gcode")
-        await asyncio.to_thread(shutil.copyfile, local, staged)
         try:
+            # Cancelling to_thread does not stop the underlying filesystem copy.
+            # Retain the upload lease until its worker exits, then remove its file.
+            copy_task = asyncio.create_task(asyncio.to_thread(shutil.copyfile, local, staged))
+            try:
+                await asyncio.shield(copy_task)
+            except asyncio.CancelledError:
+                while not copy_task.done():
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await asyncio.shield(copy_task)
+                with contextlib.suppress(Exception):
+                    copy_task.result()
+                raise
+            cancelled = kwargs.get("cancel_event")
+            if cancelled is not None and cancelled.is_set():
+                raise UploadCancelled("Upload cancelled before preparation completed")
             os.chmod(staged, 0o600)
             artifact = await asyncio.to_thread(inspect_print_file, staged, alias, connection.config.model)
             context = await asyncio.to_thread(native.file_session, require_upload=True)

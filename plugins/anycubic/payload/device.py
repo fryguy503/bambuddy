@@ -5,6 +5,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
+from typing import Any
 
 from backend.app.printers.sdk import (
     DeviceDescriptor,
@@ -153,6 +154,12 @@ def describe(plugin, config, native=None):
                 id=f"fan:{fan}",
                 kind="fan",
                 label=fan.title() + " fan",
+                metadata={
+                    "bambuddy:ui": {
+                        "icon": {"part": "fan", "aux": "wind", "chamber": "air-vent"}[fan],
+                        "tone": {"part": "cyan", "aux": "blue", "chamber": "green"}[fan],
+                    }
+                },
                 properties={
                     "percent": prop(
                         "Speed",
@@ -202,6 +209,7 @@ def describe(plugin, config, native=None):
             id="material:external",
             kind="material_source",
             label="External spool",
+            roles=["external"],
             relations={"tools": ["tool:primary"]},
             properties={"spool_id": prop("Assigned spool", {"type": ["string", "null"]})},
         )
@@ -213,12 +221,22 @@ def describe(plugin, config, native=None):
                 id=feeder,
                 kind="feeder",
                 label=(getattr(native, "_display_names", {}).get(feeder) if native is not None else None)
-                or (f"ACE {box}" if box >= 0 else "Internal feeder"),
+                or (f"ACE {box + 1}" if box >= 0 else "Internal feeder"),
                 metadata={"native_box_id": box},
                 properties={
                     "temperature": prop("Temperature", {"type": "number"}, "degC"),
                     "humidity": prop("Humidity", {"type": "number"}, "%"),
-                    "drying": prop("Drying", {"type": "object"}),
+                    "drying": prop(
+                        "Drying",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "target_temp": {"type": "number", "title": "Target", "x-unit": "degC"},
+                                "duration_minutes": {"type": "number", "title": "Duration", "x-unit": "min"},
+                                "remaining_minutes": {"type": "number", "title": "Remaining", "x-unit": "min"},
+                            },
+                        },
+                    ),
                     "name": prop("Friendly name", {"type": "string"}),
                 },
             )
@@ -228,7 +246,7 @@ def describe(plugin, config, native=None):
                 ResourceDescriptor(
                     id=source_id(box, slot),
                     kind="material_source",
-                    label=f"ACE {box} slot {slot + 1}",
+                    label=f"ACE {box + 1} slot {slot + 1}" if box >= 0 else f"Internal feeder slot {slot + 1}",
                     parent_id=feeder,
                     relations={"tools": ["tool:primary"]},
                     metadata={"native_box_id": box, "native_slot_id": slot},
@@ -386,7 +404,93 @@ def describe(plugin, config, native=None):
             asynchronous=False,
         ),
     ]
+    from .job_description import options_schema
+
     operation_by_id = {item.id: item for item in operations}
+
+    def parameters(operation_id: str) -> dict[str, Any]:
+        properties = operation_by_id[operation_id].parameters_schema.get("properties")
+        if not isinstance(properties, dict):
+            raise ValueError("Operation parameters must be an object")
+        return properties
+
+    parameters("job.start")["options"] = options_schema(native)
+    hints = {
+        "anycubic.motion.home": ("controls", "home", "home", {"axes": "axes"}),
+        "anycubic.settings.speed": ("controls", "gauge", "speed", {"value": "mode"}),
+        "anycubic.motion.jog": ("controls", "move", "jog", {"distance": "distance"}),
+        "anycubic.extruder.pulse": ("controls", "move", "extrude", {"direction": "direction"}),
+        "anycubic.extruder.stop": ("controls", "move", "extrude_stop", {}),
+        "anycubic.drying.set": (
+            "drying",
+            "flame",
+            "drying",
+            {"temperature": "temperature", "duration": "duration_minutes"},
+        ),
+        "anycubic.drying.stop": ("drying", "flame", "drying_stop", {}),
+        "anycubic.material.configure": ("material", "settings", "material", {"material": "material", "color": "color"}),
+        "anycubic.material.feed": ("material", "move", "feed", {"action": "action"}),
+        "anycubic.material.refresh": ("material", "refresh-cw", "refresh", {}),
+        "anycubic.inventory.assign": ("material", "link", "inventory", {"spool": "spool_id"}),
+    }
+    for operation_id, (group, icon, editor, bindings) in hints.items():
+        hint: dict[str, Any] = {"group": group, "icon": icon, "editor": editor, "parameters": bindings}
+        if group == "drying":
+            hint["state"] = {
+                "temperature": "/drying/target_temp",
+                "duration": "/drying/duration_minutes",
+                "remaining": "/drying/remaining_minutes",
+            }
+        operation_by_id[operation_id].extensions["bambuddy:ui"] = hint
+    for operation_id, key, labels in (
+        ("anycubic.settings.speed", "mode", ["Quiet", "Standard", "Sport"]),
+        ("anycubic.motion.home", "axes", ["XYZ", "XY", "Z"]),
+        ("anycubic.extruder.pulse", "direction", ["E ↑", "E ↓"]),
+        ("anycubic.material.feed", "action", ["Load", "Unload", "Stop"]),
+    ):
+        parameters(operation_id)[key]["x-enum-labels"] = labels
+    parameters("anycubic.motion.jog")["distance"].update({"x-unit": "mm", "x-presets": [1, 10, 50]})
+    parameters("anycubic.material.configure")["color"].update({"format": "color", "x-color-format": "hex6"})
+    parameters("anycubic.drying.set")["temperature"].update(default=45, **{"x-unit": "degC"})
+    parameters("anycubic.drying.set")["duration_minutes"].update(default=240, **{"x-unit": "min"})
+    native_sources = [
+        resource.id
+        for resource in resources
+        if resource.kind == "material_source" and resource.id != "material:external"
+    ]
+    for operation_id in ("anycubic.material.configure", "anycubic.material.feed", "anycubic.material.refresh"):
+        operation_by_id[operation_id].resource_ids = native_sources
+        operation_by_id[operation_id].resource_kinds = []
+    drying_feeders = [f"ace:{box}" for box in model.ace_ids if box >= 0]
+    for operation_id in ("anycubic.drying.set", "anycubic.drying.stop"):
+        operation_by_id[operation_id].resource_ids = drying_feeders
+        operation_by_id[operation_id].resource_kinds = []
+    for control in caps.get("ace_drying", []):
+        target = f"ace:{control['id']}"
+        if target not in drying_feeders:
+            continue
+        schema = json.loads(json.dumps(operation_by_id["anycubic.drying.set"].parameters_schema))
+        temperature = schema["properties"]["temperature"]
+        duration = schema["properties"]["duration_minutes"]
+        temperature.update(
+            minimum=control["temp_min"],
+            maximum=control["temp_max"],
+            default=min(max(45, control["temp_min"]), control["temp_max"]),
+        )
+        duration.update(
+            minimum=control["duration_min"],
+            maximum=control["duration_max"],
+            default=min(max(240, control["duration_min"]), control["duration_max"]),
+        )
+        if control.get("duration_limits"):
+            schema["allOf"] = [
+                {
+                    "if": {"properties": {"temperature": {"minimum": bound["temperature"]}}},
+                    "then": {"properties": {"duration_minutes": {"maximum": bound["max_minutes"]}}},
+                }
+                for bound in control["duration_limits"]
+            ]
+        operation_by_id["anycubic.drying.set"].resource_parameters_schemas[target] = schema
     operation_by_id["heater.set_target"].resource_parameters_schemas = {
         "heater:nozzle": {
             "type": "object",
@@ -415,7 +519,12 @@ def describe(plugin, config, native=None):
         operations=operations,
         configuration_schema=plugin.effective_configuration_schema(),
         capabilities=sorted(plugin.capabilities),
-        extensions={"native_model_id": model.model_id, "artifact_formats": ["gcode"], "features": caps},
+        extensions={
+            "native_model_id": model.model_id,
+            "artifact_formats": ["gcode"],
+            "features": caps,
+            "bambuddy:file_upload": {"accept": [".gcode"], "max_bytes": 536870912},
+        },
     )
 
 
@@ -553,6 +662,18 @@ def snapshot(plugin, config, native, sequence=0, job=None, links=None, names=Non
             box = native._telemetry.boxes.get(box_id, {})
             tray = next((t for t in box.get("tray", []) if t.get("id") == slot), None)
             available = bool(state.connected and tray and tray.get("tray_type"))
+            observed = native._ace_material_seen.get(box_id)
+            material_fresh = (
+                not stale and observed is not None and 0 <= time.monotonic() - observed <= native.STALE_TIMEOUT
+            )
+            resource_status = "unknown"
+            if material_fresh and tray:
+                if tray.get("state") == 9 or tray.get("exists") is False:
+                    resource_status = "empty"
+                elif tray.get("state") == 3 and tray.get("tray_type"):
+                    resource_status = "loaded"
+                elif tray.get("anycubic_status") == 5 or tray.get("anycubic_edit_status") == 2:
+                    resource_status = "unconfigured"
             if tray:
                 data = {
                     "material_type": tray.get("tray_type"),

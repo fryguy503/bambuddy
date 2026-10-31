@@ -1,31 +1,37 @@
 # Anycubic printer plugin
 
 The independent Anycubic provider uses Bambuddy's printer SDK v2. Its current
-release is `anycubic` **0.1.2**, published under `fryguy503`. The included Bambu
+release is `anycubic` **0.1.3**, published under `fryguy503`. The included Bambu
 provider remains a separate plugin.
 
 This package requires the printer plugin implementation from
 `Feat/Printer_modularization` or `codex/printer-modularization-https`. An upstream
 application without the SDK v2 package manager cannot install it; the
 application version string alone does not establish SDK availability.
-Version 0.1.2 requires SDK 2.1; update the host before uploading it. Existing
-SDK 2.0 hosts reject this package during compatibility validation.
+Version 0.1.3 requires SDK 2.2; update the host before uploading it. Earlier
+SDK hosts reject this package during compatibility validation.
 
-Version 0.1.2 keeps finalized dispatch outcomes authoritative when overlapping
+Version 0.1.3 supplies file-specific print options and ACE input requirements
+through the SDK job-description endpoint. Shared batch choices map back to each
+file's original sliced inputs. It restores familiar control editors through
+declarative presentation hints, labels ACE units from 1, and advertises native
+G-code upload. Core workflows remain provider-neutral.
+
+The 0.1.2 durability behavior remains: finalized dispatch outcomes stay authoritative when overlapping
 older observers report stale progress. It preserves pending accounting and
 repairs legacy journal fields under the existing storage lock. A terminal
 observation awaiting host cleanup remains replayable; no print command is
-replayed. The published 0.1.0 and 0.1.1 archives are unchanged.
+replayed. The published 0.1.0, 0.1.1 and 0.1.2 archives are unchanged.
 
 ## Install or update
 
 The release artifact is
-[`packages/anycubic/anycubic-0.1.2.bbp`](../../packages/anycubic/anycubic-0.1.2.bbp).
+[`packages/anycubic/anycubic-0.1.3.bbp`](../../packages/anycubic/anycubic-0.1.3.bbp).
 Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
 1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
    `.bbp` file and optionally paste its expected SHA-256 digest.
-2. Review the validation result, then apply version `0.1.2`. Staging alone does
+2. Review the validation result, then apply version `0.1.3`. Staging alone does
    not load or enable its code.
 3. Add or edit a printer, select **Anycubic**, and choose its model.
 
@@ -137,7 +143,7 @@ ordering, timestamps and file modes are fixed for reproducible builds.
 For an alternate output location:
 
 ```console
-python plugins/anycubic/build.py --output work/anycubic-0.1.2.bbp
+python plugins/anycubic/build.py --output work/anycubic-0.1.3.bbp
 ```
 
 For a later release, update the version in the payload's plugin factory, then
