@@ -17,6 +17,7 @@ import { ResourceFilamentCard } from './printer-controls/ResourceFilamentCard';
 import { schemaDefaults } from '../printer-plugins/forms';
 import { activeJobAction, displayReading, displayUnit, displayValue, freshJobState, friendlyLabel, materialColor, readingQuality } from '../printer-plugins/presentation';
 import { printerDeviceQueryKey } from '../hooks/usePrinterDevice';
+import { useOperationToast } from './printer-controls/useOperationToast';
 
 type ResourceState = PrinterDeviceState['resources'][number];
 type PermissionCheck = (permission: string) => boolean;
@@ -82,19 +83,14 @@ function OperationForm({ printerId, operation, resource, canControl, initialPara
     queryClient.setQueryData(['printer-operation-task', printerId, result.task_id], result);
   } });
   const pending = invoke.isPending || !!current && ['accepted', 'running'].includes(current.status);
+  useOperationToast(current, operation.label, invoke.error || task.error || cancel.error);
   return <form className="space-y-4" onSubmit={event => { event.preventDefault(); if (canControl && !pending && (!operation.confirmation || confirmed)) invoke.mutate(); }}>
     {operation.description && <p className="text-sm text-bambu-gray">{operation.description}</p>}
     <PrinterSchemaForm schema={schema} value={parameters} onChange={setParameters} disabled={!canControl || pending} />
     {operation.confirmation && <label className="flex items-start gap-2 text-sm text-bambu-gray"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} required disabled={!canControl || pending} className="mt-1 accent-bambu-green" />{operation.confirmation}</label>}
     {!canControl && <p className="text-xs text-bambu-gray">This control is unavailable for your permissions or the printer's current state.</p>}
     <button className="rounded bg-bambu-green px-4 py-2 text-sm font-medium text-black disabled:opacity-40" disabled={!canControl || pending || !!operation.confirmation && !confirmed}>{pending ? 'In progress…' : 'Apply'}</button>
-    {invoke.error && <p role="alert" className="text-sm text-red-400">{invoke.error.message}</p>}
-    {(task.error || cancel.error) && <p role="alert" className="text-sm text-red-400">{(cancel.error || task.error)?.message}</p>}
-    {current && <div className="text-sm text-bambu-gray" role="status">
-      <span>{current.error?.message || current.progress?.message || friendlyLabel(current.status)}</span>
-      {current.progress && <progress className="ml-2 w-20" max={1} value={current.progress.fraction ?? undefined} />}
-      {current.task_id && operation.cancellable && ['accepted', 'running'].includes(current.status) && <button type="button" onClick={() => cancel.mutate()} disabled={cancel.isPending} className="ml-2 underline">Cancel operation</button>}
-    </div>}
+    {current?.task_id && operation.cancellable && ['accepted', 'running'].includes(current.status) && <button type="button" onClick={() => cancel.mutate()} disabled={cancel.isPending} className={buttonClass}>Cancel operation</button>}
   </form>;
 }
 
@@ -194,6 +190,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
     setLastAction(previous => previous ? { ...previous, receipt } : null);
     queryClient.setQueryData(['printer-operation-task', printerId, receipt.task_id], receipt);
   } });
+  useOperationToast(quickReceipt, lastAction?.operation.label || '', quick.error || quickTask.error || quickCancel.error);
   const jobAction = (operation: PrinterOperation) => operation.id === 'job.pause' ? 'pause' : operation.id === 'job.resume' ? 'resume' : operation.id === 'job.stop' ? 'stop' : undefined;
   const operations = device.operations.filter(operation => operation.id !== 'job.start').map(operation => {
     const action = jobAction(operation);
@@ -258,7 +255,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
   const primary = operations.filter(operation => primaryJobOperations.has(operation.id) && freshJobState(snapshot) && activeJobAction(snapshot?.status, operation.id));
   const secondary = operations.filter(operation => !primaryJobOperations.has(operation.id));
   const iconClass = 'flex h-8 min-w-8 items-center justify-center rounded-lg bg-bambu-dark px-2 text-bambu-gray transition-colors hover:bg-bambu-dark-tertiary hover:text-white disabled:cursor-not-allowed disabled:opacity-40';
-  const popoverProps = { device, snapshot, hasPermission, canSend, send, schemaFor: operationSchema, busy: quick.isPending, error: quick.error?.message || quickReceipt?.error?.message, onClose: closePopover, onAdvanced: openControl, onAssign: (operation: PrinterOperation, resource: PrinterResource) => setAssignment({ operation, resource }) };
+  const popoverProps = { device, snapshot, hasPermission, canSend, send, schemaFor: operationSchema, busy: quick.isPending, onClose: closePopover, onAdvanced: openControl, onAssign: (operation: PrinterOperation, resource: PrinterResource) => setAssignment({ operation, resource }) };
   const materialTile = (source: PrinterResource, ordinal?: number) => {
     const state = stateFor(source);
     const properties = readableProperties(source, hasPermission);
@@ -375,8 +372,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
         {!!primary.length && <div role="group" aria-label="Print controls" className="ml-auto flex flex-wrap gap-1.5">{primary.map(operation => <button type="button" key={operation.id} aria-label={operation.label} className={'flex h-8 min-w-20 items-center justify-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ' + (operation.id === 'job.stop' ? 'bg-red-100 text-red-700 hover:bg-red-500/30 dark:bg-red-500/20 dark:text-red-400' : operation.id === 'job.pause' ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-500/30 dark:bg-yellow-500/20 dark:text-yellow-400' : 'bg-bambu-green/20 text-bambu-green hover:bg-bambu-green/30')} disabled={!canSend(operation) || quick.isPending} onClick={() => void send(operation, {})}>{operation.id === 'job.stop' ? <Square className="h-3 w-3" /> : operation.id === 'job.pause' ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}{operation.id === 'job.stop' ? t('printers.stop') : operation.id === 'job.pause' ? t('printers.pause') : t('printers.resume')}</button>)}</div>}
       </div>
     </div>}
-    {(quick.error || quickCancel.error || quickReceipt?.error) && <p role="alert" className="text-xs text-red-400">{quick.error?.message || quickCancel.error?.message || quickReceipt?.error?.message}</p>}
-    {quickReceipt && ['accepted', 'running', 'cancelled'].includes(quickReceipt.status) && <p role="status" className="text-[10px] text-bambu-gray">{quickReceipt.progress?.message || (quickReceipt.status === 'accepted' ? 'Command queued' : quickReceipt.status === 'cancelled' ? 'Cancelled' : 'In progress…')}{quickReceipt.task_id && lastAction?.operation.cancellable && ['accepted', 'running'].includes(quickReceipt.status) && <button type="button" className="ml-2 underline" disabled={quickCancel.isPending} onClick={() => quickCancel.mutate()}>Cancel operation</button>}</p>}
+    {quickReceipt?.task_id && lastAction?.operation.cancellable && ['accepted', 'running'].includes(quickReceipt.status) && <button type="button" className={buttonClass} disabled={quickCancel.isPending} onClick={() => quickCancel.mutate()}>Cancel operation</button>}
     {(!!feeders.length || !!looseSources.length) && <section aria-label="Materials" className="flex flex-wrap gap-2">
       {feeders.map(feeder => {
         const state = stateFor(feeder);
@@ -406,7 +402,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
     </details>}
     {popover && popover.selection.kind !== 'drying' && <DeviceControlPopover key={popover.selection.kind + ':' + (popover.selection.resource?.id || '')} {...popoverProps} {...popover} />}
     {dialog && <OperationDialog printerId={printerId} device={device} operations={dialog.operations} initial={dialog.initial} snapshot={snapshot} hasPermission={hasPermission} onClose={closeDialog} />}
-    {confirmation && createPortal(<div role="dialog" aria-modal="true" aria-label={jobAction(confirmation.operation) ? t('printers.confirm.' + jobAction(confirmation.operation) + 'Title') : confirmation.operation.label}><ConfirmModal title={jobAction(confirmation.operation) ? t('printers.confirm.' + jobAction(confirmation.operation) + 'Title') : confirmation.operation.label} message={confirmation.operation.confirmation || 'Confirm this operation?'} variant={confirmation.operation.id === 'job.stop' ? 'danger' : 'default'} confirmText={jobAction(confirmation.operation) ? t('printers.confirm.' + jobAction(confirmation.operation) + 'Button') : 'Confirm'} isLoading={quick.isPending} confirmDisabled={!canSend(confirmation.operation, confirmation.resource)} onCancel={() => setConfirmation(null)} onConfirm={() => { void send(confirmation.operation, confirmation.parameters, confirmation.resource, true).then(accepted => { if (accepted) setConfirmation(null); }); }}>{(quick.error || quickReceipt?.error) && <p role="alert" className="text-xs text-red-400">{quick.error?.message || quickReceipt?.error?.message}</p>}</ConfirmModal></div>, document.body)}
+    {confirmation && createPortal(<div role="dialog" aria-modal="true" aria-label={jobAction(confirmation.operation) ? t('printers.confirm.' + jobAction(confirmation.operation) + 'Title') : confirmation.operation.label}><ConfirmModal title={jobAction(confirmation.operation) ? t('printers.confirm.' + jobAction(confirmation.operation) + 'Title') : confirmation.operation.label} message={confirmation.operation.confirmation || 'Confirm this operation?'} variant={confirmation.operation.id === 'job.stop' ? 'danger' : 'default'} confirmText={jobAction(confirmation.operation) ? t('printers.confirm.' + jobAction(confirmation.operation) + 'Button') : 'Confirm'} isLoading={quick.isPending} confirmDisabled={!canSend(confirmation.operation, confirmation.resource)} onCancel={() => setConfirmation(null)} onConfirm={() => { void send(confirmation.operation, confirmation.parameters, confirmation.resource, true).then(accepted => { if (accepted) setConfirmation(null); }); }} /></div>, document.body)}
     {assignment && <AssignSpoolModal isOpen printerId={printerId} onClose={() => setAssignment(null)} trayInfo={{ type: String(stateFor(assignment.resource)?.properties.material_type?.value || stateFor(assignment.resource)?.properties.material?.value || ''), color: materialColor(stateFor(assignment.resource)?.properties.color?.value) || '#808080', location: assignment.resource.label }} resourceTarget={{
       resourceId: assignment.resource.id, label: assignment.resource.label,
       assignedSpoolId: Number(stateFor(assignment.resource)?.properties.spool_id?.value) || null,
