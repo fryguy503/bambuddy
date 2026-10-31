@@ -210,7 +210,7 @@ def test_anonymous_job_observations_require_sdk_2_1_but_existing_v2_plugins_rema
         entrypoint="plugin:Factory",
         requires_api=">=2.1.0,<3.0.0",
     )
-    assert SDK_API_VERSION == "2.1.0"
+    assert SDK_API_VERSION == "2.2.0"
     with pytest.raises(SDKValidationError, match="unsupported printer API"):
         check_manifest_compatibility(manifest, core_version="1.3.1b1", api_version="2.0.0")
     check_manifest_compatibility(manifest, core_version="1.3.1b1")

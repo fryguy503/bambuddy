@@ -177,6 +177,32 @@ class PrinterPlugin(ABC):
 
         return validate_snapshot(self.describe_device(config), snapshot)
 
+    def describe_job(self, config: PrinterConfig, artifact, path):
+        """Inspect an authorized local artifact without issuing printer commands."""
+        from copy import deepcopy
+
+        from backend.app.printers.sdk import JobDescription
+
+        device = self.describe_device(config)
+        start = next((operation for operation in device.operations if operation.id == "job.start"), None)
+        root = start.parameters_schema if start is not None else {}
+        properties = root.get("properties", {})
+        spec = properties.get("options") if isinstance(properties, dict) else None
+        schema = deepcopy(spec) if isinstance(spec, dict) else {"type": "object", "properties": {}}
+        if "$defs" in root:
+            schema["$defs"] = deepcopy(root["$defs"])
+        option_fields = schema.get("properties", {})
+        defaults = (
+            {
+                key: value["default"]
+                for key, value in option_fields.items()
+                if isinstance(value, dict) and "default" in value
+            }
+            if isinstance(option_fields, dict)
+            else {}
+        )
+        return JobDescription(artifact=artifact, options_schema=schema, default_options=defaults)
+
     def operation_handlers(self, connection: PrinterConnection) -> Mapping[str, Callable]:
         """API2 handlers receive one OperationRequest containing resource identity."""
         return {}
@@ -225,6 +251,21 @@ class PrinterPlugin(ABC):
         return True
 
     def descriptor(self) -> dict:
+        installed = getattr(self, "_installed_manifest", None)
+        templates = (
+            {item.get("id"): item.get("device_template", {}) for item in installed.models}
+            if installed is not None
+            else {}
+        )
+        models = []
+        for model in self.models:
+            entry = model.to_dict()
+            template = templates.get(model.id)
+            extensions = template.get("extensions", {}) if isinstance(template, dict) else {}
+            if not extensions and model.device_template is not None:
+                extensions = model.device_template.extensions
+            entry["presentation"] = dict(extensions) if isinstance(extensions, dict) else {}
+            models.append(entry)
         return {
             "id": self.id,
             "name": self.name,
@@ -233,7 +274,7 @@ class PrinterPlugin(ABC):
             "bundled": self.bundled,
             "capabilities": sorted(self.capabilities),
             "operations": list(self.operations),
-            "models": [model.to_dict() for model in self.models],
+            "models": models,
             "configuration_schema": self.effective_configuration_schema(),
             "connection_fields": self.connection_fields(),
         }

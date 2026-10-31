@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-SDK_API_VERSION = "2.1.0"
+SDK_API_VERSION = "2.2.0"
 ResourceId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*$")]
 OperationId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_.:/-]*$")]
 JobId = Annotated[str, Field(min_length=1, max_length=256)]
