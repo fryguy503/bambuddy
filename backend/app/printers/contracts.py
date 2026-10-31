@@ -17,6 +17,7 @@ SUPPORTED_PRINTER_API_VERSIONS = (1, 2)
 
 if TYPE_CHECKING:
     from backend.app.printers.sdk import (
+        ConnectionDiagnosticResult,
         DeviceDescriptor,
         DeviceSnapshot,
         OperationDescriptor,
@@ -425,6 +426,23 @@ class PrinterPlugin(ABC):
 
     def diagnostic_operation(self, operation: str, *args: Any, **kwargs: Any) -> Any:
         raise UnsupportedPrinterOperation(f"Plugin {self.id!r} does not implement diagnostic operation {operation!r}")
+
+    async def connection_diagnostics(
+        self,
+        config: PrinterConfig,
+        *,
+        connection: PrinterConnection | None = None,
+        wait_for_publish_seconds: float = 0.0,
+        progress: dict | None = None,
+    ) -> ConnectionDiagnosticResult:
+        """Inspect connectivity without starting a print or changing hardware.
+
+        Saved-printer diagnostics receive the existing connection. A provider
+        must leave it running and clean up any temporary probes it creates.
+        Full model/options configuration is available before the printer is
+        saved. The host retains legacy diagnostic_operation implementations.
+        """
+        raise UnsupportedPrinterOperation(f"Plugin {self.id!r} does not implement connection diagnostics")
 
     def firmware_operation(self, operation: str, *args: Any, **kwargs: Any) -> Any:
         raise UnsupportedPrinterOperation(f"Plugin {self.id!r} does not implement firmware operation {operation!r}")

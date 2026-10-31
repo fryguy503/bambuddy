@@ -1,6 +1,7 @@
 """Connection diagnostics delegated to the selected printer addon."""
 
 from backend.app.models.printer import Printer
+from backend.app.printers.contracts import PrinterConfig, PrinterPlugin, PrinterPluginError
 from backend.app.printers.registry import get_plugin, plugin_for
 from backend.app.schemas.printer import PrinterDiagnosticResult
 
@@ -14,14 +15,52 @@ async def run_connection_diagnostic(
     wait_for_publish_seconds: float = 0.0,
     progress: dict | None = None,
     plugin_id: str = "bambu",
+    model: str | None = None,
+    plugin_options: dict | None = None,
 ) -> PrinterDiagnosticResult:
     plugin = plugin_for(printer) if printer is not None else get_plugin(plugin_id)
-    return await plugin.diagnostic_operation(
-        "connection",
-        ip_address,
-        printer=printer,
-        serial_number=serial_number,
-        access_code=access_code,
-        wait_for_publish_seconds=wait_for_publish_seconds,
-        progress=progress,
+    config = (
+        PrinterConfig.from_printer(printer)
+        if printer is not None
+        else PrinterConfig(
+            ip_address=ip_address,
+            serial_number=serial_number or "",
+            access_code=access_code or "",
+            model=model,
+            plugin_id=plugin_id,
+            options=plugin_options or {},
+        )
     )
+    if type(plugin).connection_diagnostics is not PrinterPlugin.connection_diagnostics:
+        from backend.app.printers.api import PrinterConnectionAdapter, leased_call
+        from backend.app.services.printer_manager import printer_manager
+
+        connection = None
+        client = printer_manager.get_client(config.printer_id) if config.printer_id is not None else None
+        if isinstance(client, PrinterConnectionAdapter) and client._config == config:
+            plugin = client._plugin
+            connection = client._connection
+        result = await leased_call(
+            config,
+            plugin.connection_diagnostics,
+            config,
+            connection=connection,
+            wait_for_publish_seconds=wait_for_publish_seconds,
+            progress=progress,
+        )
+    else:
+        # Keep installed/bundled providers using the original diagnostic hook
+        # compatible without changing their immutable package payloads.
+        result = await plugin.diagnostic_operation(
+            "connection",
+            ip_address,
+            printer=printer,
+            serial_number=serial_number,
+            access_code=access_code,
+            wait_for_publish_seconds=wait_for_publish_seconds,
+            progress=progress,
+        )
+    result = PrinterDiagnosticResult.model_validate(result)
+    if result.ip_address != config.ip_address or result.printer_id != config.printer_id:
+        raise PrinterPluginError("Diagnostic result does not identify the requested printer")
+    return result
