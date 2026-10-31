@@ -24,7 +24,7 @@ from backend.app.printers.sdk import (
 
 from .client import AnycubicMQTTClient
 from .device import device_id, native_slot, snapshot
-from .printing import inspect_print_file, validate_options
+from .printing import inspect_print_file, print_data, validate_options
 from .protocol import AnycubicError, task_id as native_task_id
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,8 @@ class AnycubicConnection:
         self.plugin = plugin
         self.printer_key = hashlib.sha256(config.serial_number.encode()).hexdigest()[:24]
         self.journal = Journal(self.printer_key)
+        hold = self.journal.get("plate:" + self.printer_key)
+        self.plate_clear_required = bool(hold and hold.get("status") == "plate_required")
         self.native = AnycubicMQTTClient(
             config.ip_address,
             config.serial_number,
@@ -76,6 +78,7 @@ class AnycubicConnection:
                 self.current_job,
                 self.inventory_links,
                 self.unit_names,
+                plate_clear_required=self.plate_clear_required,
             )
 
     @property
@@ -145,6 +148,7 @@ class AnycubicConnection:
             )
         else:
             self.journal.update(key, status="plate_required" if blocked else "resolved")
+        self.plate_clear_required = bool(blocked)
         if self.config.printer_id is not None:
             from backend.app.services.printer_manager import printer_manager
 
@@ -341,14 +345,33 @@ class AnycubicConnection:
                 **{
                     name: value
                     for name, value in job.options.items()
-                    if name in {"auto_leveling", "vibration_compensation", "flow_calibration", "timelapse"}
+                    if name
+                    in {
+                        "auto_leveling",
+                        "vibration_compensation",
+                        "flow_calibration",
+                        "timelapse",
+                        "allow_material_type_mismatch",
+                    }
                 },
             }
         )
-        if set(job.options) - {"auto_leveling", "vibration_compensation", "flow_calibration", "timelapse", "use_ace"}:
+        if set(job.options) - {
+            "auto_leveling",
+            "vibration_compensation",
+            "flow_calibration",
+            "timelapse",
+            "use_ace",
+            "allow_material_type_mismatch",
+        }:
             raise AnycubicError("Unsupported native print option")
         if "use_ace" in job.options and job.options["use_ace"] != bool(mapping):
             raise AnycubicError("ACE selection must agree with the explicit material bindings")
+        # Reject known invalid material choices before reserving a durable intent.
+        # submit_print repeats this check against fresh capabilities after its
+        # final file/hash preflight, so this does not grant dispatch authority.
+        capabilities = self.native.print_capabilities()
+        print_data(artifact, options, capabilities["ace_slots"], capabilities["options"])
         usage_job = job.model_copy(
             update={
                 "bindings": [
@@ -461,6 +484,7 @@ class AnycubicConnection:
                     if self.journal.unresolved(self.printer_key):
                         raise AnycubicError("Resolve the held job before confirming the plate")
                     self._plate(False)
+                self._emit("device.snapshot", self.state.model_dump(mode="json"))
                 return self._receipt(request, result=True)
             calls = {
                 "heater.set_target": lambda: (

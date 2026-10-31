@@ -23,7 +23,15 @@ def options_schema(native=None, *, require_feeder=False):
     use_feeder = {"type": "boolean", "title": "Use ACE", "default": True}
     if require_feeder:
         use_feeder["const"] = True
-    properties = {"use_ace": use_feeder}
+    properties = {
+        "use_ace": use_feeder,
+        "allow_material_type_mismatch": {
+            "type": "boolean",
+            "title": "Allow a different material type",
+            "default": False,
+            "description": "Allow a known loaded material with a different type. This does not change the file's temperatures or toolpath.",
+        },
+    }
     for key, (label, description, translation) in _FLAGS.items():
         properties[key] = {
             "type": "boolean",
@@ -82,6 +90,8 @@ def describe_job(plugin, config, artifact, path):
                     "option": "use_ace",
                     "external_source_id": "material:external",
                     "require_reported_material": True,
+                    "type_override_option": "allow_material_type_mismatch",
+                    "type_override_help": "Only bypasses the loaded-versus-sliced material type check. The G-code temperatures and toolpath stay unchanged; reslice for another temperature or material profile.",
                     "source_placeholder": "Select ACE slot",
                     "enabled_help": "Map each sliced filament to an available ACE slot.",
                     "disabled_help": "Load the sliced filament on the external spool holder.",

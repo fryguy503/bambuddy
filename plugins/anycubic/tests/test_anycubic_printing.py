@@ -86,6 +86,7 @@ def test_ace_wire_index_uses_sorted_box_position_and_original_paint_index(tmp_pa
         0: {"id": 0, "tray": [{"id": 1, "tray_type": "PLA", "tray_color": "112233FF", "state": 3}]},
     }
     value._ace_seen = {0: time.monotonic(), 1: time.monotonic()}
+    value._ace_material_seen = dict(value._ace_seen)
     caps = value.print_capabilities()
     options = {
         "use_ace": True,

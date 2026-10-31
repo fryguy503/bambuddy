@@ -581,6 +581,8 @@ class AnycubicMQTTClient:
                     inventory_fresh
                     and box["id"] in self._ace_seen
                     and now - self._ace_seen[box["id"]] <= self.STALE_TIMEOUT
+                    and box["id"] in self._ace_material_seen
+                    and now - self._ace_material_seen[box["id"]] <= self.STALE_TIMEOUT
                 )
                 for tray in box["tray"]:
                     material = tray.get("tray_type") or ""

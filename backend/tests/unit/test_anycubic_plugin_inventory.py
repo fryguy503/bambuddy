@@ -385,6 +385,10 @@ async def test_deferred_accounting_does_not_hold_hardware_and_reconnect_retries_
     connection.native.state.state = "IDLE"
     monkeypatch.setattr(connection.native, "_motion_ready", lambda: True)
     assert (await connection.invoke(OperationRequest(operation_id="job.clear_plate"))).status == "succeeded"
+    events.assert_called_once()
+    assert events.call_args.args[0].event == "device.snapshot"
+    assert events.call_args.args[0].data["extensions"]["plate_clear_required"] is False
+    events.reset_mock()  # Accounting reconnects must not replay lifecycle events.
     assert connection.journal.begin("next-job", {"status": "intent"})
 
     scheduled = []

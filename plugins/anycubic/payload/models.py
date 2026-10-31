@@ -18,12 +18,16 @@ class AnycubicModel:
     nozzle_max: int = 300
     bed_max: int = 110
     bed_idle_max: int | None = None
+    # False is a known absence and overrides generic firmware placeholders.
+    # None requires an actual model-specific temperature report before a
+    # sensor can be exposed. It does not imply a controllable chamber heater.
+    chamber_temperature: bool | None = None
 
 
 MODELS = {
     model.model_id: model
     for model in (
-        AnycubicModel("20025", "Kobra S1", nozzle_max=320, bed_max=120),
+        AnycubicModel("20025", "Kobra S1", nozzle_max=320, bed_max=120, chamber_temperature=False),
         AnycubicModel("20029", "Kobra S1 Max", (0, 1, 2, 3), nozzle_max=350, bed_max=120),
         AnycubicModel("20024", "Kobra 3", bed_idle_max=100),
         AnycubicModel("20027", "Kobra 3 V2"),

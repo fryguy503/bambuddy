@@ -19,7 +19,7 @@ OPTION_FEATURES = {
     "flow_calibration": "flow_calibration_support",
     "timelapse": "camera_timelapse_support",
 }
-OPTION_KEYS = {*OPTION_FEATURES, "use_ace", "filament_mapping"}
+OPTION_KEYS = {*OPTION_FEATURES, "use_ace", "filament_mapping", "allow_material_type_mismatch"}
 _FIELD = re.compile(r";\s*(filament_type|filament_colou?r|filament used \[mm\])\s*=\s*(.*)", re.I)
 _TOOL = re.compile(rb"(?:N\d+\s+)?T(\d+)(?=\s|;|\*|$)", re.I)
 _ESTIMATE = re.compile(
@@ -209,9 +209,9 @@ def validate_options(options):
     if not isinstance(options, dict) or set(options) - OPTION_KEYS:
         raise AnycubicError("Unsupported Anycubic print settings")
     value: dict = dict.fromkeys(OPTION_FEATURES, False)
-    value.update(use_ace=False, filament_mapping=[])
+    value.update(use_ace=False, filament_mapping=[], allow_material_type_mismatch=False)
     value.update(options)
-    if any(type(value[key]) is not bool for key in (*OPTION_FEATURES, "use_ace")):
+    if any(type(value[key]) is not bool for key in (*OPTION_FEATURES, "use_ace", "allow_material_type_mismatch")):
         raise AnycubicError("Anycubic print settings must use explicit boolean choices")
     rows = value["filament_mapping"]
     if not isinstance(rows, list) or len(rows) > 256:
@@ -248,10 +248,19 @@ def print_data(artifact: PrintArtifact, options: dict, slots: list[dict], suppor
         for filament in artifact.filaments:
             choice = selected[filament.tool]
             matches = [s for s in slots if (s["box_id"], s["slot_id"]) == (choice["box_id"], choice["slot_id"])]
-            if len(matches) != 1 or not matches[0]["available"]:
+            if len(matches) != 1 or matches[0]["available"] is not True:
                 raise AnycubicError("A selected ACE slot is unavailable or its material status is stale")
             slot = matches[0]
-            if slot["material_type"].casefold() != filament.material_type.casefold():
+            material = slot["material_type"]
+            if not isinstance(material, str) or material.strip().casefold() in {
+                "",
+                "?",
+                "unknown",
+                "unkonwn",
+                "default",
+            }:
+                raise AnycubicError("A selected ACE slot does not report a known loaded material")
+            if material.casefold() != filament.material_type.casefold() and not value["allow_material_type_mismatch"]:
                 raise AnycubicError("The selected ACE material does not match the sliced filament type")
             mappings.append(
                 {
@@ -259,6 +268,8 @@ def print_data(artifact: PrintArtifact, options: dict, slots: list[dict], suppor
                     "ams_index": slot["ams_index"],
                     "paint_color": list(filament.color),
                     "ams_color": slot["color"],
+                    # Preserve the reviewed serializer's sliced material meaning.
+                    # The opt-in is host policy, never a new native setting.
                     "material_type": filament.material_type,
                 }
             )

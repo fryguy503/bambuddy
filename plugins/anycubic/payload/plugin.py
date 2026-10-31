@@ -40,7 +40,7 @@ _CAPABILITIES = frozenset(
 class AnycubicPrinterPlugin(PrinterPlugin):
     id = "anycubic"
     name = "Anycubic signed LAN"
-    version = "0.1.4"
+    version = "0.1.5"
     api_version = 2
     publisher_id = "fryguy503"
     capabilities = _CAPABILITIES
@@ -76,7 +76,13 @@ class AnycubicPrinterPlugin(PrinterPlugin):
                 "pattern": "^[0-9A-Fa-f]{64}$",
                 "title": "Approved printer TLS fingerprint",
                 "description": "Review the SHA-256 fingerprint from LAN identity inspection before saving. It pins this printer's certificate.",
-            }
+            },
+            "require_ace": {
+                "type": "boolean",
+                "default": False,
+                "title": "Require an ACE unit",
+                "description": "Connection diagnostics report a missing ACE unit only when this printer requires one.",
+            },
         },
         "required": ["tls_fingerprint"],
         "additionalProperties": False,
@@ -89,9 +95,9 @@ class AnycubicPrinterPlugin(PrinterPlugin):
         manifest = super().sdk_manifest()
         if self._installed_manifest is not None:
             return manifest
-        # File-specific print options/material requirements use SDK 2.2.
+        # Provider-owned connection diagnostics use SDK 2.3.
         # Older hosts must reject this version from metadata before import.
-        return manifest.model_copy(update={"requires_api": ">=2.2.0,<3.0.0"})
+        return manifest.model_copy(update={"requires_api": ">=2.3.0,<3.0.0"})
 
     def connection_fields(self):
         return {
@@ -142,6 +148,13 @@ class AnycubicPrinterPlugin(PrinterPlugin):
         from .job_description import describe_job
 
         return describe_job(self, config, artifact, path)
+
+    async def connection_diagnostics(self, config, *, connection=None, wait_for_publish_seconds=0, progress=None):
+        from .diagnostic import diagnose
+
+        return await diagnose(
+            config, connection=connection, wait_for_publish_seconds=wait_for_publish_seconds, progress=progress
+        )
 
     @staticmethod
     def _typed_connection(connection: PrinterConnection) -> AnycubicConnection:

@@ -136,16 +136,26 @@ def describe(plugin, config, native=None):
             },
         ),
         ResourceDescriptor(id="build_surface:primary", kind="build_surface", label="Build plate"),
-        ResourceDescriptor(
-            id="sensor:chamber",
-            kind="sensor",
-            label="Chamber temperature",
-            roles=["chamber"],
-            properties={"temperature": prop("Temperature", {"type": "number"}, "degC")},
-        ),
         ResourceDescriptor(id="camera:primary", kind="camera", label="LAN camera", capabilities=["mjpeg", "snapshot"]),
         ResourceDescriptor(id="storage:local", kind="storage", label="Printer files", capabilities=["list", "upload"]),
     ]
+    # A generic native field is not evidence that every printer has a chamber
+    # sensor. In particular, Kobra S1 firmware can report placeholder values.
+    chamber_temperature = model.chamber_temperature is True or (
+        model.chamber_temperature is None
+        and native is not None
+        and native.state.temperatures.get("chamber") is not None
+    )
+    if chamber_temperature:
+        resources.append(
+            ResourceDescriptor(
+                id="sensor:chamber",
+                kind="sensor",
+                label="Chamber temperature",
+                roles=["chamber"],
+                properties={"temperature": prop("Temperature", {"type": "number"}, "degC")},
+            )
+        )
     for axis in "xyz":
         resources.append(ResourceDescriptor(id=f"axis:{axis}", kind="axis", label=axis.upper()))
     for fan in caps.get("reported_fans", []) if native is not None else ("part", "aux", "chamber"):
@@ -520,6 +530,7 @@ def describe(plugin, config, native=None):
         configuration_schema=plugin.effective_configuration_schema(),
         capabilities=sorted(plugin.capabilities),
         extensions={
+            "plate_clear_policy": "required",
             "native_model_id": model.model_id,
             "artifact_formats": ["gcode"],
             "features": caps,
@@ -610,7 +621,9 @@ def observed_job(native, owned: JobProgress | None = None) -> JobProgress | None
     return observation
 
 
-def snapshot(plugin, config, native, sequence=0, job=None, links=None, names=None) -> DeviceSnapshot:
+def snapshot(
+    plugin, config, native, sequence=0, job=None, links=None, names=None, plate_clear_required=False
+) -> DeviceSnapshot:
     links = links or {}
     names = names or {}
     descriptor = describe(plugin, config, native)
@@ -710,5 +723,5 @@ def snapshot(plugin, config, native, sequence=0, job=None, links=None, names=Non
         job_id=job.job_id if job else None,
         job=job,
         resources=values,
-        extensions={"firmware_version": state.firmware_version},
+        extensions={"firmware_version": state.firmware_version, "plate_clear_required": bool(plate_clear_required)},
     )

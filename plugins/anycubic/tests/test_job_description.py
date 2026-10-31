@@ -86,6 +86,7 @@ def test_single_input_external_mode_and_original_option_defaults(monkeypatch, tm
         "flow_calibration": False,
         "vibration_compensation": False,
         "timelapse": False,
+        "allow_material_type_mismatch": False,
     }
     assert value.options_schema["properties"]["auto_leveling"]["title"] == "Bed leveling"
     assert value.options_schema["properties"]["timelapse"]["readOnly"] is True

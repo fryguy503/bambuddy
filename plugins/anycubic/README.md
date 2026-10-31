@@ -1,17 +1,22 @@
 # Anycubic printer plugin
 
 The independent Anycubic provider uses Bambuddy's printer SDK v2. Its current
-release is `anycubic` **0.1.4**, published under `fryguy503`. The included Bambu
+release is `anycubic` **0.1.5**, published under `fryguy503`. The included Bambu
 provider remains a separate plugin.
 
 This package requires the printer plugin implementation from
 `Feat/Printer_modularization` or `codex/printer-modularization-https`. An upstream
 application without the SDK v2 package manager cannot install it; the
 application version string alone does not establish SDK availability.
-Version 0.1.4 requires SDK 2.2; update the host before uploading it. Earlier
+Version 0.1.5 requires SDK 2.3; update the host before uploading it. Earlier
 SDK hosts reject this package during compatibility validation.
 
-Version 0.1.4 reduces large-file inspection CPU work while retaining both
+Version 0.1.5 adds provider-owned LAN connection diagnostics and corrects the
+Kobra S1 capability description: it does not expose a chamber temperature
+sensor or heater. Other models expose a chamber reading only when supported
+and actually reported; no chamber heater command was added.
+
+The large-file optimization remains: it reduces CPU work while retaining both
 complete scans, content hashes and changed-file checks. Five concurrent
 100 MB synthetic files took 16.8 seconds in the local benchmark, compared with
 33.5 seconds before this change; NAS timings depend on CPU and storage.
@@ -26,17 +31,17 @@ The 0.1.2 durability behavior remains: finalized dispatch outcomes stay authorit
 older observers report stale progress. It preserves pending accounting and
 repairs legacy journal fields under the existing storage lock. A terminal
 observation awaiting host cleanup remains replayable; no print command is
-replayed. The published 0.1.0, 0.1.1, 0.1.2 and 0.1.3 archives are unchanged.
+replayed. The published 0.1.0 through 0.1.4 archives are unchanged.
 
 ## Install or update
 
 The release artifact is
-[`packages/anycubic/anycubic-0.1.4.bbp`](../../packages/anycubic/anycubic-0.1.4.bbp).
+[`packages/anycubic/anycubic-0.1.5.bbp`](../../packages/anycubic/anycubic-0.1.5.bbp).
 Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
 1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
    `.bbp` file and optionally paste its expected SHA-256 digest.
-2. Review the validation result, then apply version `0.1.4`. Staging alone does
+2. Review the validation result, then apply version `0.1.5`. Staging alone does
    not load or enable its code.
 3. Add or edit a printer, select **Anycubic**, and choose its model.
 
@@ -61,6 +66,34 @@ declares `AGPL-3.0-only`. Its dependency ranges cover the installed `aiohttp`,
 `cryptography`, `httpx` and `paho-mqtt` distributions; installation checks these
 versions without downloading or installing dependencies.
 
+## Connection diagnostics
+
+The host's connection check uses this provider's protocol checks. It tests the
+HTTP identity service on port 18910, supported model and printer identity,
+MQTT TCP/TLS on port 9883, the approved certificate fingerprint, authenticated
+subscription and fresh telemetry. File readiness checks the advertised LAN
+upload endpoint; it does not upload a test file. The optional camera check
+only tests TCP port 18088 and never starts or verifies a video stream.
+
+A saved printer reuses its live connection without reconnecting, pairing again
+or issuing printer commands. An unsaved check may establish an isolated LAN
+pairing/subscription only after its identity and approved fingerprint match.
+It sends status queries and closes its temporary connection after the check,
+including cancellation. A missing fingerprint skips authentication and asks for
+review; a mismatch fails without attempting authentication. Public results do
+not include credentials, handshake tokens, upload URLs or exception details.
+
+TCP connection and TLS handshake probes use 4-second deadlines, with up to
+1 extra second for socket closure. HTTP info has an 8-second total deadline.
+Temporary telemetry observation defaults to 8 seconds and is capped at 15;
+cleanup can wait up to 30 seconds for the native pairing worker to finish.
+Ports alone do not establish that authentication, telemetry or a camera frame
+works. Host/container/subnet guidance is supplied by the shared SDK.
+
+ACE is optional by default. The package's `require_ace` configuration option
+can require an attached unit: absent optional ACE is skipped, a missing required
+unit fails, and detected but stale material information produces a warning.
+
 ## LAN connection
 
 The model catalog includes Kobra S1, Kobra S1 Max, Kobra 3, Kobra 3 V2,
@@ -83,6 +116,29 @@ Print artifacts must be sliced text `.gcode` exports with matching printer
 model and filament metadata. Material input IDs refer to the original sliced
 `T` inputs; the physical tool remains `tool:primary`, while ACE resources name
 the selected box and slot separately.
+
+The per-job `allow_material_type_mismatch` option defaults to `false`. Turning
+it on permits an explicitly selected, known loaded ACE material with a different
+type from the sliced input. It does not allow empty, unavailable, unknown or
+stale slots, change resource bindings, or bypass the final native preflight.
+The choice is retained in the queued SDK plan and durable dispatch record.
+The native mapping keeps the original sliced material type; no new firmware
+setting is invented for this host-side policy choice.
+
+This option does **not** change temperatures, cooling, flow, retraction or the
+toolpath. The reviewed native `task_settings` contract has no temperature-profile
+override fields, and later G-code commands can overwrite a one-time temperature
+setter. Reslice the file when a different temperature or material profile is
+required; a partial temperature override is not offered.
+
+The provider's durable plate-clear hold is exposed in the normalized snapshot
+as `plate_clear_required`. It survives reconnects. A successful real plate-clear
+acknowledgment updates the journal and publishes the cleared snapshot immediately;
+fresh idle state and unresolved-dispatch checks still apply.
+The descriptor declares `plate_clear_policy: "required"`, so the host also keeps
+a hold raised by an older workflow owner during a rolling plugin refresh, even
+before the new observer's cached snapshot reflects it. This requires no journal
+read for each displayed snapshot.
 
 An accepted operation receipt means a command was queued or its native receipt
 was observed. It does not by itself confirm physical execution. Matching fresh
@@ -148,7 +204,7 @@ ordering, timestamps and file modes are fixed for reproducible builds.
 For an alternate output location:
 
 ```console
-python plugins/anycubic/build.py --output work/anycubic-0.1.4.bbp
+python plugins/anycubic/build.py --output work/anycubic-0.1.5.bbp
 ```
 
 For a later release, update the version in the payload's plugin factory, then
