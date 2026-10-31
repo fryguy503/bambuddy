@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useEffect } from 'react';
+import { onlineManager, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -67,6 +69,50 @@ async function chooseSource() {
 
 describe('independent File Manager batch queue', () => {
   beforeEach(mockBackend);
+  afterEach(() => onlineManager.setOnline(true));
+
+  it('inspects five local files when the browser reports offline and recovers after initially empty telemetry', async () => {
+    onlineManager.setOnline(false);
+    const files = Array.from({ length: 5 }, (_, index) => ({ id: index + 11, filename: `part-${index + 1}.gcode`, sliced_for_model: 'Kobra S1' }));
+    let reported = false;
+    let client!: QueryClient;
+    const descriptions: number[] = [];
+    server.use(
+      http.get('/api/v1/library/files/:id', ({ params }) => HttpResponse.json({ ...files.find(file => file.id === Number(params.id)), file_type: 'gcode' })),
+      http.get('/api/v1/printers/:id/device', () => HttpResponse.json({ ...DEVICE, revision: reported ? 'discovered' : 'bootstrap' })),
+      http.get('/api/v1/printers/:id/device-state', () => HttpResponse.json({
+        schema_version: 2, device_id: DEVICE.device_id, descriptor_revision: reported ? 'discovered' : 'bootstrap',
+        connected: true, status: 'idle', sequence: reported ? 2 : 1, observed_at: new Date().toISOString(), extensions: {},
+        resources: reported ? [{ resource_id: 'source:ace:1:3', available: true, properties: {
+          material_type: { value: 'PLA', quality: 'known' }, color: { value: '#0000FFFF', quality: 'known' },
+        } }] : [],
+      })),
+      http.post('/api/v1/printers/:id/job-description', async ({ request }) => {
+        const { library_file_id: id } = await request.json() as { library_file_id: number };
+        descriptions.push(id);
+        return HttpResponse.json({ ...description(11), artifact: { uri: `library:${id}`, format: 'gcode', filename: files.find(file => file.id === id)!.filename },
+          inputs: [{ ...description(11).inputs[0], artifact_uri: `library:${id}` }],
+          options_schema: { type: 'object', properties: { use_ace: { type: 'boolean', default: true } } },
+          extensions: { 'bambuddy:ui': { material_mode: { option: 'use_ace', external_source_id: 'external', require_reported_material: true } } },
+        });
+      }),
+    );
+    function Batch() {
+      const queryClient = useQueryClient();
+      useEffect(() => { client = queryClient; }, [queryClient]);
+      return <PrintModal mode="create" libraryFileId={11} archiveName="Five parts" queueFiles={files} onClose={() => {}} />;
+    }
+    render(<Batch />);
+    await screen.findByRole('combobox', { name: 'Blue PLA' });
+    await waitFor(() => expect(new Set(descriptions).size).toBe(5));
+    expect(screen.queryByText('Reading print requirements…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Queue 5 files' })).toBeDisabled();
+    reported = true;
+    await client.invalidateQueries({ queryKey: ['printer-device-state', 41] });
+    await chooseSource();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Queue 5 files' })).toBeEnabled());
+    expect(screen.queryByText('Reading print requirements…')).not.toBeInTheDocument();
+  });
 
   it('refreshes a cached device when telemetry reports newly discovered material sources', async () => {
     let deviceReads = 0;
@@ -117,19 +163,29 @@ describe('independent File Manager batch queue', () => {
     expect(submitted.map(item => item.job_options)).toEqual([{ leveling: true }, { leveling: true }]);
   });
 
-  it('creates no rows when a later file cannot be inspected', async () => {
+  it('labels a failed file and retries only its inspection without creating rows or replaying successful inspections', async () => {
     const submitted = vi.fn();
+    const inspected: number[] = [];
+    let fail = true;
     server.use(
       http.post('/api/v1/printers/:id/job-description', async ({ request }) => {
         const body = await request.json() as { library_file_id: number };
-        return body.library_file_id === 12 ? HttpResponse.json({ detail: 'Second file is invalid' }, { status: 422 })
-          : HttpResponse.json(description(11));
+        inspected.push(body.library_file_id);
+        return body.library_file_id === 12 && fail ? HttpResponse.json({ detail: 'Second file is invalid' }, { status: 422 })
+          : HttpResponse.json(description(body.library_file_id));
       }),
       http.post('/api/v1/queue/', () => { submitted(); return HttpResponse.json({ id: 1 }); }),
     );
     openBatch();
-    expect(await screen.findByText('Second file is invalid')).toBeInTheDocument();
+    expect(await screen.findByText('second.gcode: Second file is invalid')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Queue 2 files' })).toBeDisabled();
+    expect(screen.queryByText('Reading print requirements…')).not.toBeInTheDocument();
+    fail = false;
+    await userEvent.click(screen.getByRole('button', { name: 'Retry inspection' }));
+    await chooseSource();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Queue 2 files' })).toBeEnabled());
+    expect(inspected.filter(id => id === 11)).toHaveLength(1);
+    expect(inspected.filter(id => id === 12)).toHaveLength(2);
     expect(submitted).not.toHaveBeenCalled();
   });
 

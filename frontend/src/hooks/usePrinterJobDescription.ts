@@ -8,7 +8,8 @@ export const jobDescriptionQueryKey = (printerId: number, source?: PrinterJobSou
 export function usePrinterJobDescription(printerId: number, source?: PrinterJobSource) {
   return useQuery({
     queryKey: jobDescriptionQueryKey(printerId, source),
-    queryFn: () => printerDeviceApi.describeJob(printerId, source!),
+    queryFn: ({ signal }) => printerDeviceApi.describeJob(printerId, source!, signal),
+    networkMode: 'always',
     enabled: !!source && !!(source.libraryFileId || source.archiveId),
     staleTime: 30_000,
     retry: false,

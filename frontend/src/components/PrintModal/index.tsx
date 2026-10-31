@@ -390,6 +390,7 @@ export function PrintModal({
   const { data: printers, isLoading: loadingPrinters } = useQuery({
     queryKey: ['printers'],
     queryFn: api.getPrinters,
+    networkMode: 'always',
   });
   const effectivePrinter = printers?.find(printer => printer.id === effectivePrinterId);
   const effectivePlugin = printerPlugins.find(plugin => plugin.id === (effectivePrinter?.plugin_id || 'bambu'));
@@ -425,13 +426,14 @@ export function PrintModal({
     });
   }, [queueItem?.sdk_job, effectivePrinterId, jobDescription.data]);
   const independentMetadata = useQueries({ queries: isIndependentQueue ? independentFiles.map(file => ({
-    queryKey: ['library-file', file.id], queryFn: () => api.getLibraryFile(file.id), retry: false,
+    queryKey: ['library-file', file.id], queryFn: () => api.getLibraryFile(file.id), retry: false, networkMode: 'always' as const,
   })) : [] });
   const independentDescriptions = useQueries({ queries: isIndependentQueue && needsTypedJobDescription
     ? independentFiles.map(file => {
       const source = { libraryFileId: file.id, plateId: candidatePlates[file.id] ?? null };
       return { queryKey: jobDescriptionQueryKey(effectivePrinterId!, source),
-        queryFn: () => printerDeviceApi.describeJob(effectivePrinterId!, source), retry: false };
+        queryFn: ({ signal }: { signal: AbortSignal }) => printerDeviceApi.describeJob(effectivePrinterId!, source, signal),
+        retry: false, networkMode: 'always' as const };
     }) : [] });
   const sharedJobDescription = useMemo(() => {
     if (!isIndependentQueue) return { data: jobDescription.data, error: null as string | null };
@@ -439,15 +441,27 @@ export function PrintModal({
       return { data: mergeQueueJobDescriptions(independentDescriptions.flatMap(query => query.data ? [query.data] : [])), error: null };
     } catch (error) { return { data: undefined, error: error instanceof Error ? error.message : String(error) }; }
   }, [isIndependentQueue, jobDescription.data, independentDescriptions]);
+  const independentFileErrors = [
+    ...independentMetadata.flatMap((query, index) => query.isError
+      ? [{ fileId: independentFiles[index].id, message: `${independentFiles[index].filename}: ${query.error.message}` }] : []),
+    ...independentDescriptions.flatMap((query, index) => query.isError
+      ? [{ fileId: independentFiles[index].id, message: `${independentFiles[index].filename}: ${query.error.message}` }] : []),
+  ];
+  const independentInspectionError = independentFileErrors[0]?.message || sharedJobDescription.error || undefined;
+  const independentInspectionPending = independentMetadata.some(query => query.isPending)
+    || independentDescriptions.some(query => query.isPending);
+  const retryIndependentInspection = () => {
+    for (const query of independentMetadata) if (query.isError) void query.refetch();
+    for (const query of independentDescriptions) if (query.isError || sharedJobDescription.error) void query.refetch();
+  };
   const independentBlockingReason = !isIndependentQueue ? null
     : (loadingPrinterPlugins ? 'Loading printer support…' : null)
       || printerPluginsError?.message
       || (effectivePrinter && !effectivePlugin ? 'Printer support is unavailable.' : null)
       || (effectivePlugin?.api_version === 2 && effectiveDevice.isPending ? 'Loading printer resources…' : null)
       || (effectivePlugin?.api_version === 2 ? effectiveDevice.error?.message : null)
-      || independentMetadata.find(query => query.isError)?.error?.message
+      || independentFileErrors[0]?.message
       || (independentMetadata.some(query => query.isPending) ? 'Loading the selected files…' : null)
-      || independentDescriptions.find(query => query.isError)?.error?.message
       || (independentDescriptions.some(query => query.isPending) ? 'Reading material requirements for the selected files…' : null)
       || sharedJobDescription.error;
   const independentValidationReason = useMemo(() => {
@@ -2121,7 +2135,10 @@ export function PrintModal({
                     defaultValue: independentQueuedCount === 1 ? '{{count}} file already queued. Retrying queues only the remaining files.'
                       : '{{count}} files already queued. Retrying queues only the remaining files.' })}
                 </p>}
-                {(independentBlockingReason || independentValidationReason) && <p role="alert" className="text-sm text-bambu-gray">{independentBlockingReason || independentValidationReason}</p>}
+                {independentFileErrors.length > 0 ? <div role="alert" className="space-y-1 text-sm text-red-400">
+                  {independentFileErrors.map((error, index) => <p key={`${error.fileId}:${index}`}>{error.message}</p>)}
+                  <Button type="button" size="sm" variant="secondary" onClick={retryIndependentInspection}>Retry inspection</Button>
+                </div> : (independentBlockingReason || independentValidationReason) && <p role="alert" className="text-sm text-bambu-gray">{independentBlockingReason || independentValidationReason}</p>}
               </>
             )}
             {isCrossModel && (
@@ -2334,8 +2351,9 @@ export function PrintModal({
                 onChange={next => setGenericSetups(previous => ({ ...previous, [printerId]: next }))}
                 source={!isIndependentQueue ? jobSource : undefined}
                 description={printerId === effectivePrinterId ? sharedJobDescription.data : undefined}
-                descriptionPending={isIndependentQueue && (!!independentBlockingReason || !sharedJobDescription.data)}
-                descriptionError={isIndependentQueue ? sharedJobDescription.error || undefined : undefined}
+                descriptionPending={isIndependentQueue && independentInspectionPending}
+                descriptionError={isIndependentQueue ? independentInspectionError : undefined}
+                onRetryDescription={isIndependentQueue ? retryIndependentInspection : undefined}
                 defaultExpanded={!!initialSelectedPrinterIds?.length}
                 materials={(effectiveFilamentReqs?.filaments || []).map(material => ({ id: String(material.slot_id), label: `${material.type} (${material.slot_id})` }))} /> : null;
             })}
