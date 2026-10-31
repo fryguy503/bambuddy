@@ -240,7 +240,11 @@ class PrinterManager:
         """Return True when the printer finished/failed a print and is waiting for the
         user to acknowledge the plate is cleared before the queue may dispatch the next job.
         """
-        return printer_id in self._awaiting_plate_clear
+        return printer_id in self._awaiting_plate_clear or self.provider_requires_plate_clear(printer_id)
+
+    def provider_requires_plate_clear(self, printer_id: int) -> bool:
+        """A persisted provider safety hold, including after reconnect/restart."""
+        return getattr(self.get_status(printer_id), "plate_clear_required", False) is True
 
     def set_awaiting_plate_clear(self, printer_id: int, awaiting: bool):
         """Set/clear the awaiting-plate-clear gate and persist it to DB.

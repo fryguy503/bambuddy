@@ -2176,7 +2176,7 @@ class PrintScheduler:
                         continue
 
                     # Check if printer is idle
-                    printer_idle = self._is_printer_idle(item.printer_id, require_plate_clear)
+                    printer_idle = self._can_dispatch_to_printer(item.printer_id, require_plate_clear)
                     printer_connected = printer_manager.is_connected(item.printer_id)
 
                     # If printer not connected, try to power on via smart plug
@@ -2208,7 +2208,7 @@ class PrintScheduler:
                                     except Exception as e:
                                         logger.warning("Failed to power on extra plug '%s': %s", extra_plug.name, e)
                                 printer_connected = True
-                                printer_idle = self._is_printer_idle(item.printer_id, require_plate_clear)
+                                printer_idle = self._can_dispatch_to_printer(item.printer_id, require_plate_clear)
                             else:
                                 logger.warning("Could not power on printer %s via smart plug", item.printer_id)
                                 await hold_for_printer(
@@ -3397,7 +3397,9 @@ class PrintScheduler:
                     # sibling instead of spending this pass — and every pass —
                     # on the same printer.
                     continue
-                if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer.id):
+                if printer_manager.provider_requires_plate_clear(printer.id) is True or (
+                    require_plate_clear and printer_manager.is_awaiting_plate_clear(printer.id)
+                ):
                     # Waking this one buys nothing: it would boot into IDLE and
                     # then be held by the plate-clear gate, which is exactly
                     # what the reporter's log shows happening for 80 minutes
@@ -3525,6 +3527,7 @@ class PrintScheduler:
 
         # Track reasons for skipping printers
         printers_busy = []
+        printers_plate_required: list[str] = []
         # Printers out of dispatch after a refused upload, worded as the
         # printer's own queue rows word it: "Busy" would read as printing (#3409).
         printers_refused: list[str] = []
@@ -3554,7 +3557,7 @@ class PrintScheduler:
                 continue
 
             is_connected = printer_manager.is_connected(printer.id)
-            is_idle = self._is_printer_idle(printer.id, require_plate_clear) if is_connected else False
+            is_idle = self._can_dispatch_to_printer(printer.id, require_plate_clear) if is_connected else False
 
             if not is_connected:
                 # An offline printer whose last known filament cannot run this
@@ -3572,6 +3575,11 @@ class PrintScheduler:
                 continue
 
             if not is_idle:
+                if printer_manager.provider_requires_plate_clear(printer.id) is True or (
+                    require_plate_clear and printer_manager.is_awaiting_plate_clear(printer.id)
+                ):
+                    printers_plate_required.append(printer.name)
+                    continue
                 # Printer is currently printing.  For force-color jobs, check whether the
                 # loaded color would satisfy the requirement — if not, surface it as a
                 # color-mismatch reason rather than plain "Busy" so the user understands
@@ -3691,7 +3699,7 @@ class PrintScheduler:
                 # by itself, so the job is not actually waiting on anybody to change a
                 # spool (#2876 — offline printers reach this list now that a switched-off
                 # printer's own filament is read).
-                if not printers_busy and not printers_offline and not printers_refused:
+                if not printers_busy and not printers_offline and not printers_refused and not printers_plate_required:
                     all_missing = sorted({c for _, cols in printers_missing_filament for c in cols})
                     return None, f"No matching material/color. Waiting on {', '.join(all_missing)}"
                 # else: fall through — the self-resolving entries are appended below
@@ -3701,6 +3709,8 @@ class PrintScheduler:
                 ]
                 reasons.append(f"Waiting for filament: {'; '.join(names_and_missing)}")
         reasons.extend(printers_refused)
+        if printers_plate_required:
+            reasons.append(f"Waiting for plate confirmation: {', '.join(printers_plate_required)}")
         if printers_busy:
             reasons.append(f"Busy: {', '.join(printers_busy)}")
         if printers_offline:
@@ -5258,6 +5268,13 @@ class PrintScheduler:
 
         return True
 
+    def _can_dispatch_to_printer(self, printer_id: int, require_plate_clear: bool) -> bool:
+        # Non-print idle checks (for example scheduled drying) may explicitly
+        # ignore a dirty plate. Print admission must always honor provider holds.
+        return printer_manager.provider_requires_plate_clear(printer_id) is not True and self._is_printer_idle(
+            printer_id, require_plate_clear
+        )
+
     def _is_printer_idle(self, printer_id: int, require_plate_clear: bool = True) -> bool:
         """Check if a printer is connected and idle."""
         from backend.app.printers.rolling import queue_admission_blocked
@@ -5318,7 +5335,9 @@ class PrintScheduler:
         itself — somebody has to walk over to the printer — so it is worded as
         itself and allowed to notify.
         """
-        if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id):
+        if printer_manager.provider_requires_plate_clear(printer_id) is True or (
+            require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id)
+        ):
             return f"Waiting for plate confirmation: {printer_name}"
         return f"Busy: {printer_name}"
 
@@ -8910,6 +8929,14 @@ class PrintScheduler:
         """
         logger.info("Starting queue item %s", item.id)
 
+        # A provider may restore this hold from its own durable journal before
+        # the host DB flag is rehydrated. Do not reserve a budget, upload a file,
+        # consume a library source or transition the row to printing first.
+        if item.printer_id is not None and printer_manager.provider_requires_plate_clear(item.printer_id) is True:
+            item.waiting_reason = "Waiting for plate confirmation"
+            await db.commit()
+            return
+
         # Also covers a reservation left active by a process interruption
         # during an earlier attempt. `_dispatch_one` releases this marker on
         # every exit unless start_print() confirms that the command was sent.
@@ -9641,6 +9668,10 @@ class PrintScheduler:
         # Written with the move to printing, so a retried send replaces the
         # last answer and a cancelled one leaves the row alone (#3279).
         color_substitutions = None if typed_dispatch else await self._color_substitutions_for(db, item)
+        if item.printer_id is not None and printer_manager.provider_requires_plate_clear(item.printer_id) is True:
+            item.waiting_reason = f"Waiting for plate confirmation: {printer.name}"
+            await db.commit()
+            return
         cas = await db.execute(
             update(PrintQueueItem)
             .where(PrintQueueItem.id == item.id)
@@ -10107,6 +10138,11 @@ class PrintScheduler:
             # exactly like the pre-dispatch guard. Only a start_print() False on
             # an idle/unknown printer is a genuine command failure.
             post_dispatch_state = getattr(printer_manager.get_status(item.printer_id), "state", None)
+            if printer_manager.provider_requires_plate_clear(dispatch_printer_id) is True:
+                await self._defer_until_printer_idle(db, item)
+                item.waiting_reason = f"Waiting for plate confirmation: {printer.name}"
+                await db.commit()
+                return
             if post_dispatch_state in _ACTIVE_PRINT_STATES:
                 logger.info(
                     "Queue item %s: printer %s became busy (state=%s) before the start "

@@ -7,9 +7,11 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from backend.app.printers.sdk import (
+    ConnectionDiagnosticResult,
     DeviceDescriptor,
     DeviceEvent,
     DeviceSnapshot,
+    DiagnosticCheck,
     JobDescription,
     JobEventData,
     JobInput,
@@ -45,6 +47,8 @@ def main(argv=None) -> int:
             "job-event-data",
             "job-description",
             "job-input",
+            "diagnostic",
+            "diagnostic-check",
         ),
     )
     manifest = commands.add_parser("manifest", help="Validate a static manifest without loading code")
@@ -68,6 +72,8 @@ def main(argv=None) -> int:
                 "job-event-data": JobEventData,
                 "job-description": JobDescription,
                 "job-input": JobInput,
+                "diagnostic": ConnectionDiagnosticResult,
+                "diagnostic-check": DiagnosticCheck,
             }
             print(json.dumps(models[args.kind].model_json_schema(), indent=2))
             return 0

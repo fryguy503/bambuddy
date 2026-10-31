@@ -1129,7 +1129,7 @@ function SortableQueueItem({
             )}
             {isPending && (
               <>
-                {item.manual_start && (
+                {(item.manual_start || item.printer_id != null && item.waiting_reason?.startsWith('Waiting for plate confirmation')) && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1989,6 +1989,10 @@ export function QueuePage() {
     missing: string[];
   } | null>(null);
 
+  const [plateClearConfirm, setPlateClearConfirm] = useState<{
+    id: number; printerId: number; printerName: string; skipFilamentCheck?: boolean;
+  } | null>(null);
+
   const startMutation = useMutation({
     mutationFn: ({ id, skipFilamentCheck }: { id: number; skipFilamentCheck?: boolean }) =>
       api.startQueueItem(id, { skipFilamentCheck }),
@@ -1997,8 +2001,19 @@ export function QueuePage() {
       showToast(t('queue.toast.released'));
       setFilamentShortConfirm(null);
       setFilamentMissingConfirm(null);
+      setPlateClearConfirm(null);
     },
     onError: (error: unknown, variables) => {
+      if (error instanceof ApiError && error.status === 409 && error.code === 'plate_clear_required') {
+        const printerId = error.detail?.printer_id;
+        if (typeof printerId === 'number' && Number.isSafeInteger(printerId) && printerId > 0) {
+          setFilamentShortConfirm(null);
+          setFilamentMissingConfirm(null);
+          plateClearMutation.reset();
+          setPlateClearConfirm({ ...variables, printerId, printerName: typeof error.detail?.printer_name === 'string' ? error.detail.printer_name : 'Printer' });
+          return;
+        }
+      }
       if (error instanceof ApiError && error.status === 409 && error.code === 'insufficient_filament') {
         const deficitRaw = (error.detail?.deficit ?? []) as Array<{
           slot_id: number;
@@ -2015,6 +2030,18 @@ export function QueuePage() {
         return;
       }
       showToast(t('queue.toast.startFailed'), 'error');
+    },
+  });
+
+  const plateClearMutation = useMutation({
+    mutationFn: (confirmation: NonNullable<typeof plateClearConfirm>) => api.clearPlate(confirmation.printerId),
+    onSuccess: (_result, confirmation) => {
+      queryClient.invalidateQueries({ queryKey: ['printerStatus', confirmation.printerId] });
+      queryClient.invalidateQueries({ queryKey: ['printer-device-state', confirmation.printerId] });
+      setPlateClearConfirm(null);
+      // Acknowledgement must succeed before releasing the user's staged job.
+      // A failed/timeout acknowledgement leaves its manual-start flag intact.
+      startMutation.mutate({ id: confirmation.id, skipFilamentCheck: confirmation.skipFilamentCheck });
     },
   });
 
@@ -3259,6 +3286,19 @@ export function QueuePage() {
       )}
 
       {/* Confirm Action Modal */}
+      {plateClearConfirm && <ConfirmModal
+        title={t('queue.plateClearConfirm.title', { defaultValue: 'Confirm plate is clear' })}
+        message={t('queue.plateClearConfirm.message', { defaultValue: 'Remove any finished print from {{printer}} and confirm its build plate is clear before starting this queued print.', printer: plateClearConfirm.printerName })}
+        confirmText={t('queue.plateClearConfirm.confirm', { defaultValue: 'Plate is clear — start print' })}
+        variant="warning"
+        isLoading={plateClearMutation.isPending || startMutation.isPending}
+        confirmDisabled={!hasPermission('printers:clear_plate')}
+        onConfirm={() => { if (hasPermission('printers:clear_plate') && !plateClearMutation.isPending) plateClearMutation.mutate(plateClearConfirm); }}
+        onCancel={() => setPlateClearConfirm(null)}
+      >
+        {!hasPermission('printers:clear_plate') && <p className="mt-3 text-sm text-bambu-gray">You do not have permission to confirm plate clearance.</p>}
+        {plateClearMutation.error && <p role="alert" className="mt-3 text-sm text-red-400">{plateClearMutation.error.message}</p>}
+      </ConfirmModal>}
       {filamentShortConfirm && (
         <ConfirmModal
           title={t('queue.filamentShort.confirmTitle')}

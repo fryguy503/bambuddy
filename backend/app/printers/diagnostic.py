@@ -1,9 +1,16 @@
 """Connection diagnostics delegated to the selected printer addon."""
 
+import asyncio
+
+from pydantic import ValidationError
+
 from backend.app.models.printer import Printer
 from backend.app.printers.contracts import PrinterConfig, PrinterPlugin, PrinterPluginError
 from backend.app.printers.registry import get_plugin, plugin_for
+from backend.app.printers.sdk import SDKValidationError
 from backend.app.schemas.printer import PrinterDiagnosticResult
+
+DIAGNOSTIC_TIMEOUT_SECONDS = 45
 
 
 async def run_connection_diagnostic(
@@ -40,14 +47,20 @@ async def run_connection_diagnostic(
         if isinstance(client, PrinterConnectionAdapter) and client._config == config:
             plugin = client._plugin
             connection = client._connection
-        result = await leased_call(
-            config,
-            plugin.connection_diagnostics,
-            config,
-            connection=connection,
-            wait_for_publish_seconds=wait_for_publish_seconds,
-            progress=progress,
-        )
+        try:
+            result = await asyncio.wait_for(
+                leased_call(
+                    config,
+                    plugin.connection_diagnostics,
+                    config,
+                    connection=connection,
+                    wait_for_publish_seconds=wait_for_publish_seconds,
+                    progress=progress,
+                ),
+                timeout=DIAGNOSTIC_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise PrinterPluginError("Connection diagnostics timed out; retry the checks") from exc
     else:
         # Keep installed/bundled providers using the original diagnostic hook
         # compatible without changing their immutable package payloads.
@@ -60,7 +73,10 @@ async def run_connection_diagnostic(
             wait_for_publish_seconds=wait_for_publish_seconds,
             progress=progress,
         )
-    result = PrinterDiagnosticResult.model_validate(result)
+    try:
+        result = PrinterDiagnosticResult.model_validate(result)
+    except ValidationError as exc:
+        raise SDKValidationError("Invalid diagnostic result") from exc
     if result.ip_address != config.ip_address or result.printer_id != config.printer_id:
-        raise PrinterPluginError("Diagnostic result does not identify the requested printer")
+        raise SDKValidationError("Diagnostic result does not identify the requested printer")
     return result

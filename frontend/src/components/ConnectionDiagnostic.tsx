@@ -15,7 +15,9 @@ import {
   type DiagnosticCheck,
   type DiagnosticStatus,
   type PrinterDiagnosticResult,
+  type PrinterDiagnosticRequest,
 } from '../api/client';
+import { Button } from './Button';
 
 function StatusIcon({ status }: { status: DiagnosticStatus }) {
   if (status === 'pass') return <CheckCircle2 className="w-5 h-5 text-bambu-green flex-shrink-0" />;
@@ -56,7 +58,7 @@ export function DiagnosticChecklist({ result }: { result: PrinterDiagnosticResul
     // (e.g. external_storage skip on P1-series → skip_unsupported_model #2524);
     // fall back to the plain per-status text when no variant key exists.
     const reason = (check.params as { reason?: string } | undefined)?.reason;
-    const detail = t(
+    const detail = check.message ?? t(
       `diagnostic.check.${check.id}.${check.status}${reason ? `_${reason}` : ''}`,
       {
         ...params,
@@ -77,9 +79,10 @@ export function DiagnosticChecklist({ result }: { result: PrinterDiagnosticResul
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-sm text-white">
-            {t(`diagnostic.check.${check.id}.title`, params)}
+            {check.title || t(`diagnostic.check.${check.id}.title`, { ...params, defaultValue: check.id })}
           </div>
           {detail && <div className="text-xs text-bambu-gray mt-0.5">{detail}</div>}
+          {check.hint && <div className="text-xs text-bambu-gray mt-1 whitespace-pre-wrap break-words">{check.hint}</div>}
         </div>
       </li>
     );
@@ -95,12 +98,37 @@ export function DiagnosticChecklist({ result }: { result: PrinterDiagnosticResul
   );
 }
 
-type Connection = {
-  ip_address: string;
-  plugin_id?: string;
-  serial_number?: string;
-  access_code?: string;
-};
+type Connection = PrinterDiagnosticRequest;
+
+export function ConnectionPreflightReview({ result, error, checking = false, saving = false, onBack, onRetry, onSave }: {
+  result: PrinterDiagnosticResult | null;
+  error: string | null;
+  checking?: boolean;
+  saving?: boolean;
+  onBack: () => void;
+  onRetry: () => void;
+  onSave: () => void;
+}) {
+  const { t } = useTranslation();
+  return <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 p-3 space-y-3">
+    <div className="flex items-start gap-2">
+      <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+      <p className="text-sm text-amber-700 dark:text-amber-300">{error
+        ? t('printers.addPreflight.unverified', { defaultValue: 'The connection could not be verified. Retry the checks, review the settings, or save anyway.' })
+        : result?.checks.some(check => check.status === 'fail') ? t('printers.addPreflight.warning')
+          : t('printers.addPreflight.reviewWarning', { defaultValue: 'Some connection checks need your attention. Review the results before saving.' })}</p>
+    </div>
+    {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{t('diagnostic.runFailed', { error })}</p>}
+    {result && <DiagnosticChecklist result={result} />}
+    {error && <Button type="button" variant="secondary" className="w-full" disabled={checking || saving} onClick={onRetry}>
+      {checking ? t('printers.addPreflight.checking') : t('diagnostic.retry')}
+    </Button>}
+    <div className="flex gap-3">
+      <Button type="button" variant="secondary" onClick={onBack} className="flex-1" disabled={checking || saving}>{t('printers.addPreflight.back')}</Button>
+      <Button type="button" onClick={onSave} className="flex-1" disabled={checking || saving}>{t('printers.addPreflight.saveAnyway')}</Button>
+    </div>
+  </div>;
+}
 
 // Keep in sync with backend `PUBLISH_WAIT_DEFAULT` in
 // backend/app/services/printer_diagnostic.py — that's the upper bound on how

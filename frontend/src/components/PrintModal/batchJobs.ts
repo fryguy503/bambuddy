@@ -1,6 +1,6 @@
 import type { PrintQueueItemCreate } from '../../api/client';
 import { buildSdkJobPlan, jobInputKey, remapJobSetupForDescription } from '../../printer-plugins/forms';
-import type { GenericJobSetup, JsonSchema, PrinterDevice, PrinterJobDescription, PrinterJobInput } from '../../printer-plugins/types';
+import type { GenericJobSetup, JsonSchema, PrinterDevice, PrinterDeviceState, PrinterJobDescription, PrinterJobInput } from '../../printer-plugins/types';
 
 const materialIdentity = (input: PrinterJobInput) => JSON.stringify([
   input.material_type?.trim().toUpperCase() || '', input.color?.replace(/^#/, '').toUpperCase() || '',
@@ -80,8 +80,9 @@ export function mergeQueueJobDescriptions(descriptions: readonly PrinterJobDescr
 export function describedJobPayload(
   setup: GenericJobSetup, description: PrinterJobDescription, device: PrinterDevice,
   options: { jobId: string; name: string; plateId: number | null },
+  snapshot?: PrinterDeviceState,
 ): Pick<PrintQueueItemCreate, 'tool_ids' | 'material_bindings' | 'job_options' | 'sdk_job'> {
-  const normalized = remapJobSetupForDescription(setup, description, device);
+  const normalized = remapJobSetupForDescription(setup, description, device, snapshot);
   const job = buildSdkJobPlan(normalized, { ...options, artifact: description.artifact });
   const inputs = new Map(description.inputs.map(input => [input.id, input]));
   job.bindings = job.bindings.map(binding => {

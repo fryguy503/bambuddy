@@ -50,7 +50,7 @@ import { printerDeviceApi } from '../../printer-plugins/api';
 import { printerModelSupports } from '../../printer-plugins/catalog';
 import { GenericPrintSetup } from '../GenericPrintSetup';
 import { emptyGenericJobSetup, jobInputKey, remapJobSetupForDescription } from '../../printer-plugins/forms';
-import type { GenericJobSetup, PrinterDevice, PrinterJobDescription } from '../../printer-plugins/types';
+import type { GenericJobSetup, PrinterDevice, PrinterDeviceState, PrinterJobDescription } from '../../printer-plugins/types';
 import { describedJobPayload, mergeQueueJobDescriptions } from './batchJobs';
 
 /** Same filament: type ignoring case, colour as RRGGBB ignoring `#`, case and alpha. */
@@ -469,10 +469,11 @@ export function PrintModal({
       || independentDescriptions.some(query => !query.data)) return null;
     try {
       for (const query of independentDescriptions) remapJobSetupForDescription(
-        genericSetups[effectivePrinterId!] || emptyGenericJobSetup(), query.data!, effectiveDevice.data);
+        genericSetups[effectivePrinterId!] || emptyGenericJobSetup(), query.data!, effectiveDevice.data,
+        queryClient.getQueryData<PrinterDeviceState>(['printer-device-state', effectivePrinterId]));
       return null;
     } catch (error) { return error instanceof Error ? error.message : String(error); }
-  }, [isIndependentQueue, needsTypedJobDescription, effectiveDevice.data, independentDescriptions, genericSetups, effectivePrinterId]);
+  }, [isIndependentQueue, needsTypedJobDescription, effectiveDevice.data, independentDescriptions, genericSetups, effectivePrinterId, queryClient]);
 
   const { data: myCostCenters, isLoading: loadingCostCenters } = useQuery({
     queryKey: ['finance', 'cost-centers', 'mine'],
@@ -1171,7 +1172,7 @@ export function PrintModal({
     const setup = genericSetups[printerId] || emptyGenericJobSetup();
     return describedJobPayload(setup, description, device, {
       jobId: queueItem?.sdk_job?.job_id || crypto.randomUUID(), name: archiveName, plateId,
-    });
+    }, queryClient.getQueryData<PrinterDeviceState>(['printer-device-state', printerId]));
   };
   const handleSubmit = async (
     e?: React.FormEvent,
@@ -1216,7 +1217,7 @@ export function PrintModal({
             if (!device || !description) throw new Error(`Wait for ${file.filename} material requirements.`);
             typed = describedJobPayload(genericSetups[printerId] || emptyGenericJobSetup(), description, device, {
               jobId: crypto.randomUUID(), name: file.filename, plateId,
-            });
+            }, queryClient.getQueryData<PrinterDeviceState>(['printer-device-state', printerId]));
           }
           prepared.push({ file, data: {
             library_file_id: file.id, printer_id: printerId, target_model: null, target_location: null,

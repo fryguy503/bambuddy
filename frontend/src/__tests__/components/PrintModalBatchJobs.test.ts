@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { describedJobPayload, mergeQueueJobDescriptions } from '../../components/PrintModal/batchJobs';
 import { emptyGenericJobSetup, jobInputKey } from '../../printer-plugins/forms';
-import type { PrinterDevice, PrinterJobDescription } from '../../printer-plugins/types';
+import type { PrinterDevice, PrinterDeviceState, PrinterJobDescription } from '../../printer-plugins/types';
 
 const device: PrinterDevice = {
   schema_version: 2, device_id: 'fixture', revision: '1', capabilities: [], operations: [],
@@ -76,5 +76,29 @@ describe('independent queue job plans', () => {
     second.options_schema.properties!.calibration.const = false;
     first.options_schema.properties!.calibration.const = true;
     expect(() => mergeQueueJobDescriptions([first, second])).toThrow('conflicting print options');
+  });
+
+  it('retains the explicit override in every file plan while preserving exact input IDs and weights', () => {
+    const descriptions = [description(11, 'T0'), description(12, 'T7')];
+    for (const value of descriptions) {
+      value.options_schema.properties!.use_feeder = { type: 'boolean', default: true };
+      value.options_schema.properties!.allow_material_type_mismatch = { type: 'boolean', default: false };
+      value.extensions = { 'bambuddy:ui': { material_mode: { option: 'use_feeder', external_source_id: 'external', require_reported_material: true,
+        type_override_option: 'allow_material_type_mismatch' } } };
+    }
+    const merged = mergeQueueJobDescriptions(descriptions)!;
+    const key = jobInputKey(merged.inputs[0], merged.artifact.uri);
+    const setup = { ...emptyGenericJobSetup(), material_bindings: { [key]: 'source:ace-two-slot-four' }, job_options: { allow_material_type_mismatch: true } };
+    const state: PrinterDeviceState = { schema_version: 2, device_id: device.device_id, connected: true, status: 'idle', observed_at: new Date().toISOString(), sequence: 1, descriptor_revision: '1', extensions: {},
+      resources: [{ resource_id: 'source:ace-two-slot-four', available: true, status: 'loaded', properties: {
+        material_type: { value: 'PLA Silk', observed_at: new Date().toISOString(), quality: 'known' },
+      } }],
+    };
+    const payloads = descriptions.map((value, index) => describedJobPayload(setup, value, device, { jobId: `job-${index}`, name: 'part', plateId: null }, state));
+    expect(payloads.map(value => value.sdk_job?.options.allow_material_type_mismatch)).toEqual([true, true]);
+    expect(payloads.map(value => value.sdk_job?.bindings[0].input_id)).toEqual(['T0', 'T7']);
+    expect(payloads.map(value => value.sdk_job?.bindings[0].required_mass_grams)).toEqual([11, 12]);
+    const strict = { ...setup, job_options: { allow_material_type_mismatch: false } };
+    expect(() => describedJobPayload(strict, descriptions[0], device, { jobId: 'strict', name: 'part', plateId: null }, state)).toThrow('Select a material source');
   });
 });
