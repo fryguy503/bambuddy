@@ -187,6 +187,33 @@ async def test_provider_plate_hold_defers_before_budget_upload_or_start_with_glo
     assert case.plugin.requests == []
 
 
+async def test_retained_workflow_completion_after_observer_cutover_stays_pending(
+    db_session, resource_case, monkeypatch
+):
+    from backend.app.services.printer_manager import PrinterManager
+
+    case = resource_case
+    state = case.plugin.connection.state
+    state.plate_clear_required = False
+    state.requires_plate_clear = True
+    manager = scheduler_module.printer_manager
+    monkeypatch.setattr(manager, "_awaiting_plate_clear", set())
+    monkeypatch.setattr(manager, "_loop", None)
+    assert case.scheduler._can_dispatch_to_printer(case.printer.id, require_plate_clear=False) is True
+    # The retained owner's normal completion method updates shared host state;
+    # the current observer snapshot deliberately stays unchanged.
+    PrinterManager.set_awaiting_plate_clear(manager, case.printer.id, True)
+    assert state.plate_clear_required is False
+    assert case.scheduler._can_dispatch_to_printer(case.printer.id, require_plate_clear=False) is False
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == "pending" and case.item.error_message is None
+    assert case.item.waiting_reason.startswith("Waiting for plate confirmation")
+    case.budget.assert_not_awaited()
+    case.upload.assert_not_awaited()
+    assert case.plugin.requests == []
+
+
 async def test_provider_hold_arriving_during_upload_stays_pending_without_start(db_session, resource_case):
     case = resource_case
 

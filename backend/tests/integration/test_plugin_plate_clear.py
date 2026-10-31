@@ -51,14 +51,17 @@ async def test_provider_plate_acknowledgement_precedes_host_clear(async_client, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("accepted", [True, False])
+@pytest.mark.parametrize("retained_writer", [False, True])
 async def test_provider_snapshot_ack_updates_cached_bridge_before_immediate_queue_start(
-    async_client, sdk_plugin, db_session, archive_factory, monkeypatch, accepted
+    async_client, sdk_plugin, db_session, archive_factory, monkeypatch, accepted, retained_writer
 ):
     describe = sdk_plugin.describe_device
     invoke = sdk_plugin.invoke
 
     def device(config):
         descriptor = describe(config)
+        if retained_writer:
+            descriptor.extensions["plate_clear_policy"] = "required"
         descriptor.operations.append(
             OperationDescriptor(
                 id="job.clear_plate",
@@ -92,10 +95,16 @@ async def test_provider_snapshot_ack_updates_cached_bridge_before_immediate_queu
     bridge = HostEventBridge(adapter._config, sdk_plugin, {})
     adapter._event_bridge = bridge
     raw.callbacks["on_event"] = bridge.emit
-    raw.state.extensions["plate_clear_required"] = True
+    raw.state.extensions["plate_clear_required"] = not retained_writer
     raw.publish()
-    assert adapter._event_bridge.latest_snapshot.extensions["plate_clear_required"] is True
+    assert adapter._event_bridge.latest_snapshot.extensions["plate_clear_required"] is not retained_writer
     monkeypatch.setattr(printer_manager, "_awaiting_plate_clear", set())
+    if retained_writer:
+        # The old retained workflow finishes after the refreshed observer has
+        # cached its clean snapshot and raises the existing host callback flag.
+        printer_manager.set_awaiting_plate_clear(printer_id, True)
+        assert adapter.state.plate_clear_required is False
+        assert adapter.state.requires_plate_clear is True
     archive = await archive_factory(printer_id, with_run=False)
     item = PrintQueueItem(printer_id=printer_id, archive_id=archive.id, status="pending", manual_start=True)
     db_session.add(item)
@@ -112,7 +121,9 @@ async def test_provider_snapshot_ack_updates_cached_bridge_before_immediate_queu
     assert clear.status_code == (200 if accepted else 409), clear.text
     retry = await async_client.post(f"/api/v1/queue/{item_id}/start?skip_filament_check=true")
     assert retry.status_code == (200 if accepted else 409), retry.text
-    assert adapter._event_bridge.latest_snapshot.extensions["plate_clear_required"] is not accepted
+    assert printer_manager.provider_requires_plate_clear(printer_id) is not accepted
+    if accepted:
+        assert adapter._event_bridge.latest_snapshot.extensions["plate_clear_required"] is False
     assert [request.operation_id for request in sdk_plugin.calls] == ["job.clear_plate"]
     await db_session.refresh(item)
     assert item.status == "pending" and item.manual_start is not accepted

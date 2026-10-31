@@ -243,8 +243,17 @@ class PrinterManager:
         return printer_id in self._awaiting_plate_clear or self.provider_requires_plate_clear(printer_id)
 
     def provider_requires_plate_clear(self, printer_id: int) -> bool:
-        """A persisted provider safety hold, including after reconnect/restart."""
-        return getattr(self.get_status(printer_id), "plate_clear_required", False) is True
+        """Honor provider holds and a retained workflow's later completion.
+
+        During a live update the new observer can cache a clean snapshot before
+        the old workflow finishes. Its completion still raises the host's
+        persisted awaiting flag. Only an explicit provider policy makes that
+        flag mandatory independently of the global host preference.
+        """
+        state = self.get_status(printer_id)
+        return getattr(state, "plate_clear_required", False) is True or (
+            printer_id in self._awaiting_plate_clear and getattr(state, "requires_plate_clear", False) is True
+        )
 
     def set_awaiting_plate_clear(self, printer_id: int, awaiting: bool):
         """Set/clear the awaiting-plate-clear gate and persist it to DB.

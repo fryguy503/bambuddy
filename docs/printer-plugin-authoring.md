@@ -297,6 +297,12 @@ Keep it true until the explicit `job.clear_plate` operation succeeds; do not
 derive clearance from a reconnect or an idle report. The host honors this
 requirement independently of its optional global plate-clear preference.
 
+Declare `DeviceDescriptor.extensions["plate_clear_policy"] = "required"` when
+the provider always requires this acknowledgement. This static policy lets the
+host enforce an existing persisted hold even while a new observer's snapshot
+cache has not yet seen a completion from a retained older plugin version. Merely
+offering a clear-plate operation does not make a provider's policy mandatory.
+
 The shared queue leaves blocked jobs pending and the manual-start workflow
 requests acknowledgement before trying again. Use the standard declared
 `job.clear_plate` operation so existing core permission checks and the card/queue
