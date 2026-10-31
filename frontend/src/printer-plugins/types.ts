@@ -6,6 +6,7 @@ export interface PrinterPluginModel {
   capabilities: string[];
   image_url?: string | null;
   gcode_compatibility_group?: string | null;
+  presentation?: Record<string, unknown>;
 }
 
 export interface PrinterPlugin {
@@ -101,6 +102,7 @@ export interface PrinterOperation {
   timeout_seconds: number;
   namespace: string;
   confirmation?: string | null;
+  extensions?: Record<string, unknown>;
 }
 
 export interface PrinterDevice {
@@ -160,6 +162,34 @@ export interface GenericJobSetup {
   material_bindings: Record<string, string>;
   material_tool_ids: Record<string, string>;
   job_options: Record<string, unknown>;
+}
+
+export interface PrinterJobSource {
+  libraryFileId?: number;
+  archiveId?: number;
+  plateId?: number | null;
+}
+
+export interface PrinterJobInput {
+  id: string;
+  label: string;
+  artifact_uri?: string | null;
+  routing_key?: string | null;
+  material_type?: string | null;
+  color?: string | null;
+  required_mass_grams?: number | null;
+  compatible_tool_ids: string[];
+  compatible_source_ids: string[];
+  required: boolean;
+}
+
+export interface PrinterJobDescription {
+  artifact: SdkJobRequest['artifact'];
+  inputs: PrinterJobInput[];
+  options_schema: JsonSchema;
+  default_options: Record<string, unknown>;
+  warnings: string[];
+  extensions: Record<string, unknown>;
 }
 
 export interface SdkJobRequest {

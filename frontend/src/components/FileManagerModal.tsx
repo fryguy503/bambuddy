@@ -25,6 +25,7 @@ import {
 import { api } from '../api/client';
 import { parseUTCDate } from '../utils/date';
 import { Button } from './Button';
+import { PrinterFileUpload } from './PrinterFileUpload';
 import { ConfirmModal } from './ConfirmModal';
 import { ModelViewer } from './ModelViewer';
 import { GcodeToolpathViewer } from './GcodeToolpathViewer';
@@ -36,6 +37,9 @@ interface FileManagerModalProps {
   printerId: number;
   printerName: string;
   onClose: () => void;
+  uploadEnabled?: boolean;
+  uploadAccept?: string;
+  focusUpload?: boolean;
 }
 
 type PrinterViewerTab = '3d' | 'gcode';
@@ -279,7 +283,7 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
   { value: 'date-desc', label: 'Date (newest)' },
 ];
 
-export function FileManagerModal({ printerId, printerName, onClose }: FileManagerModalProps) {
+export function FileManagerModal({ printerId, printerName, onClose, uploadEnabled = false, uploadAccept, focusUpload = false }: FileManagerModalProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
@@ -318,6 +322,9 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
     queryFn: () => api.getPrinterStorage(printerId),
     staleTime: 30000, // Cache for 30 seconds
   });
+  const supportsDownload = storageData?.supports_download !== false;
+  const supportsDelete = storageData?.supports_delete !== false;
+  const supportsSelection = supportsDownload || supportsDelete;
 
   const visibleFiles = useMemo(() => [...(data?.files ?? [])]
     .filter((file) => !searchQuery || file.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -649,13 +656,13 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
                         onClick={(event) => {
                           if (file.is_directory) {
                             navigateToFolder(file.path);
-                          } else {
+                          } else if (supportsSelection) {
                             toggleFileSelection(file.path, event);
                           }
                         }}
                       >
                         {/* Checkbox for files only */}
-                        {!file.is_directory ? (
+                        {!file.is_directory && supportsSelection ? (
                           <button
                             onClick={(e) => toggleFileSelection(file.path, e)}
                             className="flex-shrink-0 text-bambu-gray hover:text-white"
@@ -682,7 +689,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
                             <span className="text-sm text-bambu-gray">
                               {formatFileSize(file.size)}
                             </span>
-                            {(file.name.toLowerCase().endsWith('.3mf') || file.name.toLowerCase().endsWith('.gcode') || file.name.toLowerCase().endsWith('.stl')) && (
+                            {supportsDownload && (file.name.toLowerCase().endsWith('.3mf') || file.name.toLowerCase().endsWith('.gcode') || file.name.toLowerCase().endsWith('.stl')) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -706,6 +713,8 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
             )}
           </div>
 
+        {uploadEnabled && <PrinterFileUpload printerId={printerId} accept={uploadAccept} autoFocus={focusUpload} />}
+
         {/* Action bar */}
         <div className="flex items-center justify-between p-4 border-t border-bambu-dark-tertiary bg-bambu-dark/50 flex-shrink-0">
           <div className="flex items-center gap-4">
@@ -718,7 +727,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
               }
             </div>
             {/* Select All / Deselect All */}
-            {data?.files?.some(f => !f.is_directory) && (
+            {supportsSelection && data?.files?.some(f => !f.is_directory) && (
               <div className="flex items-center gap-2">
                 {selectedFiles.size > 0 ? (
                   <button
@@ -741,7 +750,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
             )}
           </div>
           <div className="flex gap-2">
-            <Button
+            {supportsDownload && <Button
               variant="secondary"
               disabled={selectedFiles.size === 0 || downloadProgress !== null}
               onClick={handleDownload}
@@ -757,8 +766,8 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
                   Download{selectedFiles.size > 1 ? ` (${selectedFiles.size})` : ''}
                 </>
               )}
-            </Button>
-            <Button
+            </Button>}
+            {supportsDelete && <Button
               variant="secondary"
               disabled={selectedFiles.size === 0 || deleteMutation.isPending}
               onClick={handleDelete}
@@ -770,7 +779,7 @@ export function FileManagerModal({ printerId, printerName, onClose }: FileManage
                 <Trash2 className="w-4 h-4" />
               )}
               {t('printerFiles.deleteButton')}{selectedFiles.size > 1 ? ` (${selectedFiles.size})` : ''}
-            </Button>
+            </Button>}
           </div>
         </div>
       </div>

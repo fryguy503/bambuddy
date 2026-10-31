@@ -1,11 +1,14 @@
 import { ApiError, getAuthToken, request } from '../api/client';
-import type { OperationReceipt, PrinterDevice, PrinterDeviceState } from './types';
+import type { OperationReceipt, PrinterDevice, PrinterDeviceState, PrinterJobDescription, PrinterJobSource } from './types';
 
 const printerPath = (printerId: number) => `/printers/${printerId}`;
 
 export const printerDeviceApi = {
   describe: (printerId: number) => request<PrinterDevice>(`${printerPath(printerId)}/device`),
   state: (printerId: number) => request<PrinterDeviceState>(`${printerPath(printerId)}/device-state`),
+  describeJob: (printerId: number, source: PrinterJobSource) => request<PrinterJobDescription>(`${printerPath(printerId)}/job-description`, {
+    method: 'POST', body: JSON.stringify({ library_file_id: source.libraryFileId, archive_id: source.archiveId, plate_id: source.plateId }),
+  }),
   execute: (printerId: number, operationId: string, parameters: Record<string, unknown>, resourceId?: string) =>
     request<OperationReceipt>(`${printerPath(printerId)}/operations/${encodeURIComponent(operationId)}`, {
       method: 'POST',
