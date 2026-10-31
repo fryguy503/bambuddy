@@ -708,6 +708,8 @@ async def diagnose_connection(
         serial_number=req.serial_number or None,
         access_code=req.access_code or None,
         plugin_id=req.plugin_id,
+        model=req.model,
+        plugin_options=req.plugin_options,
     )
 
 

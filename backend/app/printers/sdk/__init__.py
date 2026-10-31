@@ -1,5 +1,6 @@
 """Public API v2 models and conformance checks for printer plugin authors."""
 
+from backend.app.printers.sdk.diagnostics import ConnectionDiagnosticResult, DiagnosticCheck
 from backend.app.printers.sdk.domain import (
     SDK_API_VERSION,
     DeviceDescriptor,
@@ -30,6 +31,7 @@ from backend.app.printers.sdk.jobs import (
     validate_job_request,
 )
 from backend.app.printers.sdk.manifest import PluginManifest
+from backend.app.printers.sdk.network_diagnostics import network_diagnostic_checks
 from backend.app.printers.sdk.validation import (
     SDKValidationError,
     check_manifest_compatibility,
