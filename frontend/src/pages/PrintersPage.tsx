@@ -75,6 +75,7 @@ import { LegacyBambuControls, LegacyBambuMaterialSources, LegacyBambuTemperature
 import { printerModelSupports } from '../printer-plugins/catalog';
 import { connectionFieldsFor } from '../printer-plugins/forms';
 import type { ConnectionField } from '../printer-plugins/types';
+import { printerUploadAccept } from '../printer-plugins/uploads';
 import {
   isStandaloneWebApp,
   openCameraWindow,
@@ -851,7 +852,34 @@ function PrinterCard({
   const [showResumeConfirm, setShowResumeConfirm] = useState(false);
   const [showSkipObjectsModal, setShowSkipObjectsModal] = useState(false);
   const [showUploadForPrint, setShowUploadForPrint] = useState(false);
+  const [focusPrinterUpload, setFocusPrinterUpload] = useState(false);
   const [showPrinterInfo, setShowPrinterInfo] = useState(false);
+  const [showAdvancedControls, setShowAdvancedControls] = useState(false);
+  const advancedControlsPanel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showAdvancedControls) return;
+    const previousFocus = document.activeElement;
+    const actionsMenu = printerActionsMenuRef.current;
+    advancedControlsPanel.current?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      if (dialogs[dialogs.length - 1] !== advancedControlsPanel.current) return;
+      if (event.key === 'Escape') setShowAdvancedControls(false);
+      if (event.key !== 'Tab') return;
+      const focusable = advancedControlsPanel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex="0"]');
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === advancedControlsPanel.current)) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || document.activeElement === advancedControlsPanel.current)) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener('keydown', keydown);
+    return () => {
+      window.removeEventListener('keydown', keydown);
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+      else if (actionsMenu?.isConnected) actionsMenu.querySelector('button')?.focus();
+    };
+  }, [showAdvancedControls]);
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const closePrinterInfo = useCallback(() => setShowPrinterInfo(false), []);
   const [printAfterUpload, setPrintAfterUpload] = useState<{ id: number; filename: string } | null>(null);
@@ -2443,6 +2471,13 @@ function PrinterCard({
             <Info className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
             {t('printers.printerInformation')}
           </button>
+          {deviceQuery.data && <button
+            className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
+            onClick={() => { setShowAdvancedControls(true); setShowMenu(false); }}
+          >
+            <SlidersHorizontal className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+            {t('printers.advancedControls', 'Advanced controls')}
+          </button>}
           {authEnabled && isAdmin && (
             <button
               className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
@@ -3235,9 +3270,16 @@ function PrinterCard({
             )}
 
             {/* Temperatures */}
-            {deviceQuery.data && <ManagedPrinterControls printerId={printer.id} device={deviceQuery.data} compact={viewMode !== 'expanded'} />}
+            {deviceQuery.data && !compatibilityUi && <ManagedPrinterControls
+              printerId={printer.id}
+              printerName={printer.name}
+              device={deviceQuery.data}
+              compact={viewMode !== 'expanded'}
+              advancedMode="hidden"
+              presets={{ nozzle: nozzleTempPresets, bed: bedTempPresets, chamber: chamberTempPresets, fan: fanSpeedPresets }}
+            />}
             {deviceQuery.error && <p role="alert" className="mt-2 text-xs text-red-400">{deviceQuery.error.message}</p>}
-            {legacyControls && status.temperatures && viewMode === 'expanded' && <LegacyBambuTemperatures
+            {compatibilityUi && status.temperatures && viewMode === 'expanded' && <LegacyBambuTemperatures
               status={status}
               printer={printer}
               hasPermission={hasPermission}
@@ -3261,7 +3303,7 @@ function PrinterCard({
             {viewMode === 'expanded' && showClearPlateButton && expandedClearPlateButton}
 
             {/* Controls */}
-            {legacyControls && viewMode === 'expanded' && <LegacyBambuControls
+            {compatibilityUi && viewMode === 'expanded' && <LegacyBambuControls
               status={status}
               stopPrintMutation={stopPrintMutation}
               pausePrintMutation={pausePrintMutation}
@@ -3512,7 +3554,7 @@ function PrinterCard({
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => setShowFileManager(true)}
+                  onClick={() => { setFocusPrinterUpload(false); setShowFileManager(true); }}
                   disabled={!hasPermission('printers:files')}
                   title={!hasPermission('printers:files') ? t('printers.permission.noFiles') : t('printers.browseFiles')}
                   className={footerIconButtonClass}
@@ -3540,6 +3582,15 @@ function PrinterCard({
                   <PrinterIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
                   {t('common.print')}
                 </Button>
+                {modelSupports('file_upload') && <Button
+                  size="sm"
+                  onClick={() => { setFocusPrinterUpload(true); setShowFileManager(true); }}
+                  disabled={!status?.connected || !hasPermission('printers:files')}
+                  title={t('common.upload')}
+                  className={`${footerActionButtonClass} !bg-bambu-green hover:!bg-bambu-green/80 !text-white`}
+                >
+                  {t('common.upload')}
+                </Button>}
               </div>
             </div>
         </div>
@@ -3557,11 +3608,22 @@ function PrinterCard({
       </CardContent>
 
       {/* File Manager Modal */}
+      {showAdvancedControls && deviceQuery.data && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowAdvancedControls(false)}>
+          <div ref={advancedControlsPanel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={t('printers.advancedControls', 'Advanced controls')} className="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-xl border border-bambu-dark-tertiary bg-bambu-dark-secondary p-5" onClick={event => event.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-lg font-semibold text-white">{printer.name} · {t('printers.advancedControls', 'Advanced controls')}</h2><Button variant="ghost" size="sm" onClick={() => setShowAdvancedControls(false)} aria-label={t('common.close')}><X className="h-5 w-5" /></Button></div>
+            <ManagedPrinterControls printerId={printer.id} printerName={printer.name} device={deviceQuery.data} advancedOnly />
+          </div>
+        </div>
+      )}
       {showFileManager && (
         <FileManagerModal
           printerId={printer.id}
           printerName={printer.name}
           onClose={() => setShowFileManager(false)}
+          uploadEnabled={modelSupports('file_upload')}
+          uploadAccept={printerUploadAccept(deviceQuery.data)}
+          focusUpload={focusPrinterUpload}
         />
       )}
 

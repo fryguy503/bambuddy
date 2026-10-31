@@ -22,6 +22,8 @@ interface VariantCandidatesProps {
   readOnly?: boolean;
   /** Replaces the help line under the heading when read-only. */
   readOnlyNote?: string;
+  heading?: string;
+  help?: string;
 }
 
 /**
@@ -47,6 +49,8 @@ export function VariantCandidates({
   onPlateChange,
   readOnly = false,
   readOnlyNote,
+  heading,
+  help,
 }: VariantCandidatesProps) {
   const { t } = useTranslation();
 
@@ -96,10 +100,10 @@ export function VariantCandidates({
     <div className="mb-4">
       <div className="flex items-center gap-2 mb-2">
         <PrinterIcon className="w-4 h-4 text-bambu-gray" />
-        <span className="text-sm text-bambu-gray">{t('printModal.variants.title')}</span>
+        <span className="text-sm text-bambu-gray">{heading ?? t('printModal.variants.title')}</span>
       </div>
       <p className="text-xs text-bambu-gray mb-2">
-        {readOnly ? (readOnlyNote ?? t('printModal.variants.help')) : t('printModal.variants.help')}
+        {help ?? (readOnly ? (readOnlyNote ?? t('printModal.variants.help')) : t('printModal.variants.help'))}
       </p>
 
       <div className="space-y-2">

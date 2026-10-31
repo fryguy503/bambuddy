@@ -1067,9 +1067,13 @@ describe('FileManagerPage', () => {
       expect(within(toolbar()).getByRole('button', { name: 'Preview' })).toBeInTheDocument();
       expect(within(toolbar()).getByRole('button', { name: 'Print' })).toBeInTheDocument();
 
-      // A second one makes it one job for either file.
+      // Bulk selection queues each file; alternatives remain an explicit action.
       await user.click(root.getByText('Cube'));
+      expect(await within(toolbar()).findByRole('button', { name: 'Queue 2 files' })).toBeInTheDocument();
       expect(await within(toolbar()).findByRole('button', { name: 'Print (2 alternatives)' })).toBeInTheDocument();
+      await user.click(within(toolbar()).getByRole('button', { name: 'Queue 2 files' }));
+      expect(await screen.findByText('Files to queue')).toBeInTheDocument();
+      expect(screen.getByText('Each file becomes a separate queue job, in this order.')).toBeInTheDocument();
     });
 
     it('offers Combine to 3MF for STLs ticked across columns', async () => {

@@ -73,6 +73,7 @@ import { ConfirmModal } from '../components/ConfirmModal';
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { LibraryTagFilterRail } from '../components/LibraryTagFilterRail';
 import { PrintModal } from '../components/PrintModal';
+import type { VariantCandidate } from '../components/PrintModal/types';
 import { ModelViewerModal } from '../components/ModelViewerModal';
 import { SliceModal } from '../components/SliceModal';
 import { CombineFilesModal } from '../components/CombineFilesModal';
@@ -1848,6 +1849,8 @@ export function FileManagerPage() {
   const [folderDropTarget, setFolderDropTarget] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'file' | 'folder' | 'bulk'; id: number; count?: number } | null>(null);
   const [printFile, setPrintFile] = useState<LibraryFileListItem | null>(null);
+  const [printQueueFiles, setPrintQueueFiles] = useState<VariantCandidate[] | undefined>();
+  const [explicitPrintVariants, setExplicitPrintVariants] = useState<VariantCandidate[] | undefined>();
   const [sliceFile, setSliceFile] = useState<LibraryFileListItem | null>(null);
   const [showCombineModal, setShowCombineModal] = useState(false);
   // A file just built by "Combine to 3MF", handed straight to the SliceModal.
@@ -2797,13 +2800,8 @@ export function FileManagerPage() {
   // action, which files they meant.
   const printVariantFiles = useMemo(() => {
     if (!printFile) return undefined;
-    if (selectedSlicedFiles.length > 1) {
-      return selectedSlicedFiles.map(f => ({
-        id: f.id,
-        filename: f.filename,
-        sliced_for_model: f.sliced_for_model,
-      }));
-    }
+    if (printQueueFiles) return undefined;
+    if (explicitPrintVariants) return explicitPrintVariants;
     if (printFileGroup && printFileGroup.members.length > 1) {
       return printFileGroup.members.map(m => ({
         id: m.library_file_id,
@@ -2812,7 +2810,7 @@ export function FileManagerPage() {
       }));
     }
     return undefined;
-  }, [printFile, selectedSlicedFiles, printFileGroup]);
+  }, [printFile, printQueueFiles, explicitPrintVariants, printFileGroup]);
 
   // The list the arrow keys walk: the one that actually holds the focused
   // file, which may be an intermediate column rather than the selected
@@ -3617,24 +3615,41 @@ export function FileManagerPage() {
                         <span className="hidden sm:inline">{t('fileManager.preview.open')}</span>
                       </Button>
                     )}
-                    {/* Print used to disappear the moment a second sliced file was
-                        selected. Selecting several is now how you say "same job,
-                        different printers" (#671) — one queue item, whichever
-                        machine frees up first. */}
+                    {/* A selection means independent jobs. Alternatives remain an
+                        explicit action so same-model files never become variants. */}
                     {selectedSlicedFiles.length >= 1 && (
                       <Button
                         variant="primary"
                         size="sm"
-                        onClick={() => setPrintFile(selectedSlicedFiles[0])}
+                        onClick={() => {
+                          setExplicitPrintVariants(undefined);
+                          setPrintQueueFiles(selectedSlicedFiles.length > 1 ? selectedSlicedFiles.map(file => ({
+                            id: file.id, filename: file.filename, sliced_for_model: file.sliced_for_model,
+                          })) : undefined);
+                          setPrintFile(selectedSlicedFiles[0]);
+                        }}
                         disabled={!hasPermission('queue:create')}
                         title={!hasPermission('queue:create') ? t('fileManager.noPermissionAddToQueue') : undefined}
                       >
                         <Printer className="w-4 h-4 sm:mr-1" />
                         <span className="hidden sm:inline">
                           {selectedSlicedFiles.length > 1
-                            ? t('fileManager.variants.printAlternatives', { count: selectedSlicedFiles.length })
+                            ? t('printModal.queueFiles', { count: selectedSlicedFiles.length, defaultValue: 'Queue {{count}} files' })
                             : t('common.print')}
                         </span>
+                      </Button>
+                    )}
+                    {selectedSlicedFiles.length >= 2 && (
+                      <Button variant="secondary" size="sm" disabled={!hasPermission('queue:create')}
+                        onClick={() => {
+                          setPrintQueueFiles(undefined);
+                          setExplicitPrintVariants(selectedSlicedFiles.map(file => ({
+                            id: file.id, filename: file.filename, sliced_for_model: file.sliced_for_model,
+                          })));
+                          setPrintFile(selectedSlicedFiles[0]);
+                        }}>
+                        <Printer className="w-4 h-4 sm:mr-1" />
+                        <span className="hidden sm:inline">{t('fileManager.variants.printAlternatives', { count: selectedSlicedFiles.length })}</span>
                       </Button>
                     )}
                     {selectedSlicedFiles.length >= 2 && !selectedSlicedFiles.some(f => f.variant_group_id) && (
@@ -4282,21 +4297,24 @@ export function FileManagerPage() {
       {/* Held back until the variant group has loaded. The modal reads its
           candidate list once, on mount, so opening before the group arrives
           would show a single-file print for a file that has alternatives. */}
-      {printFile && (!printFile.variant_group_id || printFileGroup !== undefined) && (
+      {printFile && (printQueueFiles || explicitPrintVariants || !printFile.variant_group_id || printFileGroup !== undefined) && (
         <PrintModal
           mode="create"
           libraryFileId={printVariantFiles?.[0]?.id ?? printFile.id}
           variantFiles={printVariantFiles}
+          queueFiles={printQueueFiles}
           // Naming a cross-model job after one of its files reads as though the
           // others aren't part of it.
           archiveName={
-            printVariantFiles && printVariantFiles.length > 1
-              ? `${printVariantFiles[0].filename} ${t('common.plusNMore', { count: printVariantFiles.length - 1 })}`
+            (printQueueFiles || printVariantFiles || []).length > 1
+              ? `${(printQueueFiles || printVariantFiles)![0].filename} ${t('common.plusNMore', { count: (printQueueFiles || printVariantFiles)!.length - 1 })}`
               : printFile.print_name || printFile.filename
           }
-          onClose={() => setPrintFile(null)}
+          onClose={() => { setPrintFile(null); setPrintQueueFiles(undefined); setExplicitPrintVariants(undefined); }}
           onSuccess={() => {
             setPrintFile(null);
+            setPrintQueueFiles(undefined);
+            setExplicitPrintVariants(undefined);
             setSelectedFiles([]);
             queryClient.invalidateQueries({ queryKey: ['library-files'] });
             queryClient.invalidateQueries({ queryKey: ['queue'] });

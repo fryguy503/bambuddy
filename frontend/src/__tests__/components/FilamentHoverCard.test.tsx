@@ -31,6 +31,20 @@ describe('FilamentHoverCard', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
+  it('supports click, outside dismissal and Escape for generic resource inspectors', async () => {
+    render(<FilamentHoverCard clickable ariaLabel="Material source" data={{ profile: 'PETG', colorName: '', colorHex: '#123456', fillLevel: 50 }}><button>Open source</button></FilamentHoverCard>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open source' }));
+    expect(screen.getByRole('dialog', { name: 'Material source' })).toBeInTheDocument();
+    expect(screen.queryByText('K Factor')).not.toBeInTheDocument();
+    expect(screen.queryByText('BBL')).not.toBeInTheDocument();
+    expect(screen.queryByText('GEN')).not.toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open source' }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   describe('fill level display', () => {
     it('shows fill percentage when fillLevel is set', async () => {
       renderWithHover(

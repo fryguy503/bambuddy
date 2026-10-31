@@ -7,7 +7,7 @@ import { isLightColor, resolveSpoolColorName } from '../utils/colors';
 import { buildFilamentBackground, parseStops } from './filamentSwatchHelpers';
 
 interface FilamentData {
-  vendor: 'Bambu Lab' | 'Generic';
+  vendor?: string;
   profile: string;
   /** Catalogue name for the loaded colour. Callers that know the material
    *  should resolve it with ``getColorName(hex, tray_sub_brands)`` -- a white
@@ -15,7 +15,7 @@ interface FilamentData {
    *  (#2875). An assigned spool overrides this; see ``displayColorName``. */
   colorName: string;
   colorHex: string | null;
-  kFactor: string;
+  kFactor?: string;
   fillLevel: number | null; // null = unknown
   trayUuid?: string | null; // Bambu Lab spool UUID for Spoolman linking
   tagUid?: string | null; // Generic NFC tag UID fallback for linking
@@ -68,13 +68,15 @@ interface FilamentHoverCardProps {
   inventory?: InventoryConfig;
   configureSlot?: ConfigureSlotConfig;
   actions?: ReactNode;
+  clickable?: boolean;
+  ariaLabel?: string;
 }
 
 /**
  * A hover card that displays filament details when hovering over AMS slots.
  * Replaces the basic browser tooltip with a styled popover.
  */
-export function FilamentHoverCard({ data, children, disabled, className = '', spoolman, inventory, configureSlot, actions }: FilamentHoverCardProps) {
+export function FilamentHoverCard({ data, children, disabled, className = '', spoolman, inventory, configureSlot, actions, clickable = false, ariaLabel }: FilamentHoverCardProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [isVisible, setIsVisible] = useState(false);
@@ -89,6 +91,14 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
   const triggerRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!clickable || !isVisible) return;
+    const dismissOutside = (event: PointerEvent) => { if (!triggerRef.current?.contains(event.target as Node) && !cardRef.current?.contains(event.target as Node)) { if (timeoutRef.current) clearTimeout(timeoutRef.current); setIsVisible(false); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { if (timeoutRef.current) clearTimeout(timeoutRef.current); setIsVisible(false); } };
+    document.addEventListener('pointerdown', dismissOutside);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', dismissOutside); document.removeEventListener('keydown', escape); };
+  }, [clickable, isVisible]);
 
   const handleCopyUuid = () => {
     const uuid = data.trayUuid;
@@ -286,6 +296,7 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
       className={`relative ${className}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onClick={clickable ? () => { if (disabled) return; if (timeoutRef.current) clearTimeout(timeoutRef.current); setIsVisible(visible => !visible); } : undefined}
     >
       {children}
 
@@ -297,6 +308,9 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
       {isVisible && createPortal(
         <div
           ref={cardRef}
+          role={ariaLabel ? 'dialog' : undefined}
+          aria-label={ariaLabel}
+          aria-modal={ariaLabel ? false : undefined}
           className="fixed z-[60]"
           style={{
             top: coords?.top ?? -9999,
@@ -307,6 +321,7 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
           }}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
+          onClick={clickable ? event => event.stopPropagation() : undefined}
         >
           {/* Card container */}
           <div className="
@@ -342,14 +357,14 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
               </div>
 
               {/* Vendor badge - solid background for visibility on any color */}
-              <div className={`
+              {data.vendor && <div className={`
                 absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider
                 ${data.vendor === 'Bambu Lab'
                   ? 'bg-black/60 text-white'
                   : 'bg-black/50 text-white/90'}
               `}>
-                {data.vendor === 'Bambu Lab' ? 'BBL' : 'GEN'}
-              </div>
+                {data.vendor === 'Bambu Lab' ? 'BBL' : data.vendor === 'Generic' ? 'GEN' : data.vendor}
+              </div>}
             </div>
 
             {/* Details section */}
@@ -365,14 +380,14 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
               </div>
 
               {/* K Factor */}
-              <div className="flex items-center justify-between">
+              {data.kFactor !== undefined && <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-wider text-bambu-gray font-medium">
                   {t('ams.kFactor')}
                 </span>
                 <span className="text-xs text-bambu-green font-mono font-bold">
                   {data.kFactor}
                 </span>
-              </div>
+              </div>}
 
               {/* Fill Level */}
               <div className="space-y-1">
