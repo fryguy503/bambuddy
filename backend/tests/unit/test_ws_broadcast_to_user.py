@@ -142,3 +142,22 @@ async def test_send_queue_item_failed_carries_reason_key():
         "printer_id": 2,
         "reason": "upload_failed",
     }
+
+
+@pytest.mark.asyncio
+async def test_send_queue_item_failed_preserves_public_error_without_extra_details():
+    mgr = ConnectionManager()
+    target = _mock_conn(99)
+    mgr.active_connections = [target]
+    message = "The selected material does not match the sliced filament type"
+    await mgr.send_queue_item_failed(
+        user_id=99, queue_item_id=8, printer_id=2, reason="start_command_failed", error_message=message
+    )
+    payload = json.loads(target.send_text.await_args.args[0])
+    assert payload == {
+        "type": "queue_item_failed",
+        "queue_item_id": 8,
+        "printer_id": 2,
+        "reason": "start_command_failed",
+        "error_message": message,
+    }

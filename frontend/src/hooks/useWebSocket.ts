@@ -31,6 +31,8 @@ interface WebSocketMessage {
   data?: Record<string, unknown>;
   printer_name?: string;
   filename?: string;
+  // Validated public dispatch error; forwarded unchanged as plain text.
+  error_message?: string;
   missing_slots?: Array<{ slot?: string }>;
   // Spool-assignment read-back verification (#2582).
   slot?: string;

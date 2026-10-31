@@ -105,6 +105,24 @@ describe('Dispatch toast (inside ToastContext)', () => {
     expect(screen.queryByTestId('dispatch-toast-wrapper')).toBeNull();
   });
 
+  it('shows the public plugin failure as escaped text instead of claiming hardware rejected the start', () => {
+    const { container } = render(<div />);
+    emit({ type: 'queue_item_uploading', queue_item_id: 7, printer_id: 1, printer_name: 'KS1', file_name: 'job.gcode', total_bytes: 100 });
+    const message = 'Selected material needs review <img src=x onerror="alert(1)">';
+    emit({ type: 'queue_item_failed', queue_item_id: 7, reason: 'start_command_failed', error_message: message, details: { token: 'PRIVATE-DETAILS' } });
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByText('Printer rejected start command')).not.toBeInTheDocument();
+    expect(screen.queryByText(/PRIVATE-DETAILS/)).not.toBeInTheDocument();
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('retains the translated legacy failure when no public message is present', () => {
+    render(<div />);
+    emit({ type: 'queue_item_uploading', queue_item_id: 7, printer_id: 1, printer_name: 'KS1', file_name: 'job.gcode', total_bytes: 100 });
+    emit({ type: 'queue_item_failed', queue_item_id: 7, reason: 'start_command_failed' });
+    expect(screen.getByText('Printer rejected start command')).toBeInTheDocument();
+  });
+
   it('collapse hides job rows but keeps the header visible', () => {
     render(<div />);
     emit({ type: 'queue_item_uploading', queue_item_id: 1, printer_id: 1, printer_name: 'H2D-1', file_name: 'a.3mf', total_bytes: 1000 });

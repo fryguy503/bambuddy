@@ -386,6 +386,7 @@ class ConnectionManager:
         queue_item_id: int,
         printer_id: int | None,
         reason: str,
+        error_message: str | None = None,
     ):
         """Toast trigger: dispatch failed at any stage. Toast turns red, auto-dismisses."""
         await self.broadcast_to_user(
@@ -395,6 +396,7 @@ class ConnectionManager:
                 "queue_item_id": queue_item_id,
                 "printer_id": printer_id,
                 "reason": reason,
+                **({"error_message": error_message} if error_message else {}),
             },
         )
 

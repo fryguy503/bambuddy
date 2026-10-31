@@ -9989,13 +9989,27 @@ class PrintScheduler:
         # parses + injects it only for dual-nozzle models so a null on every
         # other model is a transparent pass-through. The rack fallback is
         # resolved down there too, where the live rack position is known.
-        from backend.app.printers.job_dispatch import start_queue_job
+        from backend.app.printers.job_dispatch import JobDispatchRejected, start_queue_job
+        from backend.app.printers.sdk import SDKValidationError
 
         dispatch_printer_id = item.printer_id
         if dispatch_printer_id is None:
             raise ValueError("A queue job must have a printer before dispatch")
+        dispatch_error = None
         if typed_dispatch:
-            started = await start_queue_job(item, printer, managed_connection, remote_filename)
+            try:
+                started = await start_queue_job(item, printer, managed_connection, remote_filename)
+            except (JobDispatchRejected, SDKValidationError) as exc:
+                # These are deliberate public provider/SDK errors, not raw
+                # transport exceptions or private receipt details.
+                dispatch_error = str(exc)
+                logger.warning(
+                    "Queue item %s: SDK job.start rejected (%s): %s",
+                    item.id,
+                    getattr(exc, "code", "schema_validation"),
+                    dispatch_error,
+                )
+                started = False
         else:
             started = printer_manager.start_print(
                 dispatch_printer_id,
@@ -10155,14 +10169,15 @@ class PrintScheduler:
                 return
 
             # Print command failed - revert status
-            if not await self._fail_dispatch(db, item, "Failed to send print command to printer"):
+            if not await self._fail_dispatch(db, item, dispatch_error or "Failed to send print command to printer"):
                 await self._close_cancelled_dispatch_toast(item, toast_uid)
                 return
             logger.error(
-                f"Queue item {item.id}: Failed to start print on {printer.name} ({printer.model}) - "
-                f"printer_manager.start_print() returned False. "
-                f"This may indicate: printer not connected, MQTT error, unsupported model configuration, or firmware issue. "
-                f"Check printer status and backend logs for details."
+                "Queue item %s: Failed to start print on %s (%s): %s",
+                item.id,
+                printer.name,
+                printer.model,
+                dispatch_error or "The print command was not accepted; check printer connection and status",
             )
 
             # Send failure notification
@@ -10170,7 +10185,8 @@ class PrintScheduler:
                 job_name=filename.replace(".gcode.3mf", "").replace(".3mf", ""),
                 printer_id=printer.id,
                 printer_name=printer.name,
-                reason="Failed to send print command to printer - check printer connection and status",
+                reason=dispatch_error
+                or "Failed to send print command to printer - check printer connection and status",
                 db=db,
             )
             try:
@@ -10179,6 +10195,7 @@ class PrintScheduler:
                     queue_item_id=item.id,
                     printer_id=item.printer_id,
                     reason="start_command_failed",
+                    error_message=dispatch_error,
                 )
             except Exception:
                 pass

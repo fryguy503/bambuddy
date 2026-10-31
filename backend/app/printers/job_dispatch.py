@@ -3,7 +3,7 @@
 from pathlib import PurePosixPath
 
 from backend.app.printers.api import execute_host_command, printer_api
-from backend.app.printers.contracts import PrinterConfig
+from backend.app.printers.contracts import PrinterConfig, PrinterPluginError
 from backend.app.printers.registry import plugin_for
 from backend.app.printers.sdk import (
     JobArtifact,
@@ -13,6 +13,16 @@ from backend.app.printers.sdk import (
     SDKValidationError,
     validate_job_request,
 )
+
+
+class JobDispatchRejected(PrinterPluginError):
+    """A validated public receipt rejection, without private error details."""
+
+    def __init__(self, receipt):
+        error = receipt.error
+        self.code = "".join(char for char in error.code if char.isprintable())[:128] if error else "job.start_rejected"
+        message = error.message if error else "The printer support rejected the print command."
+        super().__init__("".join(char if char.isprintable() else " " for char in message).strip()[:2000])
 
 
 def queue_job_plan(item, config: PrinterConfig, filename: str) -> JobRequest:
@@ -67,8 +77,10 @@ async def start_queue_job(item, printer, connection, filename: str, **legacy_opt
         job = queue_job_plan(item, config, filename)
         receipt = await printer_api.invoke(
             config,
-            connection._connection if hasattr(connection, "_connection") else connection,
+            connection,
             OperationRequest(operation_id="job.start", parameters=job.model_dump(mode="json", exclude_none=True)),
         )
-        return receipt.status in {"accepted", "running", "succeeded"} and receipt.result is not False
+        if receipt.status not in {"accepted", "running", "succeeded"} or receipt.result is False:
+            raise JobDispatchRejected(receipt)
+        return True
     return bool(await execute_host_command(connection, "start_print", filename, **legacy_options))

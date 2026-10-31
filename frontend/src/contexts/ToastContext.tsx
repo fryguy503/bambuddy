@@ -24,6 +24,7 @@ interface DispatchToastJob {
   uploadTotalBytes?: number;
   uploadProgressPct?: number;
   failReason?: string;
+  failMessage?: string;
 }
 
 interface DispatchToastData {
@@ -112,6 +113,7 @@ interface DispatchEventDetail {
   bytes_transferred?: number;
   pct?: number;
   reason?: string;
+  error_message?: string;
 }
 
 function isAwaitingPrinter(job: DispatchToastJob): boolean {
@@ -266,6 +268,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               ...existingJob,
               status: 'failed',
               failReason: detail.reason,
+              failMessage: typeof detail.error_message === 'string' ? detail.error_message.trim().slice(0, 2000) : undefined,
             };
             break;
           default:
@@ -448,9 +451,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                                 {typeof job.uploadProgressPct === 'number' ? ` (${job.uploadProgressPct.toFixed(1)}%)` : ''}
                               </div>
                             ) : null
-                          ) : job.status === 'failed' && job.failReason ? (
-                            <div className="text-[11px] text-red-400 truncate">
-                              {t(`dispatchToast.failed.${job.failReason}`, { defaultValue: t('dispatchToast.failed.generic') })}
+                          ) : job.status === 'failed' && (job.failMessage || job.failReason) ? (
+                            <div className={'text-[11px] text-red-400 ' + (job.failMessage ? 'break-words' : 'truncate')}>
+                              {job.failMessage || t(`dispatchToast.failed.${job.failReason}`, { defaultValue: t('dispatchToast.failed.generic') })}
                             </div>
                           ) : null}
                           <div className="mt-1 h-1.5 w-full rounded bg-white/10 overflow-hidden">

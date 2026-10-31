@@ -154,6 +154,65 @@ async def test_busy_printer_observer_refreshes_immediately_and_retains_original_
     assert case.coordinator.describe(case.old.id)["status"] == "current"
 
 
+async def test_core_queue_receipt_retains_original_adapter_before_running_telemetry(
+    rolling_case, printer_factory, monkeypatch
+):
+    from backend.app.printers.job_dispatch import start_queue_job
+    from backend.app.printers.sdk import DeviceDescriptor, JobRequest, ResourceDescriptor
+
+    case = rolling_case
+    case.old.api_version = case.new.api_version = 2
+
+    def describe(config):
+        return DeviceDescriptor(
+            device_id=config.serial_number,
+            resources=[ResourceDescriptor(id="tool:opaque", kind="tool", label="Physical tool")],
+            operations=[
+                OperationDescriptor(
+                    id="job.start",
+                    label="Start job",
+                    asynchronous=True,
+                    parameters_schema=JobRequest.model_json_schema(),
+                )
+            ],
+        )
+
+    monkeypatch.setattr(case.old, "describe_device", describe)
+    monkeypatch.setattr(case.new, "describe_device", describe)
+    printer = await printer_factory(plugin_id=case.old.id)
+    original = case.attach(printer, "IDLE")
+    native = original._connection
+    sent = []
+
+    async def invoke(config, connection, request):
+        assert connection is native
+        sent.append(request)
+        case.old.receipt = OperationReceipt(
+            operation_id=request.operation_id,
+            request_id=request.request_id,
+            status="accepted",
+            task_id="native-pending-start",
+        )
+        return case.old.receipt
+
+    monkeypatch.setattr(case.old, "invoke", invoke)
+    item = SimpleNamespace(
+        id=9001, sdk_job=None, tool_ids=["tool:opaque"], material_bindings=None, job_options={}, plate_id=None
+    )
+    assert await start_queue_job(item, printer, original, "uploaded.gcode")
+    assert native.state.state == "IDLE"  # Hardware has not published RUNNING yet.
+    assert "native-pending-start" in original._active_tasks
+    assert len(sent) == 1
+    await case.request()
+    await case.coordinator.run_once()
+    assert case.manager.get_client(printer.id)._plugin is case.new
+    assert case.manager.retained_connection(printer.id, case.old) is original
+    assert native.disconnected == 0
+    await original.poll_pending_operations()
+    assert case.old.polled and set(case.old.polled) == {"native-pending-start"}
+    assert case.new.polled == [] and len(sent) == 1
+
+
 @pytest.mark.parametrize("blocker", ["upload", "dispatch", "queue", "provider", "lease"])
 async def test_existing_work_retains_its_handler_without_delaying_new_observer(
     rolling_case, printer_factory, db_session, blocker
