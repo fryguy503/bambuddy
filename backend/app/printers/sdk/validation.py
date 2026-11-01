@@ -291,6 +291,7 @@ def validate_plugin_contract(
         if manifest.api_version == 2:
             inspect.signature(plugin.describe_device).bind(placeholder)
             inspect.signature(plugin.describe_job).bind(placeholder, object(), object())
+            inspect.signature(plugin.preflight_job).bind(placeholder, object(), object(), object())
             inspect.signature(plugin.connection_diagnostics).bind(
                 placeholder, connection=None, wait_for_publish_seconds=0.0, progress=None
             )

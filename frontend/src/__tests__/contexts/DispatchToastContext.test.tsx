@@ -123,6 +123,41 @@ describe('Dispatch toast (inside ToastContext)', () => {
     expect(screen.getByText('Printer rejected start command')).toBeInTheDocument();
   });
 
+  it('keeps a material-blocked job queued and ends its existing dispatch attempt without a failure', () => {
+    render(<div />);
+    emit({ type: 'queue_item_uploading', queue_item_id: 7, printer_id: 1, printer_name: 'KS1', file_name: 'job.gcode', total_bytes: 100 });
+    emit({ type: 'queue_item_waiting', queue_item_id: 7, printer_id: 1, reason: 'material_selection', message: 'Choose a loaded slot for T0.' });
+    expect(screen.getByTestId('dispatch-toast-status-7')).toHaveTextContent('Queued');
+    expect(screen.getByText('Choose a loaded slot for T0.')).toBeInTheDocument();
+    expect(screen.queryByText('Dispatch failed')).not.toBeInTheDocument();
+    expect(screen.getByText('1/1 complete • Processing: 0')).toBeInTheDocument();
+
+    act(() => { vi.advanceTimersByTime(3000); });
+    emit({ type: 'queue_item_waiting', queue_item_id: 7, reason: 'material_selection', message: 'Choose a loaded slot for T0.' });
+    act(() => { vi.advanceTimersByTime(501); });
+    expect(screen.queryByTestId('dispatch-toast-wrapper')).toBeNull();
+    emit({ type: 'queue_item_waiting', queue_item_id: 7, reason: 'material_selection', message: 'Choose a loaded slot for T0.' });
+    expect(screen.queryByTestId('dispatch-toast-wrapper')).toBeNull();
+  });
+
+  it('does not create a dispatch toast for a background material refresh or an unknown held job', () => {
+    render(<div />);
+    emit({ type: 'queue_item_waiting', queue_item_id: 91, reason: 'refresh', message: 'Waiting for current filament status.' });
+    expect(screen.queryByTestId('dispatch-toast-wrapper')).toBeNull();
+  });
+
+  it.each(['failed', 'acked'])('does not replace a terminal %s dispatch with a delayed waiting update', (terminal) => {
+    render(<div />);
+    emit({ type: 'queue_item_uploading', queue_item_id: 7, file_name: 'job.gcode' });
+    emit({ type: `queue_item_${terminal}`, queue_item_id: 7, reason: 'start_command_failed' });
+    const status = terminal === 'failed' ? 'Failed' : 'Completed';
+    emit({ type: 'queue_item_waiting', queue_item_id: 7, reason: 'refresh', message: 'Delayed readiness result' });
+    expect(screen.getByTestId('dispatch-toast-status-7')).toHaveTextContent(status);
+    expect(screen.queryByText('Delayed readiness result')).not.toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(3501); });
+    expect(screen.queryByTestId('dispatch-toast-wrapper')).toBeNull();
+  });
+
   it('collapse hides job rows but keeps the header visible', () => {
     render(<div />);
     emit({ type: 'queue_item_uploading', queue_item_id: 1, printer_id: 1, printer_name: 'H2D-1', file_name: 'a.3mf', total_bytes: 1000 });

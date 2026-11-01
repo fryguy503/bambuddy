@@ -1411,6 +1411,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "Na fila",
+      selectionHelp: "Escolha um slot com filamento carregado para este trabalho. Ele manterá sua posição na fila.",
+      refreshHelp: "Aguardando o estado atual do filamento. Este trabalho permanece na fila.",
+      updateSelection: "Atualizar seleção de filamento",
+    },
     filamentShort: {
       rowBadge: 'Filamento insuficiente para a bobina atribuida',
       rowTooltip: 'O escalonador sinalizou este item. Clique em Play para ver o deficit por slot e decidir se quer imprimir mesmo assim.',

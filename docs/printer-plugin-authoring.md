@@ -26,6 +26,7 @@ python -m backend.app.printers.sdk schema receipt
 python -m backend.app.printers.sdk schema event
 python -m backend.app.printers.sdk schema job-event-data
 python -m backend.app.printers.sdk schema job-description
+python -m backend.app.printers.sdk schema job-preflight
 ```
 
 ## Compatibility and package identity
@@ -92,6 +93,7 @@ model descriptors. Supply the methods below:
 | `create_connection(config, *, on_event=None)` | Return a managed connection; explicitly opt into typed events without requiring `**kwargs` |
 | `describe_device(config)` | Return a validated `DeviceDescriptor` |
 | `describe_job(config, artifact, path)` | SDK 2.2: inspect an authorized local artifact and return its material inputs, option schema and defaults without sending printer commands |
+| `preflight_job(config, connection, job, path)` | SDK 2.4: optional read-only readiness check before upload; return `JobPreflightResult` or its dictionary representation |
 | `snapshot_device(config, connection)` | Return a `DeviceSnapshot` with normalized resource values |
 | `operation_handlers(connection)` | Map declared operation IDs to handlers accepting one `OperationRequest` |
 | `invoke(config, connection, request)` | Default implementation validates, calls the matching handler and validates its result; override only while retaining that contract |
@@ -398,6 +400,39 @@ The host resolves `library:<id>` or `archive:<id>` against authorized stored
 files and substitutes the actual uploaded artifact URI. Submit print jobs
 through the normal queue workflow so permissions, budget, plate-clear gates
 and host checks are retained.
+
+### Recoverable job readiness (SDK 2.4)
+
+`preflight_job(config, connection, job, path)` receives the existing connection,
+normalized job plan and authorized local source path before the scheduler
+consumes a library file, preheats, uploads or starts a print. It must only read
+state and the source file: do not reserve a dispatch, upload, start a print or
+change hardware. The default implementation returns an empty result, preserving
+existing providers. Declare `requires_api = ">=2.4.0,<3.0.0"` when relying on
+recoverable queue readiness.
+
+Return `JobPreflightResult(issues=[])` when ready. Otherwise return issues with
+public `code` and `message`, `recovery="refresh"` for temporarily stale telemetry
+or `recovery="material_selection"` when an operator must update/load the selected
+material. Optional `input_ids` refer to the job's material bindings;
+`resource_ids` refer to declared device resources. Core rejects foreign
+references. Keep protocol numbers and material policy inside the provider.
+
+The same queue item remains pending with its order and manual-start choice
+intact. Core exposes a readable waiting reason and a structured host-owned
+`sdk_job.extensions["bambuddy:queue_hold"]` object containing `kind`, `code`,
+`message`, `input_ids` and `resource_ids`. The existing material editor changes
+the plan; a later successful preflight clears the hold. A provider must recheck
+live material state at its final submission boundary as well.
+
+If material changes after preflight, `job.start` may return a failed receipt
+with `error.code="job.material_selection_required"` and
+`error.details={"not_submitted": true, "issues": [...]}` using the same issue
+schema. This declaration is permitted only before any durable dispatch
+reservation or print-command submission. Core then returns the item to pending
+instead of failure history. A generic retryable error, transport uncertainty,
+existing intent, accepted command or running print never authorizes automatic
+retry. Do not use this receipt to discard an uncertain dispatch hold.
 
 ## HTTP access for integrations
 

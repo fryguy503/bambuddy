@@ -183,8 +183,8 @@ describe('independent File Manager batch queue', () => {
     expect(submitted.every(item => !item.variants)).toBe(true);
     expect(submitted.map(item => item.sdk_job?.artifact.uri)).toEqual(['library:11', 'library:12']);
     expect(submitted.map(item => item.sdk_job?.bindings)).toEqual([
-      [{ input_id: 'T0', tool_id: 'tool:primary', source_id: 'source:ace:1:3', required_mass_grams: 11 }],
-      [{ input_id: 'T7', tool_id: 'tool:primary', source_id: 'source:ace:1:3', required_mass_grams: 12 }],
+      [{ input_id: 'T0', tool_id: 'tool:primary', source_id: 'source:ace:1:3', required_mass_grams: 11, material: { material_type: 'PLA', color: '#0000FFFF' } }],
+      [{ input_id: 'T7', tool_id: 'tool:primary', source_id: 'source:ace:1:3', required_mass_grams: 12, material: { material_type: 'PLA', color: '#0000FFFF' } }],
     ]);
     expect(submitted.map(item => item.job_options)).toEqual([{ leveling: true }, { leveling: true }]);
   });
@@ -329,8 +329,67 @@ describe('independent File Manager batch queue', () => {
     const payload = saved.mock.lastCall![0] as PrintQueueItemUpdate;
     expect(payload.sdk_job?.job_id).toBe('original-job');
     expect(payload.sdk_job?.bindings).toEqual([
-      { input_id: 'T0', tool_id: 'tool:primary', source_id: 'source:ace:1:3', required_mass_grams: 11 },
+      { input_id: 'T0', tool_id: 'tool:primary', source_id: 'source:ace:1:3', required_mass_grams: 11, material: { material_type: 'PLA', color: '#0000FFFF' } },
     ]);
     expect(payload.job_options).toEqual({ leveling: false });
+  });
+
+  it.each([false, true])('updates a held ACE selection through the existing editor while preserving manual_start=%s', async (manualStart) => {
+    const saved = vi.fn();
+    const unexpectedStart = vi.fn();
+    const oldSource = { ...DEVICE.resources[1], id: 'source:ace:0:1', label: 'ACE 1 slot 2' };
+    server.use(
+      http.get('/api/v1/printers/:id/device', () => HttpResponse.json({ ...DEVICE, resources: [...DEVICE.resources, oldSource] })),
+      http.get('/api/v1/printers/:id/device-state', () => HttpResponse.json({
+        schema_version: 2, device_id: DEVICE.device_id, connected: true, status: 'idle', descriptor_revision: DEVICE.revision,
+        observed_at: new Date().toISOString(), sequence: 1, extensions: {}, resources: [
+          { resource_id: oldSource.id, available: false, status: 'empty', properties: {} },
+          { resource_id: 'source:ace:1:3', available: true, status: 'loaded', properties: {
+            material_type: { value: 'PLA', quality: 'known', observed_at: new Date().toISOString() },
+            color: { value: '#0000FFFF', quality: 'known', observed_at: new Date().toISOString() },
+          } },
+        ],
+      })),
+      http.post('/api/v1/printers/:id/job-description', () => {
+        const value = overrideDescription(11);
+        value.inputs[0].compatible_source_ids.push(oldSource.id);
+        return HttpResponse.json(value);
+      }),
+      http.patch('/api/v1/queue/90', async ({ request }) => {
+        saved(await request.json() as PrintQueueItemUpdate);
+        return HttpResponse.json({ id: 90, status: 'pending', manual_start: manualStart, position: 7 });
+      }),
+      http.post('/api/v1/queue/', () => { unexpectedStart(); return HttpResponse.json({ id: 91 }); }),
+      http.post('/api/v1/queue/:id/start', () => { unexpectedStart(); return HttpResponse.json({}); }),
+      http.post('/api/v1/printers/:id/operations/:operation', () => { unexpectedStart(); return HttpResponse.json({}); }),
+    );
+    render(<PrintModal mode="edit-queue-item" libraryFileId={11} archiveName="First" onClose={() => {}}
+      queueItem={{ id: 90, printer_id: 41, plate_id: null, manual_start: manualStart, status: 'pending', position: 7, sdk_job: {
+        job_id: 'held-job', artifact: description(11).artifact, selected_tool_ids: ['tool:primary'],
+        bindings: [{ input_id: 'T0', tool_id: 'tool:primary', source_id: oldSource.id }],
+        options: { use_ace: true, leveling: false }, extensions: { 'bambuddy:queue_hold': {
+          kind: 'material_selection', code: 'material.unavailable', message: 'The selected slot is empty.',
+          input_ids: ['T0'], resource_ids: [oldSource.id],
+        } },
+      } } as PrintQueueItem} />);
+    const picker = await screen.findByRole('combobox', { name: 'Blue PLA' });
+    await userEvent.click(picker);
+    expect(screen.queryByRole('option', { name: /ACE 1 slot 2/ })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('option', { name: /ACE 2 slot 4/ }));
+    expect(unexpectedStart).not.toHaveBeenCalled();
+    const save = screen.getByRole('button', { name: 'Save' });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+    const payload = saved.mock.lastCall![0] as PrintQueueItemUpdate;
+    expect(payload.manual_start).toBe(manualStart);
+    expect(payload.sdk_job?.job_id).toBe('held-job');
+    expect(payload.sdk_job?.bindings[0]).toMatchObject({
+      input_id: 'T0', source_id: 'source:ace:1:3', material: { material_type: 'PLA', color: '#0000FFFF' },
+    });
+    expect(payload.sdk_job?.extensions).not.toHaveProperty('bambuddy:queue_hold');
+    expect(payload).not.toHaveProperty('position');
+    expect(payload).not.toHaveProperty('quantity');
+    expect(unexpectedStart).not.toHaveBeenCalled();
   });
 });

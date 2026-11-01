@@ -91,6 +91,7 @@ import { BatchOrdersView } from '../components/BatchOrdersView';
 import { ThumbnailHoverPreview } from '../components/ThumbnailHoverPreview';
 import { buildLoadedFilaments, type LoadedFilament } from '../hooks/useFilamentMapping';
 import { hasGcodeSnippets, useUiSettings } from '../hooks/useUiSettings';
+import { queueJobHold } from '../printer-plugins/queueHold';
 
 // The scheduler's MODEL_GATE_WAIT_REASON (print_scheduler.py).
 const MODEL_GATE_WAIT_REASON = 'The last print failed on every free matching printer';
@@ -606,6 +607,7 @@ function SortableQueueItem({
   const { hasAnyPermission } = useAuth();
   // Their waiting jobs are started by someone who manages the queue (#1620)
   const awaitingReview = !hasAnyPermission('queue:update_all', 'queue:start_unreviewed');
+  const materialHold = item.status === 'pending' ? queueJobHold(item.sdk_job) : null;
   const hasPhysicalAmsMapping =
     item.printer_id != null && (item.ams_mapping?.some((trayId) => trayId >= 0) ?? false);
 
@@ -1068,6 +1070,23 @@ function SortableQueueItem({
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
               <span>{item.waiting_reason}</span>
             </p>
+          )}
+
+          {materialHold && (
+            <div role="status" className="mt-2 space-y-2 text-xs text-yellow-700 dark:text-yellow-400">
+              {!item.waiting_reason && <p>{materialHold.message}</p>}
+              <p>{t(materialHold.kind === 'material_selection' ? 'queue.materialHold.selectionHelp' : 'queue.materialHold.refreshHelp')}</p>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={(event) => { event.stopPropagation(); onEdit(); }}
+                disabled={!canModify('queue', 'update', item.created_by_id)}
+                title={!canModify('queue', 'update', item.created_by_id) ? t('queue.permissions.noEdit') : undefined}
+              >
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                {t('queue.materialHold.updateSelection')}
+              </Button>
+            </div>
           )}
 
           {/* Filament-short flag from the dispatch pre-flight (#1496). */}

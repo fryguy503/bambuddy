@@ -1411,6 +1411,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "In Warteschlange",
+      selectionHelp: "Wähle einen geladenen Filamentplatz für diesen Auftrag. Seine Position in der Warteschlange bleibt erhalten.",
+      refreshHelp: "Warten auf den aktuellen Filamentstatus. Dieser Auftrag bleibt in der Warteschlange.",
+      updateSelection: "Filamentauswahl ändern",
+    },
     filamentShort: {
       rowBadge: 'Filament fuer die zugewiesene Spule reicht nicht',
       rowTooltip: 'Der Dispatcher hat diese Position markiert. Klicke auf Play, um den Pro-Slot-Fehlbestand zu sehen und zu entscheiden, ob trotzdem gedruckt werden soll.',

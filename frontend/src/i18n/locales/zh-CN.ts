@@ -1411,6 +1411,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "排队中",
+      selectionHelp: "请为此任务选择已装载耗材的料槽。任务将保留在队列中的原有位置。",
+      refreshHelp: "正在等待最新耗材状态。此任务将保留在队列中。",
+      updateSelection: "更新耗材选择",
+    },
     filamentShort: {
       rowBadge: '所分配料盘的耀丝不足',
       rowTooltip: '调度程序已标记该项。点击播放查看各插槽的赤字并决定是否仍要打印。',

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from pydantic import Field, JsonValue, model_validator
@@ -94,6 +94,36 @@ class JobDescription(SDKModel):
         if len(self.inputs) != len({item.id for item in self.inputs}):
             raise ValueError("Job input IDs must be unique within an artifact")
         return self
+
+
+class JobPreflightIssue(SDKModel):
+    """A recoverable condition observed before a print command is submitted."""
+
+    code: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=2000)
+    recovery: Literal["refresh", "material_selection"]
+    input_ids: list[str] = Field(default_factory=list, max_length=256)
+    resource_ids: list[ResourceId] = Field(default_factory=list, max_length=256)
+
+
+class JobPreflightResult(SDKModel):
+    issues: list[JobPreflightIssue] = Field(default_factory=list, max_length=64)
+
+    @property
+    def ready(self) -> bool:
+        return not self.issues
+
+
+def validate_job_preflight(device: DeviceDescriptor, job: JobRequest, value) -> JobPreflightResult:
+    result = value if isinstance(value, JobPreflightResult) else JobPreflightResult.model_validate(value)
+    inputs = {binding.input_id for binding in job.bindings}
+    resources = {resource.id for resource in device.resources}
+    for issue in result.issues:
+        if not set(issue.input_ids).issubset(inputs):
+            raise SDKValidationError("Preflight references an unknown job input")
+        if not set(issue.resource_ids).issubset(resources):
+            raise SDKValidationError("Preflight references an unknown device resource")
+    return result
 
 
 def validate_job_description(device: DeviceDescriptor, value) -> JobDescription:

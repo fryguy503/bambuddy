@@ -658,6 +658,10 @@ export function useWebSocket() {
       case 'queue_item_failed':
         window.dispatchEvent(new CustomEvent('bambuddy:dispatch-toast', { detail: message }));
         break;
+      case 'queue_item_waiting':
+        window.dispatchEvent(new CustomEvent('bambuddy:dispatch-toast', { detail: message }));
+        debouncedInvalidate('queue');
+        break;
       // Slicer Pipeline runs (#1425 PR C). State transitions on the run
       // refresh both the dashboard list AND the per-pipeline "Last run"
       // chip in Settings → Pipelines.

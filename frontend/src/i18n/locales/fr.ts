@@ -1411,6 +1411,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "En attente",
+      selectionHelp: "Choisissez un emplacement de filament chargé pour cette tâche. Elle conservera sa place dans la file.",
+      refreshHelp: "En attente du statut actuel du filament. Cette tâche reste dans la file.",
+      updateSelection: "Modifier la sélection du filament",
+    },
     filamentShort: {
       rowBadge: 'Filament insuffisant pour la bobine assignee',
       rowTooltip: "Le planificateur a signale cet element. Cliquez sur Lecture pour voir le deficit par emplacement et decider de lancer quand meme l'impression.",

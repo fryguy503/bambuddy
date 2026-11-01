@@ -1411,6 +1411,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "佇列中",
+      selectionHelp: "請為此工作選擇已裝載耗材的料槽。工作將保留在佇列中的原有位置。",
+      refreshHelp: "正在等待最新耗材狀態。此工作將保留在佇列中。",
+      updateSelection: "更新耗材選擇",
+    },
     filamentShort: {
       rowBadge: '所分配料盤的線材不足',
       rowTooltip: '調度程式已標記此項目。點擊播放查看各槽位的不足量，並決定是否仍要列印。',

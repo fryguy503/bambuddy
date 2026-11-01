@@ -196,7 +196,7 @@ export interface SdkJobRequest {
   job_id: string;
   artifact: { uri: string; format: string; filename?: string; media_type?: string; size_bytes?: number; sha256?: string; metadata?: Record<string, unknown> };
   name?: string;
-  bindings: Array<{ input_id: string; tool_id: string; source_id?: string; slot_id?: string; hotend_id?: string; extruder_id?: string; required_mass_grams?: number }>;
+  bindings: Array<{ input_id: string; tool_id: string; source_id?: string; slot_id?: string; hotend_id?: string; extruder_id?: string; required_mass_grams?: number; material?: { material_type?: string; color?: string } }>;
   selected_tool_ids: string[];
   build_surface_id?: string;
   plate_id?: string;

@@ -380,6 +380,26 @@ class ConnectionManager:
             },
         )
 
+    async def send_queue_item_waiting(
+        self,
+        user_id: int | None,
+        queue_item_id: int,
+        printer_id: int | None,
+        reason: str,
+        message: str,
+    ):
+        """Finish an unsent dispatch toast while its job remains queued."""
+        await self.broadcast_to_user(
+            user_id,
+            {
+                "type": "queue_item_waiting",
+                "queue_item_id": queue_item_id,
+                "printer_id": printer_id,
+                "reason": reason,
+                "message": message,
+            },
+        )
+
     async def send_queue_item_failed(
         self,
         user_id: int | None,

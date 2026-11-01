@@ -90,11 +90,38 @@ async def test_six_tool_source_binding_survives_queue_crud_upload_and_dispatch(
     assert read.json()["material_bindings"] == {"material-a": "source:violet"}
     assert read.json()["sdk_job"]["bindings"][0]["source_id"] == "source:violet"
     plan.options["quality"] = "draft"
+    plan.extensions["bambuddy:queue_hold"] = {
+        "kind": "material_selection",
+        "code": "material.empty",
+        "message": "Select material",
+        "input_ids": ["material-a"],
+        "resource_ids": ["source:violet"],
+    }
+    saved = await db_session.get(PrintQueueItem, item_id)
+    saved.sdk_job = plan.model_dump(mode="json")
+    saved.waiting_reason = "Needs material selection"
+    await db_session.commit()
     updated = await async_client.patch(
         f"/api/v1/queue/{item_id}", json={"job_options": {"quality": "draft"}, "sdk_job": plan.model_dump(mode="json")}
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["sdk_job"]["options"]["quality"] == "draft"
+    assert "bambuddy:queue_hold" not in updated.json()["sdk_job"]["extensions"]
+    assert updated.json()["waiting_reason"] is None
+    assert updated.json()["manual_start"] is True
+    # Bulk plan saves use the same editor metadata cleanup without changing
+    # the operator's existing staged/manual-start choice.
+    saved.sdk_job = plan.model_dump(mode="json")
+    saved.waiting_reason = "Needs material selection"
+    await db_session.commit()
+    bulk = await async_client.patch(
+        "/api/v1/queue/bulk", json={"item_ids": [item_id], "sdk_job": plan.model_dump(mode="json")}
+    )
+    assert bulk.status_code == 200, bulk.text
+    assert bulk.json()["updated_count"] == 1
+    await db_session.refresh(saved)
+    assert "bambuddy:queue_hold" not in saved.sdk_job["extensions"]
+    assert saved.waiting_reason is None and saved.manual_start is True
     item = await db_session.scalar(select(PrintQueueItem).where(PrintQueueItem.id == item_id))
     printer = await db_session.scalar(select(Printer).where(Printer.id == printer_id))
     assert item.sdk_job["selected_tool_ids"] == ["tool:violet"]
