@@ -5,6 +5,7 @@ import { buildFilamentBackground } from './filamentSwatchHelpers';
 
 interface FilamentSlotDetailsProps {
   label: string;
+  displayLabel?: string;
   color: string;
   material: string;
   colorName?: string | null;
@@ -17,6 +18,7 @@ interface FilamentSlotDetailsProps {
 /** The detailed interior shared by regular AMS, AMS-HT and external slots. */
 export function FilamentSlotDetails({
   label,
+  displayLabel,
   color,
   material,
   colorName,
@@ -61,7 +63,7 @@ export function FilamentSlotDetails({
           }}
           title={label}
         >
-          {label}
+          {displayLabel ?? label}
         </span>
         {children && <div className="flex shrink-0 items-center gap-1">{children}</div>}
       </div>

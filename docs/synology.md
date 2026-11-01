@@ -200,6 +200,8 @@ color headers, slot labels, material, available color names and brands, and the
 remaining percentage. **Classic color circles** remains the default. The same
 setting applies to Bambu AMS/AMS-HT/external holders and plugin material sources,
 including Anycubic ACE slots and external holders.
+Grouped plugin slots use compact **S1**, **S2**, … headers; hover over a header to read
+the full slot description. Each unit's name remains above its slots.
 
 **Low filament red border** works with either style and is enabled by default.
 The threshold defaults to **15%**, can be set to a whole percentage from **1–100%**,

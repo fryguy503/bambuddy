@@ -69,10 +69,9 @@ describe('generic plugin filament appearance', () => {
       for (const index of [1, 2, 3, 4]) {
         const card = tile(`ACE ${unit} slot ${index}`);
         expect(card).toHaveAttribute('data-filament-card', 'detailed');
-        expect(within(card).getByText(`ACE ${unit} slot ${index}`)).toBeInTheDocument();
-        const ordinal = within(card).getByLabelText(`Slot ${index}`);
-        expect(ordinal).toHaveTextContent(String(index));
-        expect(ordinal.parentElement).toHaveClass('shrink-0');
+        expect(within(card).getByText(`S${index}`)).toHaveAttribute('title', `ACE ${unit} slot ${index}`);
+        expect(within(card).queryByText(`ACE ${unit} slot ${index}`)).not.toBeInTheDocument();
+        expect(within(card).queryByLabelText(`Slot ${index}`)).not.toBeInTheDocument();
         expect(within(card).getByText('Olive Green')).toBeInTheDocument();
         expect(within(card).getByText('SUNLU')).toBeInTheDocument();
         expect(within(card).queryByLabelText('Color #427d2e')).not.toBeInTheDocument();
