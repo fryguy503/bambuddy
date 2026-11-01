@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import threading
+from contextvars import ContextVar
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -92,6 +94,212 @@ async def test_exact_rfid_link_and_token_survive_unchanged_sensor_telemetry(inve
     telemetry[0]["tray"][0].update(remain=55, nozzle_temp_min=190)
     await inventory.observe(inventory_config, telemetry)
     assert (await inventory.snapshot(inventory_config))[SOURCE]["token"] == first["token"]
+
+
+@pytest.mark.asyncio
+async def test_unchanged_native_reports_do_not_rewrite_inventory(inventory_config, make_spool, monkeypatch):
+    await make_spool()
+    save = MagicMock(wraps=inventory._save)
+    monkeypatch.setattr(inventory, "_save", save)
+    await inventory.observe(inventory_config, boxes())
+    first = (await inventory.snapshot(inventory_config))[SOURCE]
+    await inventory.observe(inventory_config, boxes())
+    sensors = boxes()
+    sensors[0].update(humidity=42, temp=31.5, drying_time=12)
+    sensors[0]["tray"][0].update(remain=25, nozzle_temp_min=190)
+    await inventory.observe(inventory_config, sensors)
+    assert save.call_count == 1
+    assert (await inventory.snapshot(inventory_config))[SOURCE] == first
+    await inventory.observe(inventory_config, boxes(color="00FF00FF"))
+    assert save.call_count == 2
+    assert await inventory.snapshot(inventory_config) == {}
+
+
+@pytest.mark.asyncio
+async def test_repeating_the_same_manual_assignment_keeps_captured_usage_valid(
+    inventory_config, make_spool, archive_factory, db_session, monkeypatch
+):
+    spool = await make_spool()
+    await inventory.assign(inventory_config, SOURCE, spool.id)
+    captured = await inventory.capture(inventory_config, job(mass=20))
+    original = (await inventory.snapshot(inventory_config))[SOURCE]
+    save = MagicMock(wraps=inventory._save)
+    monkeypatch.setattr(inventory, "_save", save)
+    repeated = await inventory.assign(inventory_config, SOURCE, spool.id)
+    assert repeated[SOURCE] == original
+    save.assert_not_called()
+    await archive_factory(inventory_config.printer_id, subtask_id="job-1", with_run=False)
+    result = await inventory.complete(inventory_config, {"job_id": "job-1", "usage_snapshot": captured}, "completed")
+    assert result["state"] == "recorded"
+    assert await weight(db_session, spool.id) == 20
+
+
+@pytest.mark.asyncio
+async def test_manual_confirmation_of_an_existing_rfid_link_keeps_its_identity(inventory_config, make_spool):
+    spool = await make_spool()
+    await inventory.observe(inventory_config, boxes())
+    original = (await inventory.snapshot(inventory_config))[SOURCE]
+    assigned = (await inventory.assign(inventory_config, SOURCE, spool.id))[SOURCE]
+    assert assigned["kind"] == "manual"
+    assert assigned["identity"] == original["identity"]
+    assert assigned["token"] == original["token"]
+
+
+@pytest.mark.asyncio
+async def test_slow_inventory_storage_does_not_block_the_loop_or_release_ordering_on_cancel(
+    inventory_config, make_spool, monkeypatch
+):
+    spool = await make_spool()
+    entered, release = threading.Event(), threading.Event()
+    original = inventory._save
+    context = ContextVar("inventory_storage_fixture", default="missing")
+    context.set("request-context")
+
+    def blocked_save(value):
+        assert context.get() == "request-context"
+        entered.set()
+        assert release.wait(3), "Storage worker was not released by the event loop"
+        original(value)
+
+    monkeypatch.setattr(inventory, "_save", blocked_save)
+    before = asyncio.all_tasks()
+    first = asyncio.create_task(inventory.assign(inventory_config, SOURCE, spool.id))
+    second = None
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(entered.wait, 2), 3)
+        assert not first.done()
+        # A callback can run while fsync/storage work remains blocked.
+        pulse = asyncio.Event()
+        asyncio.get_running_loop().call_soon(pulse.set)
+        await asyncio.wait_for(pulse.wait(), 1)
+        # Simulate shutdown's cancellation of every Task created by the
+        # request. In particular, cancelling an inner to_thread Task must not
+        # make the still-running filesystem worker release assignment ordering.
+        for task in asyncio.all_tasks() - before:
+            task.cancel()
+        await asyncio.sleep(0)
+        first.cancel()  # A repeated cancellation must also retain ordering.
+        await asyncio.sleep(0)
+        assert not first.done()
+        assert inventory._async_lock.locked()
+        second = asyncio.create_task(inventory.assign(inventory_config, SOURCE, spool.id))
+        await asyncio.sleep(0)
+        assert not second.done()
+    finally:
+        release.set()
+        try:
+            await first
+        except asyncio.CancelledError:
+            pass
+        if second is not None:
+            await second
+    saved = (await inventory.snapshot(inventory_config))[SOURCE]
+    assert saved["spool_id"] == spool.id
+
+
+@pytest.mark.asyncio
+async def test_assign_operation_persists_and_publishes_without_a_native_report(inventory_config, make_spool):
+    from plugins.anycubic.payload.plugin import AnycubicPrinterPlugin
+
+    spool = await make_spool()
+    events = MagicMock()
+    connection = AnycubicPrinterPlugin().create_connection(inventory_config, on_event=events)
+    connection.native._publish = MagicMock(side_effect=AssertionError("Inventory metadata must not send commands"))
+    source = "material:ace:0:0"
+    request = OperationRequest(
+        operation_id="anycubic.inventory.assign", resource_id=source, parameters={"spool_id": spool.id}
+    )
+    receipt = await connection.invoke(request)
+    assert receipt.status == "succeeded"
+    assert (await inventory.snapshot(inventory_config))[source]["spool_id"] == spool.id
+    events.assert_called_once()
+    event = events.call_args.args[0]
+    assert event.event == "device.snapshot"
+    resource = next(item for item in event.data["resources"] if item["resource_id"] == source)
+    assert resource["properties"]["spool_id"]["value"] == str(spool.id)
+    connection.native._publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_persisted_assignment_succeeds_even_if_status_notification_fails(inventory_config, make_spool):
+    from plugins.anycubic.payload.plugin import AnycubicPrinterPlugin
+
+    spool = await make_spool()
+    events = MagicMock(side_effect=OSError("PRIVATE callback failure"))
+    connection = AnycubicPrinterPlugin().create_connection(inventory_config, on_event=events)
+    source = "material:ace:0:0"
+    receipt = await connection.invoke(
+        OperationRequest(
+            operation_id="anycubic.inventory.assign", resource_id=source, parameters={"spool_id": spool.id}
+        )
+    )
+    assert receipt.status == "succeeded" and receipt.error is None
+    assert (await inventory.snapshot(inventory_config))[source]["spool_id"] == spool.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable", ["missing", "archived", "host-assigned", "plugin-assigned"])
+async def test_assignment_conflicts_have_specific_public_errors_and_do_not_move_spools(
+    inventory_config, make_spool, db_session, unavailable
+):
+    from datetime import datetime
+
+    from plugins.anycubic.payload.plugin import AnycubicPrinterPlugin
+
+    spool = await make_spool()
+    source = "material:ace:0:0"
+    requested_id = spool.id
+    expected = "spool_unavailable"
+    if unavailable == "missing":
+        requested_id += 10000
+    elif unavailable == "archived":
+        spool.archived_at = datetime.now()
+        await db_session.commit()
+    elif unavailable == "host-assigned":
+        db_session.add(SpoolAssignment(spool_id=spool.id, printer_id=inventory_config.printer_id, ams_id=0, tray_id=0))
+        await db_session.commit()
+        expected = "host_assignment_conflict"
+    else:
+        await inventory.assign(inventory_config, "material:ace:0:1", spool.id)
+        expected = "plugin_assignment_conflict"
+    before = await inventory.snapshot(inventory_config)
+    connection = AnycubicPrinterPlugin().create_connection(inventory_config)
+    receipt = await connection.invoke(
+        OperationRequest(
+            operation_id="anycubic.inventory.assign", resource_id=source, parameters={"spool_id": requested_id}
+        )
+    )
+    assert receipt.status == "failed" and receipt.error is not None
+    assert receipt.error.code == "anycubic.inventory." + expected
+    assert "native operation" not in receipt.error.message
+    assert await inventory.snapshot(inventory_config) == before
+
+
+@pytest.mark.asyncio
+async def test_assignment_storage_failure_is_specific_and_retry_preserves_existing_link(
+    inventory_config, make_spool, monkeypatch
+):
+    from plugins.anycubic.payload.plugin import AnycubicPrinterPlugin
+
+    first, second = await make_spool(), await make_spool(rgba="00FF00FF")
+    source = "material:ace:0:0"
+    await inventory.assign(inventory_config, source, first.id)
+    previous = await inventory.snapshot(inventory_config)
+    connection = AnycubicPrinterPlugin().create_connection(inventory_config)
+    original = inventory._save
+    monkeypatch.setattr(inventory, "_save", MagicMock(side_effect=OSError("PRIVATE /storage/secret permission denied")))
+    request = OperationRequest(
+        operation_id="anycubic.inventory.assign", resource_id=source, parameters={"spool_id": second.id}
+    )
+    rejected = await connection.invoke(request)
+    assert rejected.status == "failed" and rejected.error is not None
+    assert rejected.error.code == "anycubic.inventory.save_unconfirmed"
+    assert "Refresh the assignment" in rejected.error.message
+    assert "PRIVATE" not in rejected.error.message and "/storage" not in rejected.error.message
+    assert await inventory.snapshot(inventory_config) == previous
+    monkeypatch.setattr(inventory, "_save", original)
+    assert (await connection.invoke(request)).status == "succeeded"
+    assert (await inventory.snapshot(inventory_config))[source]["spool_id"] == second.id
 
 
 @pytest.mark.asyncio

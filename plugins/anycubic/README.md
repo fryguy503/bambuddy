@@ -1,17 +1,22 @@
 # Anycubic printer plugin
 
 The independent Anycubic provider uses Bambuddy's printer SDK v2. Its current
-release is `anycubic` **0.1.8**, published under `fryguy503`. The included Bambu
+release is `anycubic` **0.1.9**, published under `fryguy503`. The included Bambu
 provider remains a separate plugin.
 
 This package requires the printer plugin implementation from
 `Feat/Printer_modularization` or `codex/printer-modularization-https`. An upstream
 application without the SDK v2 package manager cannot install it; the
 application version string alone does not establish SDK availability.
-Version 0.1.8 requires SDK 2.3; update the host before uploading it. Earlier
+Version 0.1.9 requires SDK 2.3; update the host before uploading it. Earlier
 SDK hosts reject this package during compatibility validation.
 
-Version 0.1.8 supersedes 0.1.7 and preserves a pending manual-extrusion stop
+Version 0.1.9 moves inventory storage off the web-server thread and skips writes
+for unchanged ACE observations. Repeating the same physical spool assignment
+preserves its continuity token. Assignment conflicts return specific public
+errors, and successful assignments publish an updated snapshot immediately.
+
+The 0.1.8 fix still preserves a pending manual-extrusion stop
 during transport retirement. It discards queued print and control packets,
 then attempts only an explicit stop bound to the retiring connection. This
 never replays a print, sends a stop to its replacement, or treats a failed
@@ -37,10 +42,12 @@ Kobra S1 capability description: it does not expose a chamber temperature
 sensor or heater. Other models expose a chamber reading only when supported
 and actually reported; no chamber heater command was added.
 
-The large-file optimization remains: it reduces CPU work while retaining both
-complete scans, content hashes and changed-file checks. Five concurrent
-100 MB synthetic files took 16.8 seconds in the local benchmark, compared with
-33.5 seconds before this change; NAS timings depend on CPU and storage.
+Large files now combine grammar, tool and material parsing into one scan,
+followed by chunked SHA-256 and MD5 verification. Both complete content reads
+and changed-file checks remain. Dispatch still validates the actual file
+again. The host update also isolates inspections from status workers and
+prevents repeated batch inspection requests; NAS timings depend on CPU and
+storage.
 
 The package supplies file-specific print options and ACE input requirements
 through the SDK job-description endpoint. Shared batch choices map back to each
@@ -52,17 +59,17 @@ The 0.1.2 durability behavior remains: finalized dispatch outcomes stay authorit
 older observers report stale progress. It preserves pending accounting and
 repairs legacy journal fields under the existing storage lock. A terminal
 observation awaiting host cleanup remains replayable; no print command is
-replayed. The published 0.1.0 through 0.1.7 archives are unchanged.
+replayed. The published 0.1.0 through 0.1.8 archives are unchanged.
 
 ## Install or update
 
 The release artifact is
-[`packages/anycubic/anycubic-0.1.8.bbp`](../../packages/anycubic/anycubic-0.1.8.bbp).
+[`packages/anycubic/anycubic-0.1.9.bbp`](../../packages/anycubic/anycubic-0.1.9.bbp).
 Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
 1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
    `.bbp` file and optionally paste its expected SHA-256 digest.
-2. Review the validation result, then apply version `0.1.8`. Staging alone does
+2. Review the validation result, then apply version `0.1.9`. Staging alone does
    not load or enable its code.
 3. Add or edit a printer, select **Anycubic**, and choose its model.
 

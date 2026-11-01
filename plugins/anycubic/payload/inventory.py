@@ -13,15 +13,29 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from contextlib import AsyncExitStack
+from contextvars import copy_context
+from copy import deepcopy
+from typing import TypeVar
 from uuid import uuid4
 
 from sqlalchemy import select
 
-from .persistence import printer_key, read_json, state_root, storage_lock, write_json
+from .persistence import JournalError, printer_key, read_json, state_root, storage_lock, write_json
+from .protocol import AnycubicError
 
 _async_lock = asyncio.Lock()
 _UNKNOWN = {"", "?", "unknown", "unkonwn", "default"}
+_StorageResult = TypeVar("_StorageResult")
+
+
+class InventoryAssignmentError(AnycubicError):
+    """A fixed public inventory diagnostic, distinct from native commands."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = "anycubic.inventory." + code
 
 
 def _load():
@@ -36,9 +50,36 @@ def _entry(value, config):
     return value.setdefault("printers", {}).setdefault(printer_key(config), {"links": {}, "observed": {}})
 
 
+async def _storage_io(action: Callable[..., _StorageResult], *args) -> _StorageResult:
+    """Finish an atomic storage worker before its caller releases the async lock."""
+
+    def run() -> _StorageResult:
+        return action(*args)
+
+    # A child Task wrapping to_thread can itself be cancelled by asyncio.run's
+    # shutdown sweep, even while the actual filesystem thread is still alive.
+    # Keep the shielded executor Future, which is not part of that Task sweep.
+    work = asyncio.get_running_loop().run_in_executor(None, copy_context().run, run)
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        # Cancelling an await cannot stop a filesystem worker. Retain ordering
+        # until it exits instead of allowing a newer assignment to overtake it.
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not work.cancelled():
+            work.exception()
+        raise
+
+
 def _source(source_id):
     if not isinstance(source_id, str) or not re.fullmatch(r"material:(?:ace:-?\d+:\d+|external)", source_id):
-        raise ValueError("Select a material source resource")
+        raise InventoryAssignmentError("invalid_source", "Select a material source resource")
     return source_id
 
 
@@ -95,8 +136,12 @@ def _native_observations(boxes):
 
 async def snapshot(config):
     async with _async_lock:
-        with storage_lock("inventory"):
-            return dict(_entry(_load(), config)["links"])
+        return await _storage_io(_snapshot, config)
+
+
+def _snapshot(config):
+    with storage_lock("inventory"):
+        return dict(_entry(_load(), config)["links"])
 
 
 async def assign(config, source_id, spool_id):
@@ -107,35 +152,67 @@ async def assign(config, source_id, spool_id):
 
     source_id = _source(source_id)
     if spool_id is not None and (type(spool_id) is not int or spool_id < 1):
-        raise ValueError("Select an inventory spool or clear the assignment")
+        raise InventoryAssignmentError("invalid_spool", "Select an inventory spool or clear the assignment")
     async with _async_lock:
         if spool_id is not None:
             async with async_session() as db:
                 if await spoolman_owns_assignments(db):
-                    raise ValueError("Package spool links use built-in inventory")
+                    raise InventoryAssignmentError(
+                        "inventory_mode", "Physical spool links require built-in inventory. Check the inventory mode."
+                    )
                 spool = await db.get(Spool, spool_id)
                 if spool is None or spool.archived_at is not None:
-                    raise ValueError("Inventory spool is unavailable")
+                    raise InventoryAssignmentError(
+                        "spool_unavailable",
+                        "The inventory spool is unavailable. Refresh inventory and select an active spool.",
+                    )
                 if await db.scalar(select(SpoolAssignment.id).where(SpoolAssignment.spool_id == spool_id).limit(1)):
-                    raise ValueError("Remove the spool's existing host assignment before moving it")
+                    raise InventoryAssignmentError(
+                        "host_assignment_conflict", "Remove the spool's existing host assignment before moving it."
+                    )
+        return await _storage_io(_assign, config, source_id, spool_id)
+
+
+def _assign(config, source_id, spool_id):
+    try:
         with storage_lock("inventory"):
             value = _load()
             entry = _entry(value, config)
             if spool_id is None:
-                entry["links"].pop(source_id, None)
+                if source_id not in entry["links"]:
+                    return dict(entry["links"])
+                del entry["links"][source_id]
             else:
                 for key, other in value["printers"].items():
                     for source, link in other.get("links", {}).items():
                         if link.get("spool_id") == spool_id and (key, source) != (printer_key(config), source_id):
-                            raise ValueError("Remove the spool's existing plugin assignment before moving it")
+                            raise InventoryAssignmentError(
+                                "plugin_assignment_conflict",
+                                "Remove the spool's existing plugin assignment before moving it.",
+                            )
+                previous = entry["links"].get(source_id, {})
+                identity = entry.get("observed", {}).get(source_id, {}).get("identity")
+                same_assignment = (
+                    previous.get("spool_id") == spool_id
+                    and previous.get("identity") == identity
+                    and isinstance(previous.get("token"), str)
+                    and bool(previous["token"])
+                )
+                if same_assignment and previous.get("kind") == "manual":
+                    return dict(entry["links"])
                 entry["links"][source_id] = {
                     "spool_id": spool_id,
-                    "token": str(uuid4()),
+                    "token": previous["token"] if same_assignment else str(uuid4()),
                     "kind": "manual",
-                    "identity": entry.get("observed", {}).get(source_id, {}).get("identity"),
+                    "identity": identity,
                 }
             _save(value)
             return dict(entry["links"])
+    except (OSError, JournalError) as exc:
+        raise InventoryAssignmentError(
+            "save_unconfirmed",
+            "Could not confirm the spool assignment was saved. Refresh the assignment before retrying.",
+        ) from exc
 
 
 async def observe(config, native_boxes):
@@ -158,52 +235,58 @@ async def observe(config, native_boxes):
             key = spool_key(spool)
             if key:
                 candidates[key].append(spool.id)
-        with storage_lock("inventory"):
-            value = _load()
-            entry = _entry(value, config)
-            entry["observed"] = observed
-            counts = Counter(
-                tuple(slot["key"])
-                for printer in value["printers"].values()
-                for slot in printer.get("observed", {}).values()
-                if slot.get("key")
-            )
-            for source, link in list(entry["links"].items()):
-                current = observed.get(source, {})
-                if link.get("identity") != current.get("identity"):
-                    if link.get("kind") == "rfid":
-                        del entry["links"][source]
-                    else:
-                        link.update(identity=current.get("identity"), token=str(uuid4()))
-            for other in value["printers"].values():
-                for source, link in list(other.get("links", {}).items()):
-                    key_value = other.get("observed", {}).get(source, {}).get("key")
-                    key = tuple(key_value) if key_value else None
-                    if link.get("kind") == "rfid" and (
-                        not key
-                        or counts[key] != 1
-                        or len(candidates.get(key, [])) != 1
-                        or link.get("spool_id") in host_assigned
-                    ):
-                        del other["links"][source]
-            claimed = {
-                link["spool_id"] for printer in value["printers"].values() for link in printer.get("links", {}).values()
+        await _storage_io(_observe, config, observed, candidates, host_assigned)
+
+
+def _observe(config, observed, candidates, host_assigned):
+    with storage_lock("inventory"):
+        value = _load()
+        before = deepcopy(value)
+        entry = _entry(value, config)
+        entry["observed"] = observed
+        counts = Counter(
+            tuple(slot["key"])
+            for printer in value["printers"].values()
+            for slot in printer.get("observed", {}).values()
+            if slot.get("key")
+        )
+        for source, link in list(entry["links"].items()):
+            current = observed.get(source, {})
+            if link.get("identity") != current.get("identity"):
+                if link.get("kind") == "rfid":
+                    del entry["links"][source]
+                else:
+                    link.update(identity=current.get("identity"), token=str(uuid4()))
+        for other in value["printers"].values():
+            for source, link in list(other.get("links", {}).items()):
+                key_value = other.get("observed", {}).get(source, {}).get("key")
+                key = tuple(key_value) if key_value else None
+                if link.get("kind") == "rfid" and (
+                    not key
+                    or counts[key] != 1
+                    or len(candidates.get(key, [])) != 1
+                    or link.get("spool_id") in host_assigned
+                ):
+                    del other["links"][source]
+        claimed = {
+            link["spool_id"] for printer in value["printers"].values() for link in printer.get("links", {}).values()
+        }
+        for source, item in observed.items():
+            key = tuple(item["key"]) if item.get("key") else None
+            matches = candidates.get(key, [])
+            if source in entry["links"] or not key or counts[key] != 1 or len(matches) != 1:
+                continue
+            spool_id = matches[0]
+            if spool_id in host_assigned or spool_id in claimed:
+                continue
+            entry["links"][source] = {
+                "spool_id": spool_id,
+                "token": str(uuid4()),
+                "kind": "rfid",
+                "identity": item["identity"],
             }
-            for source, item in observed.items():
-                key = tuple(item["key"]) if item.get("key") else None
-                matches = candidates.get(key, [])
-                if source in entry["links"] or not key or counts[key] != 1 or len(matches) != 1:
-                    continue
-                spool_id = matches[0]
-                if spool_id in host_assigned or spool_id in claimed:
-                    continue
-                entry["links"][source] = {
-                    "spool_id": spool_id,
-                    "token": str(uuid4()),
-                    "kind": "rfid",
-                    "identity": item["identity"],
-                }
-                claimed.add(spool_id)
+            claimed.add(spool_id)
+        if value != before:
             _save(value)
 
 

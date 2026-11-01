@@ -1,6 +1,7 @@
 """Optimized full scans retain the published parser's validation and identities."""
 
 import ast
+import hashlib
 import io
 import zipfile
 from pathlib import Path
@@ -32,6 +33,7 @@ def published():
             payload.read("payload/files.py"), {"inspect_gcode", "validate_gcode"}, vars(files).copy()
         )
         old_printing = vars(printing).copy()
+        old_printing["MAX_LINE_BYTES"] = files.MAX_LINE_BYTES
         old_printing["validate_gcode"] = old_files["validate_gcode"]
         load_functions(payload.read("payload/printing.py"), {"inspect_print_file"}, old_printing)
     return old_files["inspect_gcode"], old_printing["inspect_print_file"]
@@ -81,16 +83,52 @@ def test_complete_validation_and_materials_match_published_parser(published, con
     assert outcome(lambda: normalize(printing.inspect_print_file)) == outcome(lambda: normalize(old_print))
 
 
-def test_complete_second_scan_keeps_same_size_mutation_check(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "changed",
+    [SOURCE.replace(b"G1 X1 Y1", b"G1 X2 Y2"), SOURCE + b"G1 X3\n", SOURCE[:-3]],
+    ids=["same-size", "grown", "truncated"],
+)
+def test_complete_second_scan_keeps_mutation_check(monkeypatch, tmp_path, changed):
     path = tmp_path / "changed.gcode"
     path.write_bytes(SOURCE)
     original_validate = files.validate_gcode
 
-    def mutate_after_validation(*args):
-        artifact = original_validate(*args)
-        path.write_bytes(SOURCE.replace(b"G1 X1 Y1", b"G1 X2 Y2"))
+    def mutate_after_validation(*args, **kwargs):
+        artifact = original_validate(*args, **kwargs)
+        path.write_bytes(changed)
         return artifact
 
     monkeypatch.setattr(printing, "validate_gcode", mutate_after_validation)
     with pytest.raises(files.AnycubicError, match="changed while inspecting"):
         printing.inspect_print_file(path, path.name, "Kobra S1")
+
+
+@pytest.mark.parametrize(
+    "trailer",
+    [b"G1 X1\xff\n", b"G1 X1\x00\n", b"123 invalid command\n", b"T256\n", b"; filament_type = ABS\n"],
+    ids=["invalid-utf8", "nul", "invalid-command", "unsupported-tool", "conflicting-material"],
+)
+def test_large_files_validate_the_complete_motion_tail(tmp_path, trailer):
+    path = tmp_path / "large.gcode"
+    path.write_bytes(SOURCE + b"G1 X1 Y1 E0.01\n" * 65536 + trailer)
+    with pytest.raises(files.AnycubicError):
+        printing.inspect_print_file(path, path.name, "Kobra S1")
+
+
+def test_large_file_requirements_preserve_hashes_and_late_tool_selection(tmp_path):
+    path = tmp_path / "large.gcode"
+    # The usage vector names only T0, but a later explicit T1 must still be
+    # discovered and bound to its original material rather than ignored.
+    content = (
+        HEADER
+        + MATERIALS.replace(b"1,2", b"1,0")
+        + b"T0\n"
+        + b"G1 X1 Y1 E0.01\n" * 65536
+        + b"N123 T1 ; late tool change\nM400\n"
+    )
+    path.write_bytes(content)
+    result = printing.inspect_print_file(path, path.name, "Kobra S1")
+    assert [filament.tool for filament in result.filaments] == [0, 1]
+    assert result.file.size == len(content)
+    assert result.file.sha256 == hashlib.sha256(content).hexdigest()
+    assert result.md5 == hashlib.md5(content, usedforsecurity=False).hexdigest()

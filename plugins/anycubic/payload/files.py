@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -143,7 +144,9 @@ class GcodeArtifact:
     model: str
 
 
-def validate_gcode(path: Path, filename: str, model: str | None) -> GcodeArtifact:
+def validate_gcode(
+    path: Path, filename: str, model: str | None, *, _line_observer: Callable[[bytes], None] | None = None
+) -> GcodeArtifact:
     """Require a text G-code export whose slicer metadata identifies the model."""
     basename(filename)
     if not filename.lower().endswith(".gcode"):
@@ -152,7 +155,7 @@ def validate_gcode(path: Path, filename: str, model: str | None) -> GcodeArtifac
     if not 0 < size <= MAX_GCODE_BYTES:
         raise AnycubicError("The G-code file is empty or exceeds 512 MiB")
     with path.open("rb") as stream:
-        detected, read_size, digest = inspect_gcode(stream)
+        detected, read_size, digest = inspect_gcode(stream, _line_observer=_line_observer)
     if (model is not None and detected != model) or read_size != size:
         raise AnycubicError("Export sliced G-code with printer_model metadata matching this Anycubic printer")
     # A unique remote name avoids overwriting an existing print file.
@@ -163,7 +166,7 @@ def validate_gcode(path: Path, filename: str, model: str | None) -> GcodeArtifac
     return GcodeArtifact(path, remote, size, digest, detected)
 
 
-def inspect_gcode(stream):
+def inspect_gcode(stream, *, _line_observer: Callable[[bytes], None] | None = None):
     """Identify a bounded, sliced Anycubic text export for storage or transfer."""
     digest, generated, models, commands, size = hashlib.sha256(), False, set(), 0, 0
     while line := stream.readline(MAX_LINE_BYTES + 1):
@@ -177,7 +180,7 @@ def inspect_gcode(stream):
             text = line.decode("utf-8").removeprefix("\ufeff").strip()
         except UnicodeError:
             raise AnycubicError("The upload is not UTF-8 text G-code") from None
-        if ";" in text and _GENERATED_GCODE.search(text):
+        if not generated and ";" in text and _GENERATED_GCODE.search(text):
             generated = True
         if text.startswith(";"):
             match = _GCODE_MODEL.match(text)
@@ -190,6 +193,8 @@ def inspect_gcode(stream):
             if not _GCODE_COMMAND.match(text):
                 raise AnycubicError("The file contains unsupported G-code lines")
             commands += 1
+        if _line_observer is not None:
+            _line_observer(line)
     if not generated or len(models) != 1 or not commands:
         raise AnycubicError("Export sliced Anycubic G-code with slicer and printer_model metadata")
     return models.pop(), size, digest.hexdigest()

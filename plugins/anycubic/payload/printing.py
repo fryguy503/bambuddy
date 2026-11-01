@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .files import MAX_LINE_BYTES, GcodeArtifact, validate_gcode
+from .files import GcodeArtifact, validate_gcode
 from .protocol import AnycubicError
 
 OPTION_FEATURES = {
@@ -139,37 +139,43 @@ class PrintArtifact:
 
 
 def inspect_print_file(path: Path, filename: str, model: str | None = None) -> PrintArtifact:
-    """Read the complete file, retaining original zero-based slicer tool IDs."""
-    artifact = validate_gcode(path, filename, model)
+    """Collect requirements while validating, then verify the complete file hash."""
     fields, tools, optional = {}, set(), {}
+
+    def collect(line: bytes) -> None:
+        prefix = line.lstrip()
+        if prefix[:1] in (b"T", b"t", b"N", b"n"):
+            if match := _TOOL.match(prefix):
+                if len(match[1]) > 3 or int(match[1]) > 255:
+                    raise AnycubicError("The G-code contains an unsupported tool selection")
+                tools.add(int(match[1]))
+        if not prefix.startswith(b";"):
+            return
+        decoded = prefix.rstrip().decode("utf-8").removeprefix("\ufeff")
+        if estimate := _ESTIMATE.fullmatch(decoded):
+            key, value = estimate[1].lower(), estimate[2].strip()
+            optional[key] = None if len(value) > 16384 or key in optional and optional[key] != value else value
+        match = _FIELD.fullmatch(decoded)
+        if not match:
+            return
+        key, value = match[1].lower(), match[2].strip()
+        key = "filament_colour" if key in {"filament_color", "filament_colour"} else key
+        if len(value) > 16384 or key in fields and fields[key] != value:
+            raise AnycubicError("The G-code contains conflicting or oversized filament metadata")
+        fields[key] = value
+
+    artifact = validate_gcode(path, filename, model, _line_observer=collect)
+    # Every byte is verified again before returning requirements. Chunked
+    # hashing avoids repeating the Python grammar/metadata loop and releases
+    # the GIL during large digest updates, keeping native telemetry responsive.
     md5, sha256, size = hashlib.md5(usedforsecurity=False), hashlib.sha256(), 0
     with path.open("rb") as stream:
-        while line := stream.readline(MAX_LINE_BYTES + 1):
-            size += len(line)
-            if len(line) > MAX_LINE_BYTES or size > artifact.size:
+        while chunk := stream.read(65536):
+            size += len(chunk)
+            if size > artifact.size:
                 raise AnycubicError("The G-code changed while inspecting its filament metadata")
-            md5.update(line)
-            sha256.update(line)
-            prefix = line.lstrip()
-            if prefix[:1] in (b"T", b"t", b"N", b"n"):
-                if match := _TOOL.match(prefix):
-                    if len(match[1]) > 3 or int(match[1]) > 255:
-                        raise AnycubicError("The G-code contains an unsupported tool selection")
-                    tools.add(int(match[1]))
-            if not prefix.startswith(b";"):
-                continue
-            decoded = prefix.rstrip().decode("utf-8").removeprefix("\ufeff")
-            if estimate := _ESTIMATE.fullmatch(decoded):
-                key, value = estimate[1].lower(), estimate[2].strip()
-                optional[key] = None if len(value) > 16384 or key in optional and optional[key] != value else value
-            match = _FIELD.fullmatch(decoded)
-            if not match:
-                continue
-            key, value = match[1].lower(), match[2].strip()
-            key = "filament_colour" if key in {"filament_color", "filament_colour"} else key
-            if len(value) > 16384 or key in fields and fields[key] != value:
-                raise AnycubicError("The G-code contains conflicting or oversized filament metadata")
-            fields[key] = value
+            md5.update(chunk)
+            sha256.update(chunk)
     if (size, sha256.hexdigest()) != (artifact.size, artifact.sha256):
         raise AnycubicError("The G-code changed while inspecting its filament metadata")
     materials = [part.strip().strip('"') for part in fields.get("filament_type", "").split(";")]

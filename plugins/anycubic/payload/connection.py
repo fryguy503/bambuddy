@@ -555,6 +555,13 @@ class AnycubicConnection:
                 )
             if op == "anycubic.inventory.assign":
                 self.inventory_links = await inventory.assign(self.config, resource, p["spool_id"])
+                # The metadata is durable already. Publish it without waiting
+                # for another native report, and do not turn an event delivery
+                # failure into a failed assignment that the user must repeat.
+                try:
+                    self._emit("device.snapshot", self.state.model_dump(mode="json"))
+                except Exception:
+                    logger.warning("Anycubic spool assignment saved; status refresh failed")
                 return self._receipt(request, result=self.inventory_links)
             if op == "anycubic.ace.rename":
                 key = "name:" + self.printer_key + ":" + resource
@@ -636,7 +643,9 @@ class AnycubicConnection:
                 request,
                 "failed",
                 error=OperationError(
-                    code="anycubic.operation_rejected",
+                    code=exc.code
+                    if isinstance(exc, inventory.InventoryAssignmentError)
+                    else "anycubic.operation_rejected",
                     message=str(exc)
                     if isinstance(exc, AnycubicError)
                     else "The native operation could not be completed",
