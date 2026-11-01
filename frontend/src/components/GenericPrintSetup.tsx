@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp, Circle, Settings } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -49,15 +49,39 @@ export function GenericPrintSetup({ printerId, printerName, value, onChange, mat
   const device = usePrinterDevice(printerId);
   const requirements = usePrinterJobDescription(printerId, suppliedDescription ? undefined : source);
   const description = suppliedDescription || requirements.data;
-  const telemetry = useQuery({ queryKey: ['printer-device-state', printerId], queryFn: () => printerDeviceApi.state(printerId), networkMode: 'always', enabled: !!description && !!device.data, refetchInterval: 3000, retry: false });
+  const telemetry = useQuery({ queryKey: ['printer-device-state', printerId], queryFn: () => printerDeviceApi.state(printerId), networkMode: 'always', enabled: !!device.data, refetchInterval: 3000, retry: false });
+  const refreshedRevision = useRef<string | null>(null);
   useEffect(() => {
     const revision = telemetry.data?.descriptor_revision;
     const descriptorRevision = device.data?.revision;
-    if (revision && descriptorRevision && revision !== descriptorRevision) {
-      void queryClient.invalidateQueries({ queryKey: ['printer-device', printerId] });
-      void queryClient.invalidateQueries({ queryKey: ['printer-job-description', printerId] });
-    }
+    if (!revision || !descriptorRevision) return;
+    const key = `${printerId}:${revision}`;
+    if (revision === descriptorRevision) { refreshedRevision.current = key; return; }
+    if (refreshedRevision.current === key) return;
+    refreshedRevision.current = key;
+    // Live resource changes do not change the sliced artifact. Refresh the
+    // descriptor without cancelling every file inspection in an open batch.
+    void queryClient.invalidateQueries({ queryKey: ['printer-device', printerId], exact: true }, { cancelRefetch: false });
   }, [telemetry.data?.descriptor_revision, device.data?.revision, printerId, queryClient]);
+  const requirementsFingerprint = useMemo(() => device.data ? JSON.stringify({
+    model: device.data.model_id,
+    configuration: device.data.configuration_schema,
+    start: device.data.operations.find(operation => operation.id === 'job.start')?.parameters_schema,
+    resources: device.data.resources.filter(resource => resource.kind === 'tool' || resource.kind === 'material_source')
+      .map(resource => ({ id: resource.id, kind: resource.kind, relations: resource.relations })),
+  }) : null, [device.data]);
+  const previousRequirements = useRef<{ printerId: number; fingerprint: string } | null>(null);
+  useEffect(() => {
+    if (!requirementsFingerprint) return;
+    const previous = previousRequirements.current;
+    previousRequirements.current = { printerId, fingerprint: requirementsFingerprint };
+    if (previous?.printerId !== printerId || previous.fingerprint === requirementsFingerprint) return;
+    // A confirmed schema/topology update can affect file requirements. Mark
+    // completed results stale once; pending inspections retain their slot.
+    void queryClient.invalidateQueries({ queryKey: ['printer-job-description', printerId],
+      predicate: query => query.state.status === 'success' && query.state.fetchStatus === 'idle',
+    }, { cancelRefetch: false });
+  }, [requirementsFingerprint, printerId, queryClient]);
   const normalized = description ? jobSetupDefaults(value, description, device.data, telemetry.data) : value;
   const normalizedKey = JSON.stringify(normalized);
   const valueKey = JSON.stringify(value);

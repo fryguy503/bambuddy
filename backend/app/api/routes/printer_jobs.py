@@ -1,7 +1,5 @@
 """Core-authorized artifact inspection through the selected printer provider."""
 
-import asyncio
-import inspect
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,10 +19,10 @@ from backend.app.core.printer_scope import PrinterScope
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
 from backend.app.models.printer import Printer
-from backend.app.printers.api import operation_lease
 from backend.app.printers.contracts import PrinterConfig, PrinterPluginError
-from backend.app.printers.registry import plugin_for, provider_context
-from backend.app.printers.sdk import JobArtifact, JobDescription, validate_job_description
+from backend.app.printers.job_inspection import JobInspectionBusy, inspect_job
+from backend.app.printers.registry import plugin_for
+from backend.app.printers.sdk import JobArtifact, JobDescription
 
 router = APIRouter(prefix="/printers", tags=["printer-jobs"])
 
@@ -95,23 +93,16 @@ async def describe_printer_job(
     )
     config = PrinterConfig.from_printer(printer)
     plugin = plugin_for(config)
-    with operation_lease(printer_id), provider_context(config, plugin):
-        descriptor = plugin.describe_device(config)
-
-        async def describe():
-            if inspect.iscoroutinefunction(plugin.describe_job):
-                return await plugin.describe_job(config, artifact, path)
-            result = await asyncio.to_thread(plugin.describe_job, config, artifact, path)
-            return await result if inspect.isawaitable(result) else result
-
-        try:
-            result = validate_job_description(descriptor, await asyncio.wait_for(describe(), timeout=60))
-        except TimeoutError as exc:
-            raise HTTPException(408, "Reading print requirements timed out") from exc
-        except PrinterPluginError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(422, "This artifact is not compatible with the selected printer") from exc
+    try:
+        result = await inspect_job(config, plugin, artifact, path)
+    except JobInspectionBusy as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(408, "Reading print requirements timed out") from exc
+    except PrinterPluginError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, "This artifact is not compatible with the selected printer") from exc
     if result.artifact.uri != artifact.uri or result.artifact.filename != artifact.filename:
         raise HTTPException(409, "Plugin returned requirements for a different artifact")
     return result.model_copy(
