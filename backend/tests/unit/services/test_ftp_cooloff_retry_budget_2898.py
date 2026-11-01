@@ -203,7 +203,7 @@ class TestDispatchKeepsItsAttempts:
         """
         _arm()
         local = tmp_path / "job.gcode.3mf"
-        local.write_bytes(b"x" * 1024)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 1020)
 
         result = await with_ftp_retry(
             upload_file_async,
@@ -230,7 +230,7 @@ class TestDispatchKeepsItsAttempts:
         """
         _arm()
         local = tmp_path / "job.gcode.3mf"
-        local.write_bytes(b"x" * 1024)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 1020)
 
         result = await with_ftp_retry(
             upload_file_async,

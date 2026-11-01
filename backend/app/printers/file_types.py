@@ -90,6 +90,7 @@ class FtpFailureKind(Enum):
     TIMEOUT = "timeout"
     STORAGE = "storage"  # 553/552 -- the case the SD-card advice was written for
     NOT_FOUND = "not_found"  # 550
+    INVALID_FILE = "invalid_file"  # provider rejected the local artifact before transfer
     NETWORK = "network"  # socket dropped, or an FTP error with no clearer reading
     UNKNOWN = "unknown"
 

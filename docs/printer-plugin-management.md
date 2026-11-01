@@ -46,7 +46,7 @@ manifest and inventory, rather than replacing that version with changed code.
 Build the bundled Bambu package from its plugin source:
 
 ```console
-python scripts/build_printer_plugin.py --output dist/bambu-1.0.0.bbp
+python scripts/build_printer_plugin.py --output dist/bambu-1.0.2.bbp
 ```
 
 The builder packages plugin code and resources, writes its manifest and hashes,
@@ -54,6 +54,11 @@ and excludes application code, databases and compiled Python caches. For a new
 Bambu plugin release, update the plugin's own version and model/feature metadata
 before building. The package's `requires_core`, `requires_api`, `requires_python`
 and dependency ranges must accurately describe the versions it supports.
+
+File Manager accepts raw `.gcode` files for plugins that support them. The
+selected printer plugin validates the file before printing. The bundled Bambu
+plugin requires a 3MF ZIP container for `.3mf` transfers and rejects raw G-code
+renamed to `.3mf` before connecting to the printer.
 
 ## Installation and activation
 

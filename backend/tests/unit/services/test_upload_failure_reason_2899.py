@@ -110,7 +110,7 @@ def test_upload_classifies_the_printers_reply_code(reply, kind, tmp_path):
     every failure alike.
     """
     local = tmp_path / "job.3mf"
-    local.write_bytes(b"x" * 16)
+    local.write_bytes(b"PK\x03\x04" + b"x" * 12)
 
     client = BambuFTPClient(IP, "12345678")
     client._ftp = MagicMock()
@@ -125,7 +125,7 @@ def test_upload_classifies_the_printers_reply_code(reply, kind, tmp_path):
 def test_a_successful_upload_leaves_no_failure_behind(tmp_path):
     """Otherwise a later failure inherits an earlier one's reason."""
     local = tmp_path / "job.3mf"
-    local.write_bytes(b"x" * 16)
+    local.write_bytes(b"PK\x03\x04" + b"x" * 12)
 
     client = BambuFTPClient(IP, "12345678")
     client._ftp = MagicMock()
@@ -148,7 +148,7 @@ class TestTheReportReachesTheCaller:
 
     async def test_upload_file_async_fills_the_slot(self, refusing_printer, tmp_path):
         local = tmp_path / "job.3mf"
-        local.write_bytes(b"x" * 16)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 12)
         report = FtpFailureReport()
 
         assert await upload_file_async(IP, "12345678", local, "/job.3mf", timeout=5.0, failure=report) is False
@@ -163,7 +163,7 @@ class TestTheReportReachesTheCaller:
         the one the operator should be given.
         """
         local = tmp_path / "job.3mf"
-        local.write_bytes(b"x" * 16)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 12)
         report = FtpFailureReport()
 
         result = await with_ftp_retry(
@@ -192,7 +192,7 @@ class TestTheReportReachesTheCaller:
         report the wrong cause with total confidence.
         """
         local = tmp_path / "job.3mf"
-        local.write_bytes(b"x" * 16)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 12)
         mine, theirs = FtpFailureReport(), FtpFailureReport()
 
         await upload_file_async(IP, "12345678", local, "/a.3mf", timeout=5.0, failure=mine)
@@ -202,7 +202,7 @@ class TestTheReportReachesTheCaller:
     async def test_a_caller_that_does_not_ask_is_unaffected(self, refusing_printer, tmp_path):
         """Every other caller passes nothing and must keep working."""
         local = tmp_path / "job.3mf"
-        local.write_bytes(b"x" * 16)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 12)
         assert await upload_file_async(IP, "12345678", local, "/job.3mf", timeout=5.0) is False
 
 
