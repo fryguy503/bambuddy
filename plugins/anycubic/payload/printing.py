@@ -138,6 +138,16 @@ class PrintArtifact:
         }
 
 
+class MaterialMappingError(AnycubicError):
+    """A material choice needs review; this alone never proves dispatch was unsent."""
+
+    def __init__(self, message, *, code="anycubic.material_mapping_required", tools=(), resource_ids=()):
+        super().__init__(message)
+        self.code = code
+        self.tools = tuple(tools)
+        self.resource_ids = tuple(resource_ids)
+
+
 def inspect_print_file(path: Path, filename: str, model: str | None = None) -> PrintArtifact:
     """Collect requirements while validating, then verify the complete file hash."""
     fields, tools, optional = {}, set(), {}
@@ -250,12 +260,17 @@ def print_data(artifact: PrintArtifact, options: dict, slots: list[dict], suppor
     mappings = []
     if value["use_ace"]:
         if set(selected) != required:
-            raise AnycubicError("Map every original sliced tool to an available ACE slot")
+            raise MaterialMappingError("Map every original sliced tool to an available ACE slot", tools=required)
         for filament in artifact.filaments:
             choice = selected[filament.tool]
             matches = [s for s in slots if (s["box_id"], s["slot_id"]) == (choice["box_id"], choice["slot_id"])]
             if len(matches) != 1 or matches[0]["available"] is not True:
-                raise AnycubicError("A selected ACE slot is unavailable or its material status is stale")
+                raise MaterialMappingError(
+                    "A selected ACE slot is unavailable or its material status is stale",
+                    code="anycubic.material_unavailable",
+                    tools=[filament.tool],
+                    resource_ids=[f"material:ace:{choice['box_id']}:{choice['slot_id']}"],
+                )
             slot = matches[0]
             material = slot["material_type"]
             if not isinstance(material, str) or material.strip().casefold() in {
@@ -265,9 +280,19 @@ def print_data(artifact: PrintArtifact, options: dict, slots: list[dict], suppor
                 "unkonwn",
                 "default",
             }:
-                raise AnycubicError("A selected ACE slot does not report a known loaded material")
+                raise MaterialMappingError(
+                    "A selected ACE slot does not report a known loaded material",
+                    code="anycubic.material_unknown",
+                    tools=[filament.tool],
+                    resource_ids=[f"material:ace:{choice['box_id']}:{choice['slot_id']}"],
+                )
             if material.casefold() != filament.material_type.casefold() and not value["allow_material_type_mismatch"]:
-                raise AnycubicError("The selected ACE material does not match the sliced filament type")
+                raise MaterialMappingError(
+                    "The selected ACE material does not match the sliced filament type",
+                    code="anycubic.material_type_mismatch",
+                    tools=[filament.tool],
+                    resource_ids=[f"material:ace:{choice['box_id']}:{choice['slot_id']}"],
+                )
             mappings.append(
                 {
                     "paint_index": filament.tool,
@@ -280,7 +305,7 @@ def print_data(artifact: PrintArtifact, options: dict, slots: list[dict], suppor
                 }
             )
     elif len(required) != 1:
-        raise AnycubicError("A multi-filament print requires an ACE mapping for every used tool")
+        raise MaterialMappingError("A multi-filament print requires an ACE mapping for every used tool", tools=required)
     empty_capture = {"status": 0, "count": 0, "type": 0, "mode": 0}
     return {
         "taskid": "-1",

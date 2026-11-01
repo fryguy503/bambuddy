@@ -25,7 +25,7 @@ from backend.app.printers.sdk import (
 from .client import AnycubicMQTTClient
 from .device import device_id, native_slot, snapshot
 from .persistence import RESOLVABLE_STATES
-from .printing import inspect_print_file, print_data, validate_options
+from .printing import inspect_print_file, print_data
 from .protocol import AnycubicError, task_id as native_task_id
 
 logger = logging.getLogger(__name__)
@@ -405,60 +405,20 @@ class AnycubicConnection:
             and job.artifact.sha256 != saved["sha256"]
         ):
             raise AnycubicError("The retained artifact changed since upload")
-        mapping = []
+        from .job_preflight import MaterialSelectionRequired, material_issue, material_readiness, prepare_job
+        from .printing import MaterialMappingError
+
         inputs = {}
-        required = {filament.tool for filament in artifact.filaments}
-        numeric = all(binding.input_id.isdecimal() for binding in job.bindings)
-        numeric_ids = {int(binding.input_id) for binding in job.bindings} if numeric else set()
-        offset = 1 if numeric_ids != required and numeric_ids == {tool + 1 for tool in required} else 0
-        for binding in job.bindings:
-            match = re.fullmatch(r"(?:T|input:)?(\d+)", binding.input_id)
-            if not match:
-                raise AnycubicError("Material input IDs must identify original sliced T inputs")
-            tool = int(match[1]) - offset
-            if tool in inputs.values():
-                raise AnycubicError("Each sliced input requires exactly one material binding")
-            inputs[binding.input_id] = tool
-            if binding.source_id == "material:external":
-                continue
-            box, slot = native_slot(binding.source_id or binding.slot_id or "")
-            mapping.append({"tool": tool, "box_id": box, "slot_id": slot})
-        if job.bindings and set(inputs.values()) != required:
-            raise AnycubicError("Bind every original sliced material input exactly once")
-        options = validate_options(
-            {
-                "use_ace": bool(mapping),
-                "filament_mapping": mapping,
-                **{
-                    name: value
-                    for name, value in job.options.items()
-                    if name
-                    in {
-                        "auto_leveling",
-                        "vibration_compensation",
-                        "flow_calibration",
-                        "timelapse",
-                        "allow_material_type_mismatch",
-                    }
-                },
-            }
-        )
-        if set(job.options) - {
-            "auto_leveling",
-            "vibration_compensation",
-            "flow_calibration",
-            "timelapse",
-            "use_ace",
-            "allow_material_type_mismatch",
-        }:
-            raise AnycubicError("Unsupported native print option")
-        if "use_ace" in job.options and job.options["use_ace"] != bool(mapping):
-            raise AnycubicError("ACE selection must agree with the explicit material bindings")
-        # Reject known invalid material choices before reserving a durable intent.
-        # submit_print repeats this check against fresh capabilities after its
-        # final file/hash preflight, so this does not grant dispatch authority.
-        capabilities = self.native.print_capabilities()
-        print_data(artifact, options, capabilities["ace_slots"], capabilities["options"])
+        try:
+            options, inputs = prepare_job(job, artifact)
+            # Native submit_print checks again after reservation. Only this
+            # pre-reservation rejection can prove the command was not submitted.
+            capabilities, issues = material_readiness(self.native, job)
+            if issues:
+                raise MaterialSelectionRequired(issues)
+            print_data(artifact, options, capabilities["ace_slots"], capabilities["options"])
+        except MaterialMappingError as error:
+            raise MaterialSelectionRequired([material_issue(error, job, inputs)]) from error
         usage_job = job.model_copy(
             update={
                 "bindings": [
@@ -531,6 +491,7 @@ class AnycubicConnection:
 
     async def invoke(self, request):
         from . import inventory
+        from .job_preflight import MaterialSelectionRequired
 
         operation = validate_invocation(self.plugin.describe_device(self.config), request)
         op = request.operation_id
@@ -654,13 +615,18 @@ class AnycubicConnection:
                 request,
                 "failed",
                 error=OperationError(
-                    code=exc.code
+                    code="job.material_selection_required"
+                    if isinstance(exc, MaterialSelectionRequired)
+                    else exc.code
                     if isinstance(exc, inventory.InventoryAssignmentError)
                     else "anycubic.operation_rejected",
                     message=str(exc)
                     if isinstance(exc, AnycubicError)
                     else "The native operation could not be completed",
                     retryable=False,
+                    details={"not_submitted": True, "issues": exc.issues}
+                    if isinstance(exc, MaterialSelectionRequired)
+                    else {},
                 ),
             )
 

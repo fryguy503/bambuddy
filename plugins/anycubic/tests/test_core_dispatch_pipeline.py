@@ -11,7 +11,7 @@ from backend.app.printers import api as api_module, registry as registry_module
 from backend.app.printers.api import printer_api
 from backend.app.printers.contracts import PrinterConfig, PrinterPluginError
 from backend.app.printers.files import upload_file_async
-from backend.app.printers.job_dispatch import start_queue_job
+from backend.app.printers.job_dispatch import JobDispatchRejected, queue_hold, start_queue_job
 from backend.app.printers.registry import provider_context
 from backend.app.printers.sdk import JobArtifact, JobRequest, MaterialBinding
 from plugins.anycubic.payload import inventory, transport
@@ -179,7 +179,7 @@ async def test_real_upload_alias_survives_core_uri_rewrite_and_native_ack(prepar
     "failure,reason",
     [
         ("type", "does not match the sliced"),
-        ("stale", "unavailable or its material status is stale"),
+        ("stale", "Waiting for fresh selected ACE material information"),
         ("hold", "queue:prior-held"),
     ],
 )
@@ -191,8 +191,15 @@ async def test_core_keeps_specific_rejection_without_publishing_or_replaying(pre
         case.connection.journal.begin(
             "queue:prior-held", {"status": "unknown", "native_filename": "prior-123456789abc.gcode"}
         )
-    with provider_context(case.config, case.plugin), pytest.raises(PrinterPluginError, match=reason):
+    with provider_context(case.config, case.plugin), pytest.raises(PrinterPluginError, match=reason) as rejected:
         await start_queue_job(case.item, case.printer, case.adapter, case.alias)
+    assert isinstance(rejected.value, JobDispatchRejected)
+    if failure == "hold":
+        assert rejected.value.preflight is None
+    else:
+        assert queue_hold(rejected.value.preflight)["kind"] == (
+            "refresh" if failure == "stale" else "material_selection"
+        )
     assert case.captures[-1].status == "failed" and reason in case.captures[-1].error.message
     assert not case.frames and case.connection.journal.get("queue:22") is None
 

@@ -40,7 +40,7 @@ _CAPABILITIES = frozenset(
 class AnycubicPrinterPlugin(PrinterPlugin):
     id = "anycubic"
     name = "Anycubic signed LAN"
-    version = "0.1.11"
+    version = "0.1.12"
     api_version = 2
     publisher_id = "fryguy503"
     capabilities = _CAPABILITIES
@@ -95,9 +95,9 @@ class AnycubicPrinterPlugin(PrinterPlugin):
         manifest = super().sdk_manifest()
         if self._installed_manifest is not None:
             return manifest
-        # Provider-owned connection diagnostics use SDK 2.3.
+        # Read-only queue material preflight requires the host's SDK 2.4 gate.
         # Older hosts must reject this version from metadata before import.
-        return manifest.model_copy(update={"requires_api": ">=2.3.0,<3.0.0"})
+        return manifest.model_copy(update={"requires_api": ">=2.4.0,<3.0.0"})
 
     def connection_fields(self):
         return {
@@ -148,6 +148,14 @@ class AnycubicPrinterPlugin(PrinterPlugin):
         from .job_description import describe_job
 
         return describe_job(self, config, artifact, path)
+
+    async def preflight_job(self, config, connection, job, path):
+        from .job_preflight import preflight_job
+
+        connection = self._typed_connection(connection)
+        if connection.config != config:
+            raise PrinterPluginError("Printer configuration changed; refresh before checking queued material")
+        return await preflight_job(self, config, connection, job, path)
 
     async def connection_diagnostics(self, config, *, connection=None, wait_for_publish_seconds=0, progress=None):
         from .diagnostic import diagnose

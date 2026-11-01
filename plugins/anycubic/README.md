@@ -1,15 +1,33 @@
 # Anycubic printer plugin
 
 The independent Anycubic provider uses Bambuddy's printer SDK v2. Its current
-release is `anycubic` **0.1.11**, published under `fryguy503`. The included Bambu
+release is `anycubic` **0.1.12**, published under `fryguy503`. The included Bambu
 provider remains a separate plugin.
 
-This package requires the printer plugin implementation from
-`Feat/Printer_modularization` or `codex/printer-modularization-https`. An upstream
-application without the SDK v2 package manager cannot install it; the
-application version string alone does not establish SDK availability.
-Version 0.1.11 requires SDK 2.3; update the host before uploading it. Earlier
-SDK hosts reject this package during compatibility validation.
+This release requires printer SDK 2.4 from the host's
+`feat/queue-material-selection` branch, including its queue preflight workflow.
+Update the host before uploading version 0.1.12. Hosts with only the earlier
+SDK 2.3 printer-modularization implementation reject this package during
+compatibility validation. The application version string alone does not
+establish SDK availability.
+
+Version 0.1.12 adds read-only queue material preflight. A selected ACE slot
+that is empty, unavailable or loaded with a different full filament type
+keeps the job pending and prompts review of its existing filament mapping.
+Stale material/capability reports wait for refresh. Another loaded slot is
+never selected automatically; the existing explicit material-type override
+and color-choice policy remain in effect. A reported 0% estimate alone is not
+treated as filament runout.
+
+The check uses the actual sliced file's requirements, including older jobs
+without saved material descriptions. Empty/stale-slot waits do not reopen
+the file; unchanged valid sources use a bounded path/stat/model/hash-bound
+requirements cache. Upload and dispatch still fully validate the actual file.
+If material changes after upload, only a rejection before reserving a print
+dispatch can return the SDK's explicit `not_submitted` proof and keep the job
+pending. A reserved or uncertain print retains its durable hold and is never
+automatically resent. Manual-start policy, queue order and inventory accounting
+remain owned by the host's existing workflows.
 
 Version 0.1.11 lets an operator resolve a held `running` dispatch after a
 physical stop or missed terminal report. In **Advanced controls → Confirm
@@ -73,17 +91,17 @@ The 0.1.2 durability behavior remains: finalized dispatch outcomes stay authorit
 older observers report stale progress. It preserves pending accounting and
 repairs legacy journal fields under the existing storage lock. A terminal
 observation awaiting host cleanup remains replayable; no print command is
-replayed. The published 0.1.0 through 0.1.10 archives are unchanged.
+replayed. The published 0.1.0 through 0.1.11 archives are unchanged.
 
 ## Install or update
 
 The release artifact is
-[`packages/anycubic/anycubic-0.1.11.bbp`](../../packages/anycubic/anycubic-0.1.11.bbp).
+[`packages/anycubic/anycubic-0.1.12.bbp`](../../packages/anycubic/anycubic-0.1.12.bbp).
 Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
 1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
    `.bbp` file and optionally paste its expected SHA-256 digest.
-2. Review the validation result, then apply version `0.1.11`. Staging alone does
+2. Review the validation result, then apply version `0.1.12`. Staging alone does
    not load or enable its code.
 3. Add or edit a printer, select **Anycubic**, and choose its model.
 
@@ -268,7 +286,7 @@ ordering, timestamps and file modes are fixed for reproducible builds.
 For an alternate output location:
 
 ```console
-python plugins/anycubic/build.py --output work/anycubic-0.1.11.bbp
+python plugins/anycubic/build.py --output work/anycubic-0.1.12.bbp
 ```
 
 For a later release, update the version in the payload's plugin factory, then
