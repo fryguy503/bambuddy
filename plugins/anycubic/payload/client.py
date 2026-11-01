@@ -49,6 +49,40 @@ _QUERIES = (
 )
 
 
+class _SessionMQTTClient(mqtt.Client):
+    """The session worker owns socket writes; callers only queue packets."""
+
+    def __init__(self):
+        super().__init__(
+            CallbackAPIVersion.VERSION2,
+            client_id="bambuddy-" + uuid.uuid4().hex,
+            protocol=mqtt.MQTTv311,
+            clean_session=True,
+            reconnect_on_failure=False,
+        )
+        self._retirement_lock = threading.Lock()
+        # Paho's manual-loop mode otherwise calls loop_write() inline from
+        # publish()/subscribe(). A failed socket can then enter a disconnect
+        # callback while the caller owns our state lock, inverting that lock
+        # with Paho's non-reentrant callback lock. These public callbacks make
+        # Paho queue writes; the existing session loop drains want_write().
+        self.on_socket_register_write = lambda *_args: None
+        self.on_socket_unregister_write = lambda *_args: None
+
+    def _get_proxy(self):
+        return None  # LAN printer credentials must not traverse an environment proxy.
+
+    def disconnect(self, reasoncode=None, properties=None):
+        # This manually driven client has no loop_start() thread to finish a
+        # queued DISCONNECT. Close first, without draining pending control or
+        # print packets onto a retired session. All native callers retire it
+        # outside their state lock; repeated retirements are harmless.
+        with self._retirement_lock:
+            self._reset_sockets()
+            self._out_packet.clear()
+            return super().disconnect(reasoncode, properties)
+
+
 class AnycubicMQTTClient:
     """A display-state adapter; no Bambu commands or archival/spool callbacks.
 
@@ -208,17 +242,7 @@ class AnycubicMQTTClient:
             if stop.is_set():
                 return
 
-            class DirectClient(mqtt.Client):
-                def _get_proxy(self):
-                    return None  # LAN printer credentials must not traverse an environment proxy.
-
-            client = DirectClient(
-                CallbackAPIVersion.VERSION2,
-                client_id="bambuddy-" + uuid.uuid4().hex,
-                protocol=mqtt.MQTTv311,
-                clean_session=True,
-                reconnect_on_failure=False,
-            )
+            client = _SessionMQTTClient()
             client.connect_timeout = 5
             client.max_queued_messages_set(32)
             client.username_pw_set(credentials.username, credentials.password)

@@ -389,7 +389,7 @@ class TelemetryTests(unittest.TestCase):
 
 class ClientTests(unittest.TestCase):
     @patch("plugins.anycubic.payload.client.pair")
-    @patch("plugins.anycubic.payload.client.mqtt.Client")
+    @patch("plugins.anycubic.payload.client._SessionMQTTClient")
     def test_saved_model_mismatch_is_rejected_before_mqtt_credentials_are_used(self, mqtt_client, pairing):
         pairing.return_value = Credentials(HOST, "20029", "device-one", "user", "password")
         client = AnycubicMQTTClient(HOST, USN, model="Kobra 3", tls_fingerprint=PIN)
