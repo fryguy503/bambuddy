@@ -8,7 +8,7 @@ shared state, events and command results; core owns persistence and workflows.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         ConnectionDiagnosticResult,
         DeviceDescriptor,
         DeviceSnapshot,
+        JobPreflightResult,
         OperationDescriptor,
         OperationReceipt,
         OperationRequest,
@@ -178,7 +179,9 @@ class PrinterPlugin(ABC):
 
         return validate_snapshot(self.describe_device(config), snapshot)
 
-    def preflight_job(self, config: PrinterConfig, connection: PrinterConnection, job, path):
+    def preflight_job(
+        self, config: PrinterConfig, connection: PrinterConnection, job, path
+    ) -> JobPreflightResult | dict[str, Any] | Awaitable[JobPreflightResult | dict[str, Any]]:
         """Read current job readiness without uploading, reserving or sending commands.
 
         SDK 2.4 providers may return recoverable material-selection or refresh
