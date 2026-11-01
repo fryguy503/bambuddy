@@ -33,8 +33,9 @@ async def test_bambu_package_updates_protocol_models_and_version_independently(t
         and path.suffix not in {".pyc", ".pyo"}
     }
     plugin_source = files["plugin.py"].decode("utf-8")
-    assert 'version = "1.0.0"' in plugin_source
-    plugin_source = plugin_source.replace('version = "1.0.0"', 'version = "1.0.1"', 1)
+    assert f'version = "{original.version}"' in plugin_source
+    next_version = "1.0.3"
+    plugin_source = plugin_source.replace(f'version = "{original.version}"', f'version = "{next_version}"', 1)
     plugin_source += (
         "\nBambuPrinterPlugin.models = (*BambuPrinterPlugin.models, "
         'PrinterModel("FUTURE", "Future Bambu", capabilities=_BASE))\n'
@@ -56,7 +57,7 @@ async def test_bambu_package_updates_protocol_models_and_version_independently(t
         b"\ndef resolve_slot_nozzle(*args, **kwargs):\n    return SlotNozzle(extruder=7, diameter='0.8')\n"
     )
     manifest = original.sdk_manifest().model_dump(mode="json")
-    manifest.update(version="1.0.1", entrypoint="plugin:BambuPrinterPlugin")
+    manifest.update(version=next_version, entrypoint="plugin:BambuPrinterPlugin")
     manifest["models"].append({"id": "FUTURE", "name": "Future Bambu", "capabilities": sorted(original.capabilities)})
     manifest["files"] = {name: hashlib.sha256(content).hexdigest() for name, content in files.items()}
     archive = io.BytesIO()
@@ -66,14 +67,14 @@ async def test_bambu_package_updates_protocol_models_and_version_independently(t
             output.writestr("payload/" + name, content)
     manager = PluginManager()
     staged = manager.stage(archive.getvalue())
-    assert staged["version"] == "1.0.1"
-    manager.select("bambu", "1.0.1", loaded_version="bundled")
+    assert staged["version"] == next_version
+    manager.select("bambu", next_version, loaded_version="bundled")
     restarted = PrinterPluginRegistry()
     monkeypatch.setattr(registry_module, "registry", restarted)
     updated = restarted.get("bambu")
-    assert updated.version == "1.0.1", restarted.load_errors
+    assert updated.version == next_version, restarted.load_errors
     assert updated.model("FUTURE").name == "Future Bambu"
-    assert original.version == "1.0.0" and original.model("FUTURE") is None
+    assert original.version == "1.0.2" and original.model("FUTURE") is None
     assert baseline_core_version == APP_VERSION
     namespace = restarted.loaded_sources["bambu"]["module_namespace"]
     assert namespace.startswith("bambuddy_printer_plugins.bambu_")

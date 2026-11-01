@@ -1764,6 +1764,24 @@ async def upload_file_async(
             progress_callback(uploaded, total)
 
     def _upload(force_prot_c: bool = False) -> bool:
+        # A shared library may contain raw G-code for other printer plugins.
+        # Bambu's project_file command needs a 3MF container; renaming a raw
+        # export to .gcode.3mf cannot make it printable. Check the bytes here,
+        # in the upload worker, before opening any printer connection.
+        if remote_path.lower().endswith(".3mf"):
+            with local_path.open("rb") as source:
+                is_3mf = source.read(4) == b"PK\x03\x04"
+            if not is_3mf:
+                detail = (
+                    "Bambu printers require a .gcode.3mf ZIP container. "
+                    "Re-export the sliced file from your slicer; renaming raw .gcode to .3mf does not convert it."
+                )
+                if failure is not None:
+                    failure.failure = FtpFailure(
+                        getattr(FtpFailureKind, "INVALID_FILE", FtpFailureKind.UNKNOWN), detail
+                    )
+                logger.warning("Bambu upload refused before connecting: %s", detail)
+                return False
         mode_str = "prot_c" if force_prot_c else "prot_p"
         logger.info(
             f"FTP connecting to {ip_address} for upload (model={printer_model}, "

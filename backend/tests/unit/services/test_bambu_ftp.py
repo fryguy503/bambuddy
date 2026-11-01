@@ -878,7 +878,7 @@ class TestAsyncWrappers:
     @pytest.mark.asyncio
     async def test_upload_file_async_success(self, patch_ftp_port, tmp_path):
         """upload_file_async succeeds for X1C."""
-        content = b"async upload"
+        content = b"PK\x03\x04async upload"
         local = tmp_path / "async_up.3mf"
         local.write_bytes(content)
         result = await upload_file_async(
@@ -894,7 +894,7 @@ class TestAsyncWrappers:
     @pytest.mark.asyncio
     async def test_upload_file_async_a1_fallback(self, patch_ftp_port, tmp_path):
         """upload_file_async tries prot_p then falls back to prot_c for A1."""
-        content = b"a1 async upload"
+        content = b"PK\x03\x04a1 async upload"
         local = tmp_path / "a1_async.3mf"
         local.write_bytes(content)
         # For A1 models, if prot_p succeeds we get True.
@@ -1669,7 +1669,7 @@ class TestUploadDeadline:
         """
         state = slow_upload_client
         local = tmp_path / "slow.3mf"
-        local.write_bytes(b"x" * 4096)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 4092)
 
         with pytest.raises(bambu_ftp.UploadCancelled):
             await upload_file_async("127.0.0.1", "12345678", local, "/cache/slow.3mf", timeout=0.2, printer_model="X1C")
@@ -1690,7 +1690,7 @@ class TestUploadDeadline:
         """
         state = slow_upload_client
         local = tmp_path / "slow.3mf"
-        local.write_bytes(b"x" * 4096)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 4092)
 
         with pytest.raises(bambu_ftp.UploadCancelled):
             await with_ftp_retry(
@@ -1717,7 +1717,7 @@ class TestUploadDeadline:
         state = slow_upload_client
         state["chunk_delay"] = 0.05
         local = tmp_path / "slow.3mf"
-        local.write_bytes(b"x" * 4096)
+        local.write_bytes(b"PK\x03\x04" + b"x" * 4092)
 
         async def _dispatch(name: str) -> bool:
             return await upload_file_async(

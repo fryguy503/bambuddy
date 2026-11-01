@@ -11,7 +11,13 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TypeVar
 
-from backend.app.printers.file_types import DownloadDeadlineExceeded, FtpFailure, FtpFailureKind, UploadCancelled
+from backend.app.printers.file_types import (
+    DownloadDeadlineExceeded,
+    FtpFailure,
+    FtpFailureKind,
+    FtpFailureReport,
+    UploadCancelled,
+)
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -147,6 +153,11 @@ def describe_upload_failure(failure: FtpFailure | None) -> str:
             "The printer rejected the upload path (550). See the server log — this is a Bambuddy-side "
             "problem, not something to fix on the printer."
         )
+    if failure.kind is FtpFailureKind.INVALID_FILE:
+        return (
+            "This file's content is not in a format supported by the selected printer. "
+            "Re-export it as a sliced print file for that printer."
+        )
     return (
         "Could not upload the file to the printer. See the server log for the reason — "
         "it records what the printer's file service said."
@@ -222,6 +233,14 @@ async def with_ftp_retry(
             if result not in (False, None, []):
                 if attempt > 0:
                     _retry_logger.info("%s succeeded on attempt %s/%s", operation_name, attempt + 1, max_retries + 1)
+                return result
+            failure_report = kwargs.get("failure")
+            if (
+                isinstance(failure_report, FtpFailureReport)
+                and failure_report.failure is not None
+                and failure_report.failure.kind is FtpFailureKind.INVALID_FILE
+            ):
+                # Retrying the same bytes cannot change their format.
                 return result
             # Operation returned failure indicator
             if attempt > 0:
