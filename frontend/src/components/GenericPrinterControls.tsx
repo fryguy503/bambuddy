@@ -212,14 +212,19 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
     setPopover(null);
     setDialog({ operations: choices, initial: { operationId: operation.id, resourceId: resource?.id || (targets.length === 1 ? targets[0].id : undefined), parameters } });
   };
-  const send = async (operation: PrinterOperation, parameters: Record<string, unknown>, resource?: PrinterResource, confirmed = false) => {
+  const send = async (operation: PrinterOperation, parameters: Record<string, unknown>, resource?: PrinterResource, confirmed = false, options: { throwOnFailure?: boolean } = {}) => {
     if (inflight.current || !canSend(operation, resource)) return false;
     if (operation.confirmation && !confirmed) { setConfirmation({ operation, parameters, resource }); return false; }
     inflight.current = true;
     try {
       const result = await quick.mutateAsync({ operation, resource, parameters: { ...schemaDefaults(operationSchema(operation, resource)), ...parameters } });
-      return result.status !== 'failed' && result.result !== false;
-    } catch { return false; }
+      const succeeded = result.status !== 'failed' && result.result !== false;
+      if (!succeeded && options.throwOnFailure) throw new Error(result.error?.message || 'The inventory assignment could not be completed.');
+      return succeeded;
+    } catch (error) {
+      if (options.throwOnFailure) throw error instanceof Error ? error : new Error('The inventory assignment could not be completed.');
+      return false;
+    }
     finally { inflight.current = false; }
   };
   const showPopover = (selection: CardControl, anchor: HTMLElement) => {
@@ -290,7 +295,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
     const spoolId = typeof spool === 'number' && Number.isSafeInteger(spool) && spool > 0 ? spool : undefined;
     const vendor = knownValue(['vendor', 'brand']);
     const colorName = knownValue(['color_name', 'colour_name']);
-    const actionClass = 'block w-full rounded px-2 py-1.5 text-left text-xs text-bambu-gray hover:bg-bambu-dark hover:text-white disabled:cursor-not-allowed disabled:opacity-40';
+    const actionClass = 'block w-full rounded px-2 py-1.5 text-left text-xs font-medium text-white hover:bg-bambu-dark disabled:cursor-not-allowed disabled:text-bambu-gray disabled:opacity-40';
     const actions = choices.filter(operation => operation !== configure && operation !== inventory).flatMap(operation => {
       const hint = hintFor(operation);
       const key = hint?.editor === 'feed' ? hint.parameters.action : undefined;
@@ -412,7 +417,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
         if (!key || resourceId !== assignment.resource.id) throw new Error('The plugin did not declare an inventory assignment field.');
         const parameters: Record<string, unknown> = { [key]: spoolId };
         if (hint.parameters.move) parameters[hint.parameters.move] = !!options?.move;
-        if (!await send(assignment.operation, parameters, assignment.resource)) throw new Error('The printer did not accept the assignment.');
+        if (!await send(assignment.operation, parameters, assignment.resource, false, { throwOnFailure: true })) throw new Error('The inventory assignment could not be completed.');
       },
     }} />}
   </section>;

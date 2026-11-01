@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -7,18 +7,28 @@ import { GenericPrintSetup } from '../../components/GenericPrintSetup';
 import { buildSdkJobPlan, emptyGenericJobSetup } from '../../printer-plugins/forms';
 import type { PrinterJobDescription } from '../../printer-plugins/types';
 
-const api = vi.hoisted(() => ({ state: vi.fn() }));
+const api = vi.hoisted(() => ({ state: vi.fn(), deviceRevision: 'fixture', extraSource: false, optionTitle: '' }));
 vi.mock('../../printer-plugins/api', () => ({ printerDeviceApi: api }));
 
 vi.mock('../../hooks/usePrinterDevice', () => ({ usePrinterDevice: () => ({ data: {
+  revision: api.deviceRevision,
   resources: [
     ...Array.from({ length: 5 }, (_, index) => ({ id: `tool:bay-${index + 3}`, kind: 'tool', label: `Tool ${index + 1}` })),
     { id: 'source:shared-router', kind: 'material_source', label: 'Shared material router' },
     { id: 'source:external', kind: 'material_source', label: 'External spool' },
     { id: 'source:empty', kind: 'material_source', label: 'Empty source' },
+    ...(api.extraSource ? [{ id: 'source:added', kind: 'material_source', label: 'Added source' }] : []),
   ],
-  operations: [],
+  operations: api.optionTitle ? [{ id: 'job.start', parameters_schema: { properties: { options: { type: 'object', title: api.optionTitle } } } }] : [],
 } }) }));
+
+beforeEach(() => {
+  api.deviceRevision = 'fixture';
+  api.extraSource = false;
+  api.optionTitle = '';
+  api.state.mockReset();
+  api.state.mockResolvedValue({ connected: true, observed_at: new Date().toISOString(), descriptor_revision: 'fixture', resources: [] });
+});
 
 describe('generic print resource binding', () => {
   it('keeps a fifth tool and shared source as explicit identities in a complete job plan', async () => {
@@ -76,6 +86,63 @@ describe('generic print resource binding', () => {
     render(<QueryClientProvider client={new QueryClient()}><GenericPrintSetup printerId={44} printerName="Pending fixture" value={emptyGenericJobSetup()} onChange={vi.fn()} descriptionPending materials={[{ id: 'T0', label: 'Interim material' }]} /></QueryClientProvider>);
     expect(screen.getByRole('status')).toHaveTextContent('Reading print requirements');
     expect(screen.queryByText('Interim material')).not.toBeInTheDocument();
+  });
+
+  it('reads live telemetry while large batch requirements are still loading', async () => {
+    render(<QueryClientProvider client={new QueryClient()}><GenericPrintSetup printerId={45} printerName="Pending telemetry" value={emptyGenericJobSetup()} onChange={vi.fn()} descriptionPending /></QueryClientProvider>);
+    expect(screen.getByRole('status')).toHaveTextContent('Reading print requirements');
+    await waitFor(() => expect(api.state).toHaveBeenCalledWith(45));
+  });
+
+  it('refreshes a changed descriptor once without cancelling or invalidating file inspections', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    api.state.mockResolvedValue({ connected: true, descriptor_revision: 'next', resources: [] });
+    const props = { printerId: 46, printerName: 'Revision fixture', value: emptyGenericJobSetup(), onChange: vi.fn(), descriptionPending: true };
+    const view = render(<QueryClientProvider client={client}><GenericPrintSetup {...props} /></QueryClientProvider>);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['printer-device', 46], exact: true }, { cancelRefetch: false });
+    view.rerender(<QueryClientProvider client={client}><GenericPrintSetup {...props} printerName="Same observed revision" /></QueryClientProvider>);
+    await act(async () => {
+      client.setQueryData(['printer-device-state', 46], { connected: true, descriptor_revision: 'next', sequence: 2, resources: [] });
+    });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      client.setQueryData(['printer-device-state', 46], { connected: true, descriptor_revision: 'newer', sequence: 3, resources: [] });
+    });
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(2));
+    expect(invalidate.mock.calls.every(call => call[0]?.queryKey?.[0] === 'printer-device')).toBe(true);
+  });
+
+  it('invalidates completed requirements once for actual topology or option changes while preserving pending inspections', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const completedKey = ['printer-job-description', 47, 1];
+    const pendingKey = ['printer-job-description', 47, 2];
+    client.setQueryData(completedKey, { artifact: { uri: 'library:1' } });
+    let finishPending!: () => void;
+    const pending = client.fetchQuery({ queryKey: pendingKey,
+      queryFn: () => new Promise(resolve => { finishPending = () => resolve({ artifact: { uri: 'library:2' } }); }),
+    });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const props = { printerId: 47, printerName: 'Changing topology', value: emptyGenericJobSetup(), onChange: vi.fn(), descriptionPending: true };
+    const view = render(<QueryClientProvider client={client}><GenericPrintSetup {...props} /></QueryClientProvider>);
+    await waitFor(() => expect(api.state).toHaveBeenCalledWith(47));
+    expect(invalidate).not.toHaveBeenCalled();
+    api.extraSource = true;
+    view.rerender(<QueryClientProvider client={client}><GenericPrintSetup {...props} /></QueryClientProvider>);
+    await waitFor(() => expect(client.getQueryState(completedKey)?.isInvalidated).toBe(true));
+    expect(client.getQueryState(pendingKey)?.isInvalidated).toBe(false);
+    const descriptionCalls = () => invalidate.mock.calls.filter(call => call[0]?.queryKey?.[0] === 'printer-job-description');
+    expect(descriptionCalls()).toHaveLength(1);
+    expect(descriptionCalls()[0][1]).toEqual({ cancelRefetch: false });
+    view.rerender(<QueryClientProvider client={client}><GenericPrintSetup {...props} printerName="Same topology" /></QueryClientProvider>);
+    expect(descriptionCalls()).toHaveLength(1);
+    api.optionTitle = 'Updated native options';
+    view.rerender(<QueryClientProvider client={client}><GenericPrintSetup {...props} /></QueryClientProvider>);
+    await waitFor(() => expect(descriptionCalls()).toHaveLength(2));
+    expect(client.getQueryState(pendingKey)?.isInvalidated).toBe(false);
+    finishPending();
+    await pending;
   });
 
   it('requires explicit opt-in for PLA Silk, shows the loaded type, and clears the choice when returning to strict matching', async () => {

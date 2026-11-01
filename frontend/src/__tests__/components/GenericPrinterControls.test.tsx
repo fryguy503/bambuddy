@@ -9,8 +9,14 @@ import type { OperationReceipt, PrinterDevice, PrinterDeviceState, PrinterOperat
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { ToastProvider } from '../../contexts/ToastContext';
+import type { ResourceSpoolTarget } from '../../components/AssignSpoolModal';
 
 vi.mock('../../printer-plugins/api', () => ({ printerDeviceApi: { execute: vi.fn(), task: vi.fn(), cancel: vi.fn() } }));
+const assignmentModal = vi.hoisted(() => ({ target: undefined as ResourceSpoolTarget | undefined }));
+vi.mock('../../components/AssignSpoolModal', () => ({ AssignSpoolModal: ({ resourceTarget }: { resourceTarget: ResourceSpoolTarget }) => {
+  assignmentModal.target = resourceTarget;
+  return <div role="dialog" aria-label="Inventory assignment fixture" />;
+} }));
 
 const resource = (id: string, kind: string, label: string): PrinterResource => ({ id, kind, label, roles: [], relations: {}, properties: {}, capabilities: [], metadata: {} });
 const operation = (id: string, label: string, kinds: string[]): PrinterOperation => ({
@@ -46,9 +52,37 @@ function lightFixture() {
   return { value, state };
 }
 
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(printerDeviceApi.execute).mockResolvedValue(receipt); });
+beforeEach(() => { vi.clearAllMocks(); assignmentModal.target = undefined; vi.mocked(printerDeviceApi.execute).mockResolvedValue(receipt); });
 
 describe('generic printer resources', () => {
+  it.each(['receipt', 'request'] as const)('preserves the public inventory assignment error from a failed %s', async failureKind => {
+    const user = userEvent.setup();
+    const value = device();
+    value.resources = [{ ...resource('source/opaque', 'material_source', 'ACE slot'), properties: { material_type: property('Material', 'string') } }];
+    value.operations = [{ ...operation('fixture.assign', 'Assign spool', ['material_source']),
+      parameters_schema: { type: 'object', properties: { spool_id: { type: 'integer' }, move: { type: 'boolean' } }, required: ['spool_id'], additionalProperties: false },
+      extensions: { 'bambuddy:ui': { group: 'material', icon: 'package', editor: 'inventory', parameters: { spool: 'spool_id', move: 'move' } } },
+    }];
+    const state = snapshot();
+    state.resources = [{ resource_id: 'source/opaque', available: true, properties: { material_type: reading('PLA') } }];
+    const message = 'This spool is already assigned to another slot. Enable move to assign it here.';
+    if (failureKind === 'receipt') vi.mocked(printerDeviceApi.execute).mockResolvedValue({ ...receipt,
+      operation_id: 'fixture.assign', status: 'failed', result: false,
+      error: { code: 'inventory.assignment_conflict', message, retryable: false, details: { private: 'PRIVATE-DIAGNOSTIC' } },
+    });
+    else vi.mocked(printerDeviceApi.execute).mockRejectedValue(new Error(message));
+    renderControls(value, true, state);
+    await user.click(screen.getByRole('button', { name: 'Controls for ACE slot' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'ACE slot' })).getByRole('button', { name: /assign spool/i }));
+    expect(screen.getByRole('dialog', { name: 'Inventory assignment fixture' })).toBeInTheDocument();
+    await act(async () => {
+      await expect(assignmentModal.target!.onAssign('source/opaque', 71, { move: false })).rejects.toThrow(message);
+    });
+    expect(printerDeviceApi.execute).toHaveBeenCalledWith(42, 'fixture.assign', { spool_id: 71, move: false }, 'source/opaque');
+    expect(screen.queryByText(/The printer did not accept the assignment/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/PRIVATE-DIAGNOSTIC/)).not.toBeInTheDocument();
+  });
+
   it('does not invent chamber temperature or heater controls when the plugin reports only nozzle and bed heaters', () => {
     const value = device();
     value.model_id = 'non-bambu-fixture';
@@ -271,6 +305,30 @@ describe('generic printer resources', () => {
     fireEvent.change(within(configure).getByLabelText('Color'), { target: { value: '#224466' } });
     await user.click(within(configure).getByRole('button', { name: 'Save' }));
     expect(printerDeviceApi.execute).toHaveBeenLastCalledWith(42, 'fixture.configure', { polymer: 'PETG', rgb: '224466' }, 'source/opaque-violet');
+  });
+
+  it.each([true, false])('distinguishes enabled filament hover actions while connected=%s', async connected => {
+    const user = userEvent.setup(); const value = device();
+    value.resources = [{ ...resource('source:opaque', 'material_source', 'Feeder slot'), properties: { material_type: property('Material', 'string'), color: property('Color', 'string') } }];
+    value.operations = [
+      { ...operation('fixture.feed', 'Feed material', ['material_source']), parameters_schema: { type: 'object', properties: { action: { type: 'string', enum: ['load', 'unload'], 'x-enum-labels': ['Load', 'Unload'] } }, required: ['action'] }, extensions: { 'bambuddy:ui': { group: 'material', icon: 'move', editor: 'feed', parameters: { action: 'action' } } } },
+      { ...operation('fixture.refresh', 'Refresh material', ['material_source']), extensions: { 'bambuddy:ui': { group: 'material', icon: 'refresh-cw', editor: 'refresh', parameters: {} } } },
+    ];
+    const state = snapshot('idle'); state.connected = connected;
+    state.resources = [{ resource_id: 'source:opaque', properties: { material_type: reading('PLA'), color: reading('#ffc196') } }];
+    renderControls(value, true, state);
+    await user.hover(screen.getByRole('button', { name: 'Controls for Feeder slot' }));
+    const load = await screen.findByRole('button', { name: 'Load', exact: true });
+    const menu = within(load.parentElement!);
+    const refresh = menu.getByRole('button', { name: 'Refresh material', exact: true });
+    for (const button of [load, menu.getByRole('button', { name: 'Unload', exact: true }), refresh]) {
+      expect(button).toHaveClass('text-white', 'disabled:text-bambu-gray');
+      if (connected) expect(button).toBeEnabled();
+      else expect(button).toBeDisabled();
+    }
+    await user.click(load);
+    if (connected) expect(printerDeviceApi.execute).toHaveBeenCalledWith(42, 'fixture.feed', { action: 'load' }, 'source:opaque');
+    else expect(printerDeviceApi.execute).not.toHaveBeenCalled();
   });
 
   it('restores the inline drying footer with hours/minutes and schema-defined telemetry/parameters', async () => {
