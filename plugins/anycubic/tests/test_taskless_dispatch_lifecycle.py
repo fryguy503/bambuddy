@@ -147,6 +147,32 @@ def lifecycle(case):
     return [event.event for event in case.events if event.event.startswith("job.")]
 
 
+def test_unchanged_running_reports_emit_progress_without_rewriting_the_dispatch(tracked, monkeypatch):
+    from plugins.anycubic.payload import persistence
+
+    tracked.seed()
+    writes = []
+    original_write = persistence.write_json
+
+    def write(path, value):
+        writes.append(path)
+        original_write(path, value)
+
+    monkeypatch.setattr(persistence, "write_json", write)
+    tracked.observe()
+    assert lifecycle(tracked) == ["job.started"] and len(writes) == 1
+    first = tracked.connection.journal.get(tracked.job.job_id)
+    for _ in range(6):
+        tracked.observe()
+    assert lifecycle(tracked) == ["job.started"] + ["job.progress"] * 6
+    assert tracked.connection.journal.get(tracked.job.job_id) == first
+    assert len(writes) == 1
+    tracked.observe("finished")
+    assert lifecycle(tracked)[-1] == "job.completed"
+    assert tracked.connection.journal.get(tracked.job.job_id)["pending_outcome"] == "completed"
+    assert len(writes) == 3  # The terminal observation and required plate hold remain durable.
+
+
 @pytest.mark.asyncio
 async def test_taskless_native_active_receipt_finish_cleanup_allows_next_job_without_replay(tracked):
     request = OperationRequest(

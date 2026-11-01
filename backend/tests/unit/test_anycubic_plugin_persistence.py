@@ -130,6 +130,43 @@ def test_atomic_write_failure_preserves_previous_intent_and_cleans_temporary_fil
     assert not list(journal._path("job").parent.glob(".state-*"))
 
 
+def test_repeated_active_reports_keep_authoritative_state_without_durable_rewrites(state_directory, monkeypatch):
+    journal = persistence.Journal("printer")
+    assert journal.begin("job", {"status": "accepted", "native_job_id": None})
+    writes = []
+    original_write = persistence.write_json
+
+    def write(path, value):
+        writes.append(path)
+        original_write(path, value)
+
+    monkeypatch.setattr(persistence, "write_json", write)
+    first = journal.update("job", status="running", native_job_id=None, observed_active=True)
+    assert len(writes) == 1
+    for _ in range(12):
+        assert journal.update("job", status="running", native_job_id=None, observed_active=True) == first
+    assert len(writes) == 1
+    identified = journal.update("job", status="running", native_job_id="42", observed_active=True)
+    assert identified["native_job_id"] == "42" and len(writes) == 2
+    completed = journal.update("job", status="completed", pending_outcome="completed")
+    assert len(writes) == 3
+    assert journal.update("job", status="running", native_job_id="42", observed_active=True) == completed
+    assert len(writes) == 3
+
+
+def test_unchanged_fields_still_validate_current_storage_and_keep_missing_fields_explicit(state_directory, monkeypatch):
+    journal = persistence.Journal("printer")
+    assert journal.begin("job", {"status": "running"})
+    assert "native_job_id" not in journal.get("job")
+    assert journal.update("job", status="running", native_job_id=None)["native_job_id"] is None
+    path = journal._path("job")
+    corrupt = path.read_bytes().replace(b'"status": "running"', b'"status": "invalid"')
+    path.write_bytes(corrupt)
+    with pytest.raises(persistence.JournalError):
+        journal.update("job", status="running", native_job_id=None)
+    assert path.read_bytes() == corrupt
+
+
 def test_printer_job_and_artifact_identities_cannot_escape_storage(state_directory):
     journal = persistence.Journal("../../opaque-printer")
     job_id, uri = "../../opaque-job/with:unicode-λ", "../../outside.gcode?token=opaque"

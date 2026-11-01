@@ -274,6 +274,11 @@ class Journal:
                     not record["finalized_accounting_pending"] or fields["pending_outcome"] != finalized
                 ):
                     return dict(record)
+            # Every active telemetry report rechecks this record. Keep that
+            # authoritative read and its terminal-state guards, but only sync
+            # durable changes: progress has its own observation timestamps.
+            if all(key in record and record[key] == item for key, item in fields.items()):
+                return dict(record)
             record.update(fields)
             if finalized is not None and "pending_outcome" in fields:
                 record["finalized_accounting_pending"] = fields["pending_outcome"] is not None
