@@ -1,8 +1,10 @@
 """Real Paho queues/locks with in-memory sockets; never contact a printer."""
 
 import errno
+import json
 import threading
 import time
+from unittest.mock import patch
 
 import paho.mqtt.client as mqtt
 import pytest
@@ -190,3 +192,138 @@ def test_concurrent_repeated_retirements_do_not_flush_or_close_twice():
     assert all(not thread.is_alive() for thread in threads)
     assert stream.close_count == 1 and stream.writes == []
     assert paho.socket() is None and not paho.want_write()
+
+
+def wire_commands(stream):
+    commands = []
+    for packet in stream.writes:
+        offset = 1
+        while packet[offset] & 128:
+            offset += 1
+        offset += 1
+        length = int.from_bytes(packet[offset : offset + 2])
+        offset += 2
+        commands.append((packet[offset : offset + length].decode(), json.loads(packet[offset + length :])))
+    return commands
+
+
+@pytest.mark.parametrize("timer_finished", [False, True])
+def test_retiring_an_active_pulse_sends_only_fresh_stop_on_its_old_transport(session, monkeypatch, timer_finished):
+    _plugin, _config, native, paho = session
+    stream = paho._sock = MemorySocket()
+    native._extrude_observed = time.monotonic()
+    native._extrude_operate = 0
+    native.state.temperatures["nozzle"] = 200
+    with patch.object(client_module.threading, "Timer") as timer:
+        assert native.extruder_pulse(1)
+        assert drive_manual_loop(monkeypatch, paho, stream) == mqtt.MQTT_ERR_SUCCESS
+        assert wire_commands(stream)[0][1]["data"] == {"operate_type": 1, "move_type": 1}
+        stream.writes.clear()
+        finish = timer.call_args.args[1]
+        if timer_finished:
+            finish()
+            assert native._extrusion_timer is None and native._extrusion_pending
+        assert native._publish("print", "start", {"filename": "must-not-replay.gcode"})
+        stale_messages = {
+            json.loads(packet["packet"][packet["packet"].find(b"{") :])["msgid"] for packet in paho._out_packet
+        }
+        native.disconnect()
+        assert stream.closed.wait(1)
+        commands = wire_commands(stream)
+        assert len(commands) == 1
+        topic, envelope = commands[0]
+        assert topic.endswith("/fixture-device/extrudeControl")
+        assert envelope["type"] == "extrudeControl" and envelope["action"] == "set"
+        assert envelope["data"] == {"operate_type": 0}
+        assert envelope["msgid"] not in stale_messages
+        assert native._extrusion_pending and native._extrude_operate is None
+        assert not native.state.connected and native.state.state == "unknown"
+        assert paho.socket() is None and not paho.want_write()
+        paho.disconnect()
+        assert len(stream.writes) == 1
+        replacement = _SessionMQTTClient()
+        replacement_stream = replacement._sock = MemorySocket()
+        native._client, native._device_id, native._subscribed = replacement, "replacement-device", True
+        native._stop = threading.Event()
+        native.state.connected = True
+        finish()  # The cancelled old timer must not issue a replacement-session stop.
+        assert not replacement.want_write() and replacement_stream.writes == []
+        replacement.disconnect()
+
+
+def test_broken_retirement_stop_closes_without_confirming_motion_stopped(session, caplog):
+    _plugin, _config, native, paho = session
+    stream = paho._sock = MemorySocket(broken=True)
+    native._extrusion_pending = True
+    native._extrude_operate = None
+    assert native._publish("print", "start", {"filename": "discard.gcode"})
+    native.disconnect()
+    assert stream.closed.wait(1)
+    assert len(stream.writes) == 1
+    assert wire_commands(stream)[0][1]["data"] == {"operate_type": 0}
+    assert native._extrusion_pending and native._extrude_operate is None
+    assert paho.socket() is None and not paho.want_write()
+    assert "could not be sent on the retiring session" in caplog.text
+
+
+def test_partial_old_frame_is_not_completed_or_followed_by_a_stop(session, caplog):
+    _plugin, _config, native, paho = session
+    stream = paho._sock = MemorySocket()
+    native._extrusion_pending = True
+    assert native._publish("print", "start", {"filename": "discard-partial.gcode"})
+    packet = paho._out_packet[0]
+    packet["pos"] = 1
+    packet["to_process"] -= 1
+    stream.writes.append(packet["packet"][:1])
+    before = list(stream.writes)
+    native.disconnect()
+    assert stream.closed.wait(1)
+    assert stream.writes == before
+    assert native._extrusion_pending and native._extrude_operate is None
+    assert paho.socket() is None and not paho.want_write()
+    assert "partially written MQTT packet" in caplog.text
+
+
+def test_stop_preparation_never_takes_transport_mutex_while_holding_native_lock(session, monkeypatch):
+    _plugin, _config, native, paho = session
+    stream = paho._sock = MemorySocket()
+    native._extrusion_pending = True
+    writer_entered, permit_callback, callback_entered = (threading.Event() for _ in range(3))
+    failures = []
+    prepare = native._prepare_extrusion_retirement
+
+    def callback(client, *_args):
+        callback_entered.set()
+        native._disconnected(0, client)
+
+    def gated_write(client, _max_packets=1):
+        if threading.current_thread().name == "fixture-owner":
+            writer_entered.set()
+            assert permit_callback.wait(1)
+            client._do_on_disconnect(False, mqtt.MQTT_ERR_CONN_LOST)
+        return mqtt.MQTT_ERR_CONN_LOST
+
+    def gated_prepare(client):
+        permit_callback.set()
+        assert callback_entered.wait(1)
+        prepare(client)
+
+    def run(operation):
+        try:
+            operation()
+        except BaseException as error:
+            failures.append(error)
+
+    paho.on_disconnect = callback
+    monkeypatch.setattr(mqtt.Client, "loop_write", gated_write)
+    monkeypatch.setattr(native, "_prepare_extrusion_retirement", gated_prepare)
+    owner = threading.Thread(target=lambda: run(paho.loop_write), name="fixture-owner", daemon=True)
+    detacher = threading.Thread(target=lambda: run(native.disconnect), daemon=True)
+    owner.start()
+    assert writer_entered.wait(1)
+    detacher.start()
+    owner.join(1)
+    detacher.join(1)
+    assert not owner.is_alive() and not detacher.is_alive()
+    assert not failures and stream.closed.wait(1)
+    assert native._client is None and not native.state.connected

@@ -60,7 +60,8 @@ class _SessionMQTTClient(mqtt.Client):
             clean_session=True,
             reconnect_on_failure=False,
         )
-        self._retirement_lock = threading.Lock()
+        self._retirement_lock = threading.RLock()
+        self._terminal_extrusion_stop: tuple[str, str] | None = None
         # Paho's manual-loop mode otherwise calls loop_write() inline from
         # publish()/subscribe(). A failed socket can then enter a disconnect
         # callback while the caller owns our state lock, inverting that lock
@@ -72,14 +73,38 @@ class _SessionMQTTClient(mqtt.Client):
     def _get_proxy(self):
         return None  # LAN printer credentials must not traverse an environment proxy.
 
+    def loop_write(self):
+        # Retirement may send one explicitly captured safety stop. Never race
+        # that lane against the session worker's ordinary packet writer.
+        with self._retirement_lock:
+            return super().loop_write()
+
     def disconnect(self, reasoncode=None, properties=None):
         # This manually driven client has no loop_start() thread to finish a
-        # queued DISCONNECT. Close first, without draining pending control or
-        # print packets onto a retired session. All native callers retire it
-        # outside their state lock; repeated retirements are harmless.
+        # queued DISCONNECT. Discard ordinary control/print packets first.
+        # The only permitted final write is a freshly captured stop for our
+        # own pending extrusion pulse, never arbitrary old queued traffic.
+        # Native callers retire outside their state lock; the short packet
+        # preparation under that lock never acquires this transport mutex.
         with self._retirement_lock:
-            self._reset_sockets()
+            terminal_stop = self._terminal_extrusion_stop
+            self._terminal_extrusion_stop = None
+            framing_intact = all(packet["pos"] == 0 for packet in self._out_packet)
             self._out_packet.clear()
+            try:
+                if terminal_stop is not None and not framing_intact:
+                    logger.warning("Anycubic extrusion stop was not sent after a partially written MQTT packet")
+                elif terminal_stop is not None and self._sock is not None:
+                    queued = super().publish(*terminal_stop, qos=0, retain=False)
+                    if queued.rc != mqtt.MQTT_ERR_SUCCESS or super().loop_write() != mqtt.MQTT_ERR_SUCCESS:
+                        logger.warning("Anycubic extrusion stop could not be sent on the retiring session")
+                    elif self.want_write():
+                        logger.warning("Anycubic extrusion stop was incomplete on the retiring session")
+            except Exception:
+                logger.warning("Anycubic extrusion stop could not be sent on the retiring session")
+            finally:
+                self._reset_sockets()
+                self._out_packet.clear()
             return super().disconnect(reasoncode, properties)
 
 
@@ -297,6 +322,7 @@ class AnycubicMQTTClient:
             with self._lock:
                 current = generation == self._generation
                 if current:
+                    self._prepare_extrusion_retirement(client)
                     self._client = None
                     self._subscribed = False
                     self.state.connected = False
@@ -391,21 +417,32 @@ class AnycubicMQTTClient:
             self.last_connect_error = None
         self._notify()
 
+    def _outbound_packet(self, kind, action, data, *, msgid=None):
+        envelope = {
+            "type": kind,
+            "action": action,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+            "msgid": msgid or str(uuid.uuid4()),
+        }
+        return f"{PREFIX}/web/printer/{self._model_id}/{self._device_id}/{kind}", json.dumps(envelope)
+
+    def _prepare_extrusion_retirement(self, client):
+        # Called only while detaching this session under the native state
+        # lock. Plain assignment is deliberate: taking a transport/write lock
+        # here could invert it with an in-flight MQTT callback.
+        if client is not None and self._device_id and (self._extrusion_pending or self._extrusion_timer is not None):
+            client._terminal_extrusion_stop = self._outbound_packet("extrudeControl", "set", {"operate_type": 0})
+
     def _publish(self, kind, action, data, *, msgid=None):
         with self._lock:
             if self._client is None or not self._subscribed or self._stop.is_set():
                 return False
-            envelope = {
-                "type": kind,
-                "action": action,
-                "data": data,
-                "timestamp": int(time.time() * 1000),
-                "msgid": msgid or str(uuid.uuid4()),
-            }
             try:
+                topic, payload = self._outbound_packet(kind, action, data, msgid=msgid)
                 result = self._client.publish(
-                    f"{PREFIX}/web/printer/{self._model_id}/{self._device_id}/{kind}",
-                    json.dumps(envelope),
+                    topic,
+                    payload,
                     qos=0,
                     retain=False,
                 )
@@ -1366,8 +1403,8 @@ class AnycubicMQTTClient:
     def disconnect(self, timeout: float = 0):
         with self._lock:
             self._reset_print_request()
+            self._prepare_extrusion_retirement(self._client)
             if self._extrusion_timer is not None:
-                self._publish("extrudeControl", "set", {"operate_type": 0})
                 self._extrusion_timer.cancel()
                 self._extrusion_timer = None
             self._generation += 1
