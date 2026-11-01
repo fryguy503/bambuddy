@@ -21,6 +21,7 @@ from backend.app.printers.sdk import (
 )
 
 from .models import get_model
+from .persistence import RESOLVABLE_STATES
 from .protocol import AnycubicError, task_id
 
 
@@ -427,11 +428,7 @@ def describe(plugin, config, native=None):
 
     parameters("job.start")["options"] = options_schema(native)
     held = (
-        [
-            item
-            for item in getattr(native, "_dispatch_holds", [])
-            if item.get("status") in {"intent", "unknown", "accepted"}
-        ]
+        [item for item in getattr(native, "_dispatch_holds", []) if item.get("status") in RESOLVABLE_STATES]
         if native is not None
         else []
     )
@@ -439,7 +436,7 @@ def describe(plugin, config, native=None):
     recovery.update(
         minLength=1,
         maxLength=4096,
-        description="Select a held dispatch only after verifying the printer is idle. Resolving it never resends the print.",
+        description="Select a held dispatch only after verifying the printer is idle. This confirms it is no longer printing, without claiming completion or filament usage. Plate clearance is still required and the print is never resent.",
     )
     if held:
         recovery["enum"] = [item["job_id"] for item in held]

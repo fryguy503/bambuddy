@@ -1,15 +1,24 @@
 # Anycubic printer plugin
 
 The independent Anycubic provider uses Bambuddy's printer SDK v2. Its current
-release is `anycubic` **0.1.10**, published under `fryguy503`. The included Bambu
+release is `anycubic` **0.1.11**, published under `fryguy503`. The included Bambu
 provider remains a separate plugin.
 
 This package requires the printer plugin implementation from
 `Feat/Printer_modularization` or `codex/printer-modularization-https`. An upstream
 application without the SDK v2 package manager cannot install it; the
 application version string alone does not establish SDK availability.
-Version 0.1.10 requires SDK 2.3; update the host before uploading it. Earlier
+Version 0.1.11 requires SDK 2.3; update the host before uploading it. Earlier
 SDK hosts reject this package during compatibility validation.
+
+Version 0.1.11 lets an operator resolve a held `running` dispatch after a
+physical stop or missed terminal report. In **Advanced controls → Confirm
+uncertain job is not printing**, select that exact held job after checking the
+printer. The operation requires fresh idle telemetry and no pending print
+request. It persists the mandatory plate-clear fence before resolving the
+hold, never resends the print, and does not claim completion or charge full
+filament usage. A verified terminal outcome waiting for cleanup or accounting
+cannot be discarded by this operation. Idle telemetry alone never releases a hold.
 
 Version 0.1.10 skips durable journal rewrites when repeated active reports do
 not change a dispatch record. Each report still reads and validates the current
@@ -64,17 +73,17 @@ The 0.1.2 durability behavior remains: finalized dispatch outcomes stay authorit
 older observers report stale progress. It preserves pending accounting and
 repairs legacy journal fields under the existing storage lock. A terminal
 observation awaiting host cleanup remains replayable; no print command is
-replayed. The published 0.1.0 through 0.1.9 archives are unchanged.
+replayed. The published 0.1.0 through 0.1.10 archives are unchanged.
 
 ## Install or update
 
 The release artifact is
-[`packages/anycubic/anycubic-0.1.10.bbp`](../../packages/anycubic/anycubic-0.1.10.bbp).
+[`packages/anycubic/anycubic-0.1.11.bbp`](../../packages/anycubic/anycubic-0.1.11.bbp).
 Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
 1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
    `.bbp` file and optionally paste its expected SHA-256 digest.
-2. Review the validation result, then apply version `0.1.10`. Staging alone does
+2. Review the validation result, then apply version `0.1.11`. Staging alone does
    not load or enable its code.
 3. Add or edit a printer, select **Anycubic**, and choose its model.
 
@@ -259,7 +268,7 @@ ordering, timestamps and file modes are fixed for reproducible builds.
 For an alternate output location:
 
 ```console
-python plugins/anycubic/build.py --output work/anycubic-0.1.10.bbp
+python plugins/anycubic/build.py --output work/anycubic-0.1.11.bbp
 ```
 
 For a later release, update the version in the payload's plugin factory, then

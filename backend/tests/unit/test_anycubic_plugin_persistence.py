@@ -316,3 +316,40 @@ def test_opaque_dispatch_ids_with_metadata_like_prefixes_still_finalize(state_di
     assert journal.begin(job_id, {"status": "running", "bindings": {}, "uri": "native.gcode"})
     journal.update(job_id, status="completed")
     assert journal.update(job_id, status="running")["status"] == "completed"
+
+
+def test_atomic_operator_resolution_checks_only_the_selected_printer_job(state_directory):
+    selected, foreign = persistence.Journal("selected-printer"), persistence.Journal("other-printer")
+    assert selected.begin("job", {"status": "running"})
+    assert selected.begin("other-job", {"status": "accepted"})
+    assert foreign.begin("job", {"status": "running"})
+    other, other_printer = selected.get("other-job"), foreign.get("job")
+    assert selected.resolve_dispatch("missing", ready=lambda: True) is False
+    assert selected.resolve_dispatch("job", ready=lambda: False) is False
+    assert selected.get("job")["status"] == "running"
+    assert selected.resolve_dispatch("job", ready=lambda: True) is True
+    assert selected.get("job")["status"] == selected.get("job")["finalized_outcome"] == "resolved"
+    assert selected.get("other-job") == other and foreign.get("job") == other_printer
+
+
+@pytest.mark.parametrize("status", ["submitting", "publishing", "completed", "cancelled", "failed", "resolved"])
+def test_atomic_operator_resolution_preserves_inflight_and_terminal_records(state_directory, status):
+    journal = persistence.Journal("printer")
+    assert journal.begin("job", {"status": status})
+    original = journal.get("job")
+    assert journal.resolve_dispatch("job", ready=lambda: True) is False
+    assert journal.get("job") == original
+
+
+def test_operator_resolution_final_marker_survives_delayed_legacy_observers(state_directory, legacy_persistence):
+    modern, legacy = persistence.Journal("printer"), legacy_persistence.Journal("printer")
+    assert modern.begin("job", {"status": "running", "observed_active": True})
+    assert modern.resolve_dispatch("job", ready=lambda: True)
+    legacy.update("job", status="running", pending_outcome="completed")
+    assert legacy.get("job")["status"] == "running"
+    assert modern.unresolved() == []
+    assert modern.pending_accounting() == []
+    healed = modern.get("job")
+    assert healed["status"] == healed["finalized_outcome"] == "resolved"
+    assert healed["resolution"] == "operator_confirmed_not_printing"
+    assert healed["pending_outcome"] is None

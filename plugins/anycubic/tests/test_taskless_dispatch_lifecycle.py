@@ -371,3 +371,164 @@ def test_real_task_identity_can_disambiguate_legacy_same_filename_pending_intent
     assert tracked.connection.journal.get(tracked.job.job_id)["status"] == "running"
     assert tracked.connection.journal.get(second_job.job_id)["status"] == "unknown"
     tracked.callbacks["on_print_start"].assert_called_once()
+
+
+def _resolve_request(job_id):
+    return OperationRequest(operation_id="anycubic.job.resolve", parameters={"job_id": job_id})
+
+
+@pytest.mark.asyncio
+async def test_operator_can_resolve_a_running_hold_after_missing_stop_and_restart_without_replaying(tracked):
+    tracked.seed("accepted")
+    tracked.observe()
+    tracked.receive("info", {"state": "free", "project": {"state": "stopped", "filename": NATIVE_FILENAME}})
+    original = tracked.connection.journal.get(tracked.job.job_id)
+    assert original["status"] == "running" and original["observed_active"] is True
+    assert tracked.native.state.state == "IDLE" and tracked.native.state.gcode_file is None
+    assert lifecycle(tracked) == ["job.started"]  # IDLE alone never settles an outcome.
+    assert tracked.connection.journal.begin("another-held-job", {"status": "unknown", "native_filename": "other.gcode"})
+    other = tracked.connection.journal.get("another-held-job")
+
+    restarted = tracked.plugin.create_connection(tracked.config, on_event=tracked.events.append)
+    native = restarted.native
+    native._client, native._subscribed, native._device_id = MagicMock(), True, "fixture"
+    native._received(
+        native._generation,
+        native._client,
+        SimpleNamespace(
+            topic=f"{PREFIX}/printer/public/{native._model_id}/fixture/info/report",
+            payload=json.dumps({"type": "info", "action": "query", "code": 200, "data": {"state": "free"}}).encode(),
+        ),
+    )
+    field = (
+        tracked.plugin.describe_device(tracked.config)
+        .operation("anycubic.job.resolve")
+        .parameters_schema["properties"]["job_id"]
+    )
+    assert tracked.job.job_id in field["enum"]
+    assert any("(running)" in label for label in field["x-enum-labels"])
+    result = await tracked.plugin.invoke(tracked.config, restarted, _resolve_request(tracked.job.job_id))
+    assert result.status == "succeeded"
+    settled = restarted.journal.get(tracked.job.job_id)
+    assert settled["status"] == settled["finalized_outcome"] == "resolved"
+    assert settled["resolution"] == "operator_confirmed_not_printing"
+    assert settled["resolved_at"] and settled.get("pending_outcome") is None
+    assert restarted.plate_clear_required is True
+    assert restarted.journal.get("plate:" + restarted.printer_key)["status"] == "plate_required"
+    assert restarted.journal.get("another-held-job") == other
+    assert tracked.frames == []
+    native._client.publish.assert_not_called()
+    tracked.capture.assert_not_awaited()
+    tracked.complete.assert_not_awaited()
+
+    # A retained observer's delayed reports cannot revive the resolved intent
+    # or turn operator confirmation into measured completion/accounting.
+    before_events = lifecycle(tracked)
+    tracked.observe()
+    tracked.observe("finished")
+    assert lifecycle(tracked) == before_events
+    assert tracked.connection.journal.get(tracked.job.job_id) == settled
+    assert tracked.connection.journal.get("another-held-job") == other
+    assert tracked.plugin.create_connection(tracked.config).plate_clear_required is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["RUNNING", "PAUSE", "PREPARE", "BUSY", "unknown"])
+async def test_running_hold_resolution_rejects_nonidle_printers(tracked, phase):
+    original = tracked.seed("running", observed_active=True)
+    tracked.native.state.state = phase
+    result = await tracked.plugin.invoke(tracked.config, tracked.connection, _resolve_request(tracked.job.job_id))
+    assert result.status == "failed"
+    assert tracked.connection.journal.get(tracked.job.job_id) == original
+    assert tracked.connection.plate_clear_required is False and tracked.frames == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guard", ["disconnected", "stale", "stale_lifecycle", "stale_info", "print_pending", "extrusion_pending"]
+)
+async def test_running_hold_resolution_requires_fresh_idle_and_no_pending_command(tracked, guard):
+    original = tracked.seed("running", observed_active=True)
+    native = tracked.native
+    if guard == "disconnected":
+        native.state.connected = False
+    elif guard == "stale":
+        native._last_message_monotonic -= native.STALE_TIMEOUT + 1
+    elif guard == "stale_lifecycle":
+        native._last_state_time -= native.STALE_TIMEOUT + 1
+    elif guard == "stale_info":
+        native._info_observed -= native.STALE_TIMEOUT + 1
+    elif guard == "print_pending":
+        native._print_pending = {}
+    else:
+        native._extrusion_pending = True
+    result = await tracked.plugin.invoke(tracked.config, tracked.connection, _resolve_request(tracked.job.job_id))
+    assert result.status == "failed"
+    assert tracked.connection.journal.get(tracked.job.job_id) == original
+    assert tracked.connection.plate_clear_required is False and tracked.frames == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled", "aborted"])
+async def test_operator_resolution_preserves_pending_verified_outcomes(tracked, outcome):
+    original = tracked.seed("running", observed_active=True, pending_outcome=outcome)
+    result = await tracked.plugin.invoke(tracked.config, tracked.connection, _resolve_request(tracked.job.job_id))
+    assert result.status == "failed"
+    assert tracked.connection.journal.get(tracked.job.job_id) == original
+    tracked.complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolution_rechecks_terminal_accounting_after_persisting_the_plate_fence(tracked, monkeypatch):
+    tracked.seed("running", observed_active=True)
+    plate = tracked.connection._plate
+
+    def terminal_while_persisting(blocked):
+        plate(blocked)
+        tracked.connection.journal.update(tracked.job.job_id, pending_outcome="completed")
+
+    monkeypatch.setattr(tracked.connection, "_plate", terminal_while_persisting)
+    result = await tracked.plugin.invoke(tracked.config, tracked.connection, _resolve_request(tracked.job.job_id))
+    assert result.status == "failed"
+    record = tracked.connection.journal.get(tracked.job.job_id)
+    assert record["status"] == "running" and record["pending_outcome"] == "completed"
+    assert tracked.connection.plate_clear_required is True
+    assert tracked.connection.journal.get("plate:" + tracked.connection.printer_key)["status"] == "plate_required"
+
+
+@pytest.mark.asyncio
+async def test_resolution_rechecks_idle_state_after_persisting_the_plate_fence(tracked, monkeypatch):
+    original = tracked.seed("running", observed_active=True)
+    plate = tracked.connection._plate
+
+    def printer_became_busy(blocked):
+        plate(blocked)
+        tracked.native.state.state = "RUNNING"
+
+    monkeypatch.setattr(tracked.connection, "_plate", printer_became_busy)
+    result = await tracked.plugin.invoke(tracked.config, tracked.connection, _resolve_request(tracked.job.job_id))
+    assert result.status == "failed"
+    assert tracked.connection.journal.get(tracked.job.job_id) == original
+    assert tracked.connection.plate_clear_required is True
+
+
+@pytest.mark.asyncio
+async def test_plate_persistence_failure_never_releases_the_running_hold(tracked, monkeypatch):
+    from plugins.anycubic.payload import persistence
+
+    original = tracked.seed("running", observed_active=True)
+    write = persistence.write_json
+
+    def fail_plate_write(path, value):
+        if value.get("record", {}).get("job_id") == "plate:" + tracked.connection.printer_key:
+            raise OSError("Fixture plate persistence failure")
+        return write(path, value)
+
+    monkeypatch.setattr(persistence, "write_json", fail_plate_write)
+    resolve = MagicMock(wraps=tracked.connection.journal.resolve_dispatch)
+    monkeypatch.setattr(tracked.connection.journal, "resolve_dispatch", resolve)
+    result = await tracked.plugin.invoke(tracked.config, tracked.connection, _resolve_request(tracked.job.job_id))
+    assert result.status == "failed"
+    resolve.assert_not_called()
+    assert tracked.connection.journal.get(tracked.job.job_id) == original
+    assert tracked.connection.plate_clear_required is False and tracked.frames == []

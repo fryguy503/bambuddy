@@ -262,7 +262,10 @@ def test_broken_retirement_stop_closes_without_confirming_motion_stopped(session
     assert len(stream.writes) == 1
     assert wire_commands(stream)[0][1]["data"] == {"operate_type": 0}
     assert native._extrusion_pending and native._extrude_operate is None
-    assert paho.socket() is None and not paho.want_write()
+    # Socket.close signals before the retirement worker's final queue cleanup.
+    # Wait for that same retirement to finish before inspecting its result.
+    with paho._retirement_lock:
+        assert paho.socket() is None and not paho.want_write()
     assert "could not be sent on the retiring session" in caplog.text
 
 

@@ -24,6 +24,7 @@ from backend.app.printers.sdk import (
 
 from .client import AnycubicMQTTClient
 from .device import device_id, native_slot, snapshot
+from .persistence import RESOLVABLE_STATES
 from .printing import inspect_print_file, print_data, validate_options
 from .protocol import AnycubicError, task_id as native_task_id
 
@@ -579,12 +580,22 @@ class AnycubicConnection:
                     if (
                         not record
                         or record.get("printer_key") != self.printer_key
-                        or record.get("status") not in {"intent", "unknown", "accepted"}
+                        or record.get("status") not in RESOLVABLE_STATES
+                        or record.get("pending_outcome") is not None
                     ):
                         raise AnycubicError("Select an unresolved dispatch belonging to this printer")
-                    self.journal.update(p["job_id"], status="resolved")
-                    self.refresh_dispatch_holds()
+
+                    def ready():
+                        return self.native._print_pending is None and self.native._motion_ready()
+
+                    if not ready():
+                        raise AnycubicError("A fresh idle report without an active print request is required")
+                    # A failure must retain the dispatch hold rather than leave
+                    # an eligible printer without its mandatory plate fence.
                     self._plate(True)
+                    if not self.journal.resolve_dispatch(p["job_id"], ready=ready):
+                        raise AnycubicError("The dispatch or printer state changed; refresh before resolving it")
+                    self.refresh_dispatch_holds()
                 else:
                     if self.journal.unresolved(self.printer_key):
                         raise AnycubicError("Resolve the held job before confirming the plate")

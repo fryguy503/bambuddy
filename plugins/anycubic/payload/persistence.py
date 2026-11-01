@@ -19,6 +19,7 @@ from pathlib import Path
 _thread_lock = threading.RLock()
 _MAX_BYTES = 8 * 1024 * 1024
 _PENDING = {"intent", "submitting", "publishing", "unknown", "accepted", "running"}
+RESOLVABLE_STATES = frozenset({"intent", "unknown", "accepted", "running"})
 _OUTCOMES = {"completed", "failed", "cancelled", "aborted"}
 _TERMINAL = _OUTCOMES | {"rejected", "resolved"}
 _STATUSES = _PENDING | {
@@ -288,6 +289,33 @@ class Journal:
             self._record(value, job_id)
             write_json(path, value)
             return dict(record)
+
+    def resolve_dispatch(self, job_id, *, ready) -> bool:
+        """Resolve an explicitly selected idle hold after its plate fence is durable.
+
+        A retained observer may have recorded a terminal outcome since the UI
+        read this hold. Recheck under the shared OS lock so manual recovery can
+        never discard verified closeout or pending filament accounting.
+        """
+        with storage_lock(self.printer_key):
+            path = self._path(job_id)
+            if not path.exists():
+                return False
+            value = read_json(path, {"format_version": 1})
+            record = self._validated_record(value, path, job_id)
+            if (
+                record.get("status") not in RESOLVABLE_STATES
+                or record.get("pending_outcome") is not None
+                or not ready()
+            ):
+                return False
+            now = datetime.now(timezone.utc).isoformat()
+            record.update(
+                status="resolved", resolution="operator_confirmed_not_printing", resolved_at=now, updated_at=now
+            )
+            self._record(value, job_id)
+            write_json(path, value)
+            return True
 
     def unresolved(self, printer_key=None):
         if printer_key is not None and printer_key != self.printer_key:
