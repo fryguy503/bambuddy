@@ -7,7 +7,7 @@
  * the camera stream token, everything else takes the media token.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isCameraUrl, rewriteMediaSrcWithToken } from '../../hooks/useCameraStreamToken';
 
 describe('rewriteMediaSrcWithToken', () => {
@@ -60,6 +60,39 @@ describe('rewriteMediaSrcWithToken', () => {
     const img = addImg('/api/v1/library/files/42/thumbnail?token=OLD');
     rewriteMediaSrcWithToken(root, 'NEW', null);
     expect(img.getAttribute('src')).toBe('/api/v1/library/files/42/thumbnail?token=NEW');
+  });
+
+  it('closes an attached MJPEG response before renewing its token', () => {
+    const img = addImg('/api/v1/printers/7/camera/stream?viewer=embedded&token=OLD');
+    const removed = vi.spyOn(img, 'removeAttribute');
+    const replaced = vi.spyOn(img, 'src', 'set');
+
+    rewriteMediaSrcWithToken(root, null, 'NEW');
+
+    expect(img.isConnected).toBe(true);
+    expect(removed).toHaveBeenCalledWith('src');
+    expect(removed.mock.invocationCallOrder[0]).toBeLessThan(replaced.mock.invocationCallOrder[0]);
+    expect(img.getAttribute('src')).toBe('/api/v1/printers/7/camera/stream?viewer=embedded&token=NEW');
+    removed.mockRestore();
+    replaced.mockRestore();
+  });
+
+  it('leaves a current live token and nonstream images open', () => {
+    const live = addImg('/api/v1/printers/7/camera/stream?token=NEW');
+    const snapshot = addImg('/api/v1/printers/7/camera/snapshot?token=OLD');
+    const thumbnail = addImg('/api/v1/library/files/42/thumbnail?token=OLD');
+    const removeLive = vi.spyOn(live, 'removeAttribute');
+    const removeSnapshot = vi.spyOn(snapshot, 'removeAttribute');
+    const removeThumbnail = vi.spyOn(thumbnail, 'removeAttribute');
+
+    rewriteMediaSrcWithToken(root, 'NEW', 'NEW');
+
+    expect(removeLive).not.toHaveBeenCalled();
+    expect(removeSnapshot).not.toHaveBeenCalled();
+    expect(removeThumbnail).not.toHaveBeenCalled();
+    removeLive.mockRestore();
+    removeSnapshot.mockRestore();
+    removeThumbnail.mockRestore();
   });
 
   it('replaces a stale token that sits in the middle of the query string', () => {

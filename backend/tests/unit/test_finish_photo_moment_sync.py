@@ -61,12 +61,14 @@ def _clean_state():
     main_module._stage22_finish_frames.clear()
     main_module._inprint_frame_bank.clear()
     main_module._inprint_frame_bank_ts.clear()
+    main_module._inprint_frame_bank_in_flight.clear()
     print_dispatch_context.clear(7)
     yield
     main_module._stage22_finish_in_flight.clear()
     main_module._stage22_finish_frames.clear()
     main_module._inprint_frame_bank.clear()
     main_module._inprint_frame_bank_ts.clear()
+    main_module._inprint_frame_bank_in_flight.clear()
     print_dispatch_context.clear(7)
 
 
@@ -110,13 +112,13 @@ async def test_event_registered_before_first_await(patched_env, monkeypatch):
     # before the producer makes any real progress.
     seen_during_capture = {}
 
-    async def _slow_capture(**_kwargs):
+    async def _slow_capture(*_args, **_kwargs):
         seen_during_capture["registered"] = patched_env.id in main_module._stage22_finish_in_flight
         await asyncio.sleep(0)
         return b"\xff\xd8frame"
 
     monkeypatch.setattr(
-        "backend.app.services.camera.capture_camera_frame_bytes",
+        "backend.app.printers.camera.capture_camera_frame_bytes",
         _slow_capture,
     )
 
@@ -126,11 +128,11 @@ async def test_event_registered_before_first_await(patched_env, monkeypatch):
 
 
 async def test_event_set_after_successful_capture(patched_env, monkeypatch):
-    async def _capture(**_kwargs):
+    async def _capture(*_args, **_kwargs):
         return b"\xff\xd8frame"
 
     monkeypatch.setattr(
-        "backend.app.services.camera.capture_camera_frame_bytes",
+        "backend.app.printers.camera.capture_camera_frame_bytes",
         _capture,
     )
 
@@ -145,11 +147,11 @@ async def test_event_set_when_capture_returns_no_frame(patched_env, monkeypatch)
     """Producer gives up (RTSP timeout, no buffered frame, no external
     camera) — consumer must NOT wait the full 20s for nothing."""
 
-    async def _capture(**_kwargs):
+    async def _capture(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(
-        "backend.app.services.camera.capture_camera_frame_bytes",
+        "backend.app.printers.camera.capture_camera_frame_bytes",
         _capture,
     )
 
@@ -164,11 +166,11 @@ async def test_event_set_even_when_capture_raises(patched_env, monkeypatch):
     """Producer hit a bug or network error — `finally` still has to
     release the consumer."""
 
-    async def _capture(**_kwargs):
+    async def _capture(*_args, **_kwargs):
         raise RuntimeError("camera went away")
 
     monkeypatch.setattr(
-        "backend.app.services.camera.capture_camera_frame_bytes",
+        "backend.app.printers.camera.capture_camera_frame_bytes",
         _capture,
     )
 
@@ -213,12 +215,12 @@ async def test_consumer_wait_unblocked_when_producer_completes(patched_env, monk
     """End-to-end sync check: a consumer-style waiter awaiting the
     event finishes promptly once the producer's finally fires."""
 
-    async def _capture(**_kwargs):
+    async def _capture(*_args, **_kwargs):
         await asyncio.sleep(0.05)
         return b"\xff\xd8frame"
 
     monkeypatch.setattr(
-        "backend.app.services.camera.capture_camera_frame_bytes",
+        "backend.app.printers.camera.capture_camera_frame_bytes",
         _capture,
     )
 
@@ -243,11 +245,11 @@ async def test_finish_state_prefers_banked_frame_when_end_gcode_was_injected(pat
 
     live_called = {"n": 0}
 
-    async def _live(**_kwargs):
+    async def _live(*_args, **_kwargs):
         live_called["n"] += 1
         return b"\xff\xd8live-post-swap"
 
-    monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+    monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _live)
 
     await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 
@@ -264,10 +266,10 @@ async def test_finish_state_grabs_live_when_no_end_gcode_was_injected(patched_en
     do, is how the H2C shipped a photo with the toolhead over the part."""
     main_module._inprint_frame_bank[patched_env.id] = b"\xff\xd8banked-midprint"
 
-    async def _live(**_kwargs):
+    async def _live(*_args, **_kwargs):
         return b"\xff\xd8live-finished-print"
 
-    monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+    monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _live)
 
     await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 
@@ -281,10 +283,10 @@ async def test_finish_state_falls_back_to_live_when_bank_is_empty(patched_env, m
     print_dispatch_context.mark_pending(patched_env.id)
     print_dispatch_context.adopt(patched_env.id)
 
-    async def _live(**_kwargs):
+    async def _live(*_args, **_kwargs):
         return b"\xff\xd8live"
 
-    monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+    monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _live)
 
     await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 
@@ -299,10 +301,10 @@ async def test_stage_22_trigger_ignores_bank(patched_env, monkeypatch):
     print_dispatch_context.adopt(patched_env.id)
     main_module._inprint_frame_bank[patched_env.id] = b"\xff\xd8banked"
 
-    async def _live(**_kwargs):
+    async def _live(*_args, **_kwargs):
         return b"\xff\xd8live"
 
-    monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+    monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _live)
 
     await on_finish_photo_moment(patched_env.id, {"trigger": "stage_22"})
 
@@ -352,6 +354,94 @@ async def test_bank_throttles_within_interval(monkeypatch):
     await main_module._maybe_bank_inprint_frame(3, 6)  # within 25s -> skipped
     assert counter["n"] == 1
     assert main_module._inprint_frame_bank[3] == b"frame-1"
+
+
+async def test_bank_keeps_one_capture_in_flight_even_after_the_interval(monkeypatch):
+    _bank_env(monkeypatch)
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+    attempts = []
+    clock = [100.0]
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: clock[0])
+
+    async def capture(pid, _printer, _logger, **_kwargs):
+        attempts.append(pid)
+        entered.set()
+        await finish.wait()
+        return b"frame"
+
+    monkeypatch.setattr(main_module, "_capture_snapshot_for_notification", capture)
+    first = asyncio.create_task(main_module._maybe_bank_inprint_frame(3, 5))
+    other = None
+    try:
+        await entered.wait()
+        await asyncio.gather(*(main_module._maybe_bank_inprint_frame(3, 5) for _ in range(12)))
+        clock[0] += main_module._INPRINT_BANK_MIN_INTERVAL + 1
+        await main_module._maybe_bank_inprint_frame(3, 5)
+        assert attempts == [3]
+        # Another printer is independent of the slow capture.
+        other = asyncio.create_task(main_module._maybe_bank_inprint_frame(4, 5))
+        await asyncio.sleep(0)
+        assert attempts == [3, 4]
+    finally:
+        finish.set()
+        await first
+        if other is not None:
+            await other
+    assert not main_module._inprint_frame_bank_in_flight
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError("camera unavailable")])
+async def test_bank_throttles_failed_capture_attempts_and_preserves_previous_frame(monkeypatch, failure):
+    _bank_env(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: clock[0])
+    capture = AsyncMock(return_value=None, side_effect=failure)
+    monkeypatch.setattr(main_module, "_capture_snapshot_for_notification", capture)
+    main_module._inprint_frame_bank[3] = b"previous frame"
+
+    await main_module._maybe_bank_inprint_frame(3, 5)
+    await main_module._maybe_bank_inprint_frame(3, 5)
+    assert capture.await_count == 1
+    assert main_module._inprint_frame_bank[3] == b"previous frame"
+    clock[0] += main_module._INPRINT_BANK_MIN_INTERVAL + 1
+    await main_module._maybe_bank_inprint_frame(3, 6)
+    assert capture.await_count == 2
+    assert not main_module._inprint_frame_bank_in_flight
+
+
+async def test_bank_cancel_releases_capture_but_keeps_retry_throttle(monkeypatch):
+    _bank_env(monkeypatch)
+    entered = asyncio.Event()
+
+    async def capture(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(main_module, "_capture_snapshot_for_notification", capture)
+    first = asyncio.create_task(main_module._maybe_bank_inprint_frame(3, 5))
+    await entered.wait()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert not main_module._inprint_frame_bank_in_flight
+    replacement = AsyncMock(return_value=b"frame")
+    monkeypatch.setattr(main_module, "_capture_snapshot_for_notification", replacement)
+    await main_module._maybe_bank_inprint_frame(3, 5)
+    replacement.assert_not_awaited()
+
+
+async def test_bank_drops_capture_from_previous_print_after_bank_reset(monkeypatch):
+    _bank_env(monkeypatch)
+
+    async def capture(*_args, **_kwargs):
+        main_module._inprint_frame_bank.pop(3, None)
+        main_module._inprint_frame_bank_ts.pop(3, None)
+        return b"previous print"
+
+    monkeypatch.setattr(main_module, "_capture_snapshot_for_notification", capture)
+    await main_module._maybe_bank_inprint_frame(3, 5)
+    assert 3 not in main_module._inprint_frame_bank
 
 
 async def test_bank_throttles_on_the_last_layer_too(monkeypatch):
@@ -428,10 +518,10 @@ class TestStage22CacheHoldsExactlyOneRotation:
         monkeypatch.setattr(patched_env, "camera_rotation", 90, raising=False)
         raw = self._jpeg(64, 32)
 
-        async def _capture(**_kwargs):
+        async def _capture(*_args, **_kwargs):
             return raw
 
-        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _capture)
+        monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _capture)
 
         await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 
@@ -456,10 +546,10 @@ class TestStage22CacheHoldsExactlyOneRotation:
         already_rotated = self._jpeg(32, 64)  # what one rotation of a 64x32 frame looks like
         main_module._inprint_frame_bank[patched_env.id] = already_rotated
 
-        async def _capture(**_kwargs):  # pragma: no cover - must not be reached
+        async def _capture(*_args, **_kwargs):  # pragma: no cover - must not be reached
             raise AssertionError("the banked frame should have been preferred")
 
-        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _capture)
+        monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _capture)
 
         await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 
@@ -475,10 +565,10 @@ class TestStage22CacheHoldsExactlyOneRotation:
         monkeypatch.setattr(patched_env, "camera_rotation", 90, raising=False)
         main_module._inprint_frame_bank[patched_env.id] = self._jpeg(999, 1)
 
-        async def _capture(**_kwargs):
+        async def _capture(*_args, **_kwargs):
             return self._jpeg(64, 32)
 
-        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _capture)
+        monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _capture)
 
         await on_finish_photo_moment(patched_env.id, {"trigger": "stage_22"})
 
@@ -488,10 +578,10 @@ class TestStage22CacheHoldsExactlyOneRotation:
     async def test_no_rotation_configured_caches_the_bytes_as_captured(self, patched_env, monkeypatch):
         raw = self._jpeg(64, 32)
 
-        async def _capture(**_kwargs):
+        async def _capture(*_args, **_kwargs):
             return raw
 
-        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _capture)
+        monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _capture)
 
         await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 
@@ -640,10 +730,10 @@ class TestPlateRestoreWiring:
         monkeypatch.setattr(main_module, "_restore_plate_for_finish_photo", _restore)
         monkeypatch.setattr(main_module, "_park_plate_after_finish_photo", _park)
 
-        async def _live(**_kwargs):
+        async def _live(*_args, **_kwargs):
             return b"\xff\xd8live"
 
-        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+        monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _live)
         return calls
 
     async def test_restores_then_parks_on_the_finish_state_path(self, patched_env, restore_env):
@@ -750,10 +840,10 @@ class TestPlateRestoreWiring:
         between the two fails. Otherwise the user finds the print pinned under
         the nozzle."""
 
-        async def _boom(**_kwargs):
+        async def _boom(*_args, **_kwargs):
             raise RuntimeError("camera gone")
 
-        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _boom)
+        monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _boom)
 
         await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 
@@ -1100,11 +1190,11 @@ async def test_finish_photo_live_grab_is_lit_when_the_light_mode_covers_it(patch
     light_client.mode = "all"
     seen = {}
 
-    async def _live(**_kwargs):
+    async def _live(*_args, **_kwargs):
         seen["light"] = light_client.state.chamber_light
         return b"\xff\xd8live"
 
-    monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+    monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _live)
 
     await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 
@@ -1113,10 +1203,10 @@ async def test_finish_photo_live_grab_is_lit_when_the_light_mode_covers_it(patch
 
 
 async def test_finish_photo_live_grab_leaves_the_light_alone_by_default(patched_env, monkeypatch, light_client):
-    async def _live(**_kwargs):
+    async def _live(*_args, **_kwargs):
         return b"\xff\xd8live"
 
-    monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+    monkeypatch.setattr("backend.app.printers.camera.capture_camera_frame_bytes", _live)
 
     await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
 

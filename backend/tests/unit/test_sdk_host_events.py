@@ -76,6 +76,67 @@ def test_duplicate_lifecycle_and_older_events_do_not_repeat_callbacks_or_revive_
     callbacks["on_print_complete"].assert_called_once()
 
 
+def progress_event(connection, sequence, *, job_id="opaque-job-id", fraction=0.1, layer=2):
+    job = JobProgress(job_id=job_id, state="printing", fraction=fraction, layer=layer)
+    return DeviceEvent(
+        device_id=connection.descriptor.device_id,
+        sequence=sequence,
+        event="job.progress",
+        data=JobEventData(job=job).model_dump(mode="json"),
+    )
+
+
+def test_repeated_progress_reports_update_status_without_repeating_photo_callbacks():
+    bridge, callbacks, connection = case()
+    callbacks.update(on_print_progress=Mock(), on_layer_change=Mock())
+    for sequence in range(1, 11):
+        assert bridge.emit(progress_event(connection, sequence))
+    callbacks["on_state_change"].assert_called()
+    assert callbacks["on_state_change"].call_count == 10
+    callbacks["on_print_progress"].assert_called_once_with(10)
+    callbacks["on_layer_change"].assert_called_once_with(2)
+
+    # A fractional change that rounds to the same host percentage is still
+    # live telemetry, without a second percentage-notification workflow.
+    assert bridge.emit(progress_event(connection, 11, fraction=0.101))
+    assert bridge.emit(progress_event(connection, 12, fraction=0.11))
+    assert bridge.emit(progress_event(connection, 13, fraction=0.11, layer=3))
+    assert [call.args[0] for call in callbacks["on_print_progress"].call_args_list] == [10, 11]
+    assert [call.args[0] for call in callbacks["on_layer_change"].call_args_list] == [2, 3]
+    assert callbacks["on_state_change"].call_count == 13
+
+
+def test_unknown_progress_does_not_reset_counters_and_new_job_reports_its_initial_values():
+    bridge, callbacks, connection = case()
+    callbacks.update(on_print_progress=Mock(), on_layer_change=Mock())
+    assert bridge.emit(progress_event(connection, 1))
+    assert bridge.emit(progress_event(connection, 2, fraction=None, layer=None))
+    assert bridge.emit(progress_event(connection, 3))
+    callbacks["on_print_progress"].assert_called_once_with(10)
+    callbacks["on_layer_change"].assert_called_once_with(2)
+
+    assert bridge.emit(progress_event(connection, 4, job_id="another-job"))
+    assert [call.args[0] for call in callbacks["on_print_progress"].call_args_list] == [10, 10]
+    assert [call.args[0] for call in callbacks["on_layer_change"].call_args_list] == [2, 2]
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+def test_observer_refresh_adopts_progress_workflow_counters_only_for_its_owned_jobs(excluded):
+    old, callbacks, old_connection = case()
+    callbacks.update(on_print_progress=Mock(), on_layer_change=Mock())
+    assert old.emit(progress_event(old_connection, 100))
+    refreshed, _, connection = case()
+    refreshed.callbacks = callbacks
+    refreshed.adopt_lifecycle(old, exclude_job_ids={"opaque-job-id"} if excluded else None)
+    assert refreshed.emit(progress_event(connection, 1))
+    assert callbacks["on_state_change"].call_count == 2
+    assert callbacks["on_print_progress"].call_count == (2 if excluded else 1)
+    assert callbacks["on_layer_change"].call_count == (2 if excluded else 1)
+    assert refreshed.emit(progress_event(connection, 2, fraction=0.2, layer=3))
+    assert callbacks["on_print_progress"].call_args.args == (20,)
+    assert callbacks["on_layer_change"].call_args.args == (3,)
+
+
 def test_observer_refresh_preserves_lifecycle_deduplication_but_resets_sequence():
     old, callbacks, old_connection = case()
     assert old.emit(job_event(old_connection, "job.started", sequence=100))

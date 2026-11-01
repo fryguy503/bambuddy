@@ -67,6 +67,7 @@ def _entries(printer_id: int) -> dict[str, tuple]:
         "_stage22_finish_in_flight": (printer_id, asyncio.Event()),
         "_inprint_frame_bank": (printer_id, b"jpg"),
         "_inprint_frame_bank_ts": (printer_id, 1.0),
+        "_inprint_frame_bank_in_flight": (printer_id, object()),
         "_printer_reconciled_since_connect": (printer_id, True),
         "_printer_kprofiles_primed_since_connect": (printer_id, True),
         "_last_progress_milestone": (printer_id, 50),

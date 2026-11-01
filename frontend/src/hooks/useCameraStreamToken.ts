@@ -45,6 +45,11 @@ export function rewriteMediaSrcWithToken(
         post === '&' ? pre : pre === '?' ? '' : ''
       );
       const sep = withoutToken.includes('?') ? '&' : '?';
+      // Token renewal keeps the same img mounted, so detached-img cleanup
+      // cannot close its old MJPEG response. Release it before changing URLs.
+      if (el instanceof HTMLImageElement && /\/camera\/stream(?:[?#]|$)/.test(src)) {
+        el.removeAttribute('src');
+      }
       el.src = `${withoutToken}${sep}${tokenParam}`;
       updated += 1;
     });

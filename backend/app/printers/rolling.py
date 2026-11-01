@@ -80,10 +80,12 @@ class RolloutCoordinator:
         self._registry = registry
         self._targets: dict[str, _Target] = {}
         self._task: asyncio.Task | None = None
+        self._deactivation_checks: dict[int, asyncio.Task] = {}
         self._wake = asyncio.Event()
         self._run_lock = asyncio.Lock()
         self.poll_seconds = 2.0
         self.connection_timeout = 20.0
+        self.deactivation_timeout = 5.0
         self.max_parallel = 4
 
     def _services(self):
@@ -395,6 +397,11 @@ class RolloutCoordinator:
         configured = {printer.id: printer for printer in printers}
         factory, _, scheduler, _ = self._services()
         semaphore = asyncio.Semaphore(self.max_parallel)
+        retained = manager.retained_connections()
+        retained_clients = {id(record["client"]) for _, record in retained}
+        for key, task in tuple(self._deactivation_checks.items()):
+            if key not in retained_clients and task.done():
+                self._deactivation_checks.pop(key, None)
 
         async def retire(printer_id, record):
             printer = configured.get(printer_id)
@@ -413,7 +420,41 @@ class RolloutCoordinator:
                         exc_info=True,
                     )
 
-        await asyncio.gather(*(retire(printer_id, record) for printer_id, record in manager.retained_connections()))
+        await asyncio.gather(*(retire(printer_id, record) for printer_id, record in retained))
+
+    async def _can_deactivate(self, old) -> bool:
+        """Read provider readiness without blocking the application event loop.
+
+        A timed-out synchronous check still owns its worker. Reuse it on the
+        next sweep rather than starting more threads against the same lock.
+        """
+        key = id(old)
+        task = self._deactivation_checks.get(key)
+        if task is None:
+
+            async def check():
+                callback = old._plugin.can_deactivate
+                args = (old._config, old._connection)
+                if inspect.iscoroutinefunction(callback):
+                    return await callback(*args)
+                result = await asyncio.to_thread(callback, *args)
+                return await result if inspect.isawaitable(result) else result
+
+            task = asyncio.create_task(check())
+            self._deactivation_checks[key] = task
+
+            def finished(completed):
+                if not completed.cancelled():
+                    completed.exception()
+
+            task.add_done_callback(finished)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=self.deactivation_timeout) is True
+        except TimeoutError:
+            return False
+        finally:
+            if task.done() and self._deactivation_checks.get(key) is task:
+                self._deactivation_checks.pop(key, None)
 
     async def _retire_observer(self, db, manager, registry, scheduler, printer, printer_id, record):
         from backend.app.models.print_queue import PrintQueueItem
@@ -456,11 +497,10 @@ class RolloutCoordinator:
         if await self._refresh_receipts(db, printer, old, record.get("receipt_ids", [])) is not None:
             return
         if not original_jobs:
-            ready = old._plugin.can_deactivate(old._config, old._connection)
-            if inspect.isawaitable(ready):
-                ready = await asyncio.wait_for(ready, timeout=5)
-            if ready is not True:
+            if not await self._can_deactivate(old):
                 return
+        if _leases.get(printer_id) or manager.provider_callbacks_pending(printer_id, old._plugin):
+            return
         await manager.retire_connection(printer_id, old._plugin)
 
     async def _prune_pins(self, factory, registry) -> None:

@@ -484,11 +484,12 @@ _stage22_finish_in_flight: dict[int, asyncio.Event] = {}
 # freezes — so the last banked frame is always the finished print before the
 # swap. Anything added as a third driver must hold that same property.
 _inprint_frame_bank: dict[int, bytes] = {}
-# Monotonic timestamp of the last banked frame per printer — throttles banking
-# so tall prints don't add a camera grab on every layer.
+# Monotonic timestamp of the last capture attempt, including failed attempts.
+# Reserved before any await so concurrent progress/layer events share the gate.
 _inprint_frame_bank_ts: dict[int, float] = {}
-# Minimum seconds between banked frames, except the final object layer which
-# always refreshes for the best framing.
+# An attempt lasting longer than the interval still owns the printer's camera.
+_inprint_frame_bank_in_flight: dict[int, object] = {}
+# Minimum seconds between capture attempts, including on the final layer.
 _INPRINT_BANK_MIN_INTERVAL = 25.0
 
 # Per-printer "connected" edge tracker. Used by `on_printer_status_change`
@@ -1283,6 +1284,7 @@ async def forget_printer(printer_id: int) -> None:
         _stage22_finish_in_flight,
         _inprint_frame_bank,
         _inprint_frame_bank_ts,
+        _inprint_frame_bank_in_flight,
         _printer_reconciled_since_connect,
         _printer_kprofiles_primed_since_connect,
         _last_progress_milestone,
@@ -2435,10 +2437,11 @@ async def _capture_snapshot_frame(printer_id: int, printer, logger) -> bytes | N
         if capture_enabled is not None and capture_enabled.lower() != "true":
             return None
 
+        from backend.app.api.routes.camera import live_frame_for_capture
+
         # Try external camera first
         if printer.external_camera_enabled and printer.external_camera_url:
             logger.info("[SNAPSHOT] Capturing from external camera for printer %s", printer_id)
-            from backend.app.api.routes.camera import live_frame_for_capture
             from backend.app.services.external_camera import capture_frame
 
             # An external camera allows one reader, so capturing while a viewer
@@ -2446,7 +2449,9 @@ async def _capture_snapshot_frame(printer_id: int, printer, logger) -> bytes | N
             # below exactly as a failed capture did.
             defer, buffered = live_frame_for_capture(printer_id)
             if defer:
-                frame_data = buffered
+                if buffered and len(buffered) <= 2_500_000:
+                    return _apply_camera_rotation(buffered, printer, logger)
+                return None
             else:
                 frame_data = await capture_frame(
                     printer.external_camera_url,
@@ -2457,17 +2462,15 @@ async def _capture_snapshot_frame(printer_id: int, printer, logger) -> bytes | N
                 logger.info("[SNAPSHOT] External camera frame: %s bytes", len(frame_data))
                 return _apply_camera_rotation(frame_data, printer, logger)
 
-        # Try buffered frame from active stream
-        from backend.app.api.routes.camera import _active_chamber_streams, _active_streams, get_buffered_frame
-
-        active_for_printer = [k for k in _active_streams if k.startswith(f"{printer_id}-")]
-        active_chamber = [k for k in _active_chamber_streams if k.startswith(f"{printer_id}-")]
-        buffered_frame = get_buffered_frame(printer_id)
-
-        if (active_for_printer or active_chamber) and buffered_frame:
-            logger.info("[SNAPSHOT] Using buffered frame for printer %s: %s bytes", printer_id, len(buffered_frame))
-            if len(buffered_frame) <= 2_500_000:
+        # The shared registry also includes addon cameras without a tracked
+        # ffmpeg/chamber process. Stand down even while their first frame is
+        # pending: another camera connection can interrupt the live view.
+        defer, buffered_frame = live_frame_for_capture(printer_id)
+        if defer:
+            if buffered_frame and len(buffered_frame) <= 2_500_000:
+                logger.info("[SNAPSHOT] Using buffered frame for printer %s: %s bytes", printer_id, len(buffered_frame))
                 return _apply_camera_rotation(buffered_frame, printer, logger)
+            return None
 
         # Fresh capture from printer camera
         logger.info("[SNAPSHOT] Capturing fresh frame for printer %s", printer_id)
@@ -2512,7 +2515,7 @@ async def _maybe_bank_inprint_frame(printer_id: int, layer_num: int) -> None:
     logger = logging.getLogger(__name__)
     client = printer_manager.get_client(printer_id)
     state = client.state if client else None
-    if not state or state.state != "RUNNING":
+    if not state or state.state != "RUNNING" or not getattr(state, "connected", True):
         return
     # Only during actual extrusion — firmware ticks layer_num during the
     # pre-print calibration sequence, whose sub-stages are non-zero.
@@ -2525,9 +2528,12 @@ async def _maybe_bank_inprint_frame(printer_id: int, layer_num: int) -> None:
     # camera grab on every percent tick of the last layer. Bambu printers accept
     # one RTSP client at a time, so each grab contends with the live view.
     now = time.monotonic()
-    last = _inprint_frame_bank_ts.get(printer_id, 0.0)
-    if (now - last) < _INPRINT_BANK_MIN_INTERVAL:
+    last = _inprint_frame_bank_ts.get(printer_id)
+    if printer_id in _inprint_frame_bank_in_flight or last is not None and now - last < _INPRINT_BANK_MIN_INTERVAL:
         return
+    attempt = object()
+    _inprint_frame_bank_in_flight[printer_id] = attempt
+    _inprint_frame_bank_ts[printer_id] = now
     total = state.total_layers or 0
 
     try:
@@ -2543,9 +2549,14 @@ async def _maybe_bank_inprint_frame(printer_id: int, layer_num: int) -> None:
         # don't bank frames the user never asked for. Without the chamber light
         # (#1655): this runs every 25 seconds for the whole print.
         frame = await _capture_snapshot_for_notification(printer_id, printer, logger, light=False)
-        if frame:
+        # A print start/deletion clears the timestamp and bank while this
+        # capture may be suspended. Its result must not populate the new job.
+        if (
+            frame
+            and _inprint_frame_bank_in_flight.get(printer_id) is attempt
+            and _inprint_frame_bank_ts.get(printer_id) == now
+        ):
             _inprint_frame_bank[printer_id] = frame
-            _inprint_frame_bank_ts[printer_id] = now
             logger.debug(
                 "[FINISH-PHOTO-BANK] banked in-print frame for printer %s at layer %s/%s (%d bytes)",
                 printer_id,
@@ -2555,6 +2566,9 @@ async def _maybe_bank_inprint_frame(printer_id: int, layer_num: int) -> None:
             )
     except Exception as e:
         logger.debug("[FINISH-PHOTO-BANK] bank failed for printer %s: %s", printer_id, e)
+    finally:
+        if _inprint_frame_bank_in_flight.get(printer_id) is attempt:
+            _inprint_frame_bank_in_flight.pop(printer_id, None)
 
 
 def _apply_camera_rotation(image_data: bytes, printer, logger) -> bytes:

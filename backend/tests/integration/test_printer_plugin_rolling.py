@@ -1,6 +1,7 @@
 """Rolling updates move an idle observer while retaining busy pinned versions."""
 
 import asyncio
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -241,6 +242,110 @@ async def test_existing_work_retains_its_handler_without_delaying_new_observer(
     assert case.manager.retained_connection(printer.id, case.old) is client
     assert client._connection.disconnected == 0 and len(case.new.connections) == 1
     assert case.coordinator.describe(case.old.id)["printers"][0]["status"] == "current"
+
+
+async def test_blocked_retirement_readiness_keeps_event_loop_responsive(rolling_case, printer_factory, monkeypatch):
+    case = rolling_case
+    printer = await printer_factory(plugin_id=case.old.id)
+    old = case.attach(printer)
+    entered, release = threading.Event(), threading.Event()
+    worker_threads = []
+    event_loop_thread = threading.get_ident()
+
+    def blocked_readiness(config, connection):
+        worker_threads.append(threading.get_ident())
+        entered.set()
+        assert release.wait(3), "The event loop could not release a blocked provider check"
+        return True
+
+    monkeypatch.setattr(case.old, "can_deactivate", blocked_readiness)
+    await case.request()
+    sweep = asyncio.create_task(case.coordinator.run_once())
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(entered.wait, 2), 2.5)
+        # An independent coroutine can respond while the provider is still
+        # blocked on its storage lock, just as an HTTP request must be able to.
+        assert await asyncio.wait_for(asyncio.sleep(0, result="responsive"), 0.5) == "responsive"
+        assert not sweep.done() and old._connection.disconnected == 0
+        assert len(worker_threads) == 1 and worker_threads[0] != event_loop_thread
+    finally:
+        release.set()
+        await sweep
+    assert old._connection.disconnected == 1
+
+
+@pytest.mark.parametrize("cancel_first_sweep", [False, True])
+async def test_retirement_timeout_or_cancellation_reuses_unfinished_provider_check(
+    rolling_case, printer_factory, monkeypatch, cancel_first_sweep
+):
+    case = rolling_case
+    printer = await printer_factory(plugin_id=case.old.id)
+    old = case.attach(printer)
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    case.coordinator.deactivation_timeout = 5 if cancel_first_sweep else 0.02
+
+    def blocked_readiness(config, connection):
+        calls.append(connection)
+        entered.set()
+        assert release.wait(3), "A pending provider check was not released"
+        return True
+
+    monkeypatch.setattr(case.old, "can_deactivate", blocked_readiness)
+    await case.request()
+    sweep = asyncio.create_task(case.coordinator.run_once())
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(entered.wait, 2), 2.5)
+        if cancel_first_sweep:
+            sweep.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await sweep
+            case.coordinator.deactivation_timeout = 0.02
+        else:
+            await sweep
+        for _ in range(3):
+            await case.coordinator.run_once()
+        assert calls == [old._connection]
+        assert old._connection.disconnected == 0
+        assert case.manager.retained_connection(printer.id, case.old) is old
+        pending = tuple(case.coordinator._deactivation_checks.values())
+        assert len(pending) == 1 and not pending[0].done()
+    finally:
+        release.set()
+        if not sweep.done():
+            await sweep
+        await asyncio.gather(*case.coordinator._deactivation_checks.values())
+    await case.coordinator.run_once()
+    assert old._connection.disconnected == 1
+    assert calls == [old._connection]
+    assert not case.coordinator._deactivation_checks
+
+
+@pytest.mark.parametrize("provider_style", ["sync", "async", "sync_awaitable"])
+async def test_retirement_check_failure_keeps_previous_observer(
+    rolling_case, printer_factory, monkeypatch, provider_style
+):
+    case = rolling_case
+    printer = await printer_factory(plugin_id=case.old.id)
+    old = case.attach(printer)
+
+    async def rejected_async(config, connection):
+        raise RuntimeError("Readiness could not be verified")
+
+    def rejected_sync(config, connection):
+        raise RuntimeError("Readiness could not be verified")
+
+    callback = {
+        "sync": rejected_sync,
+        "async": rejected_async,
+        "sync_awaitable": lambda config, connection: rejected_async(config, connection),
+    }[provider_style]
+    monkeypatch.setattr(case.old, "can_deactivate", callback)
+    await case.request()
+    await case.coordinator.run_once()
+    assert old._connection.disconnected == 0
+    assert case.manager.retained_connection(printer.id, case.old) is old
+    assert not case.coordinator._deactivation_checks
 
 
 async def test_failed_replacement_keeps_old_connection_pin_and_queue_available(rolling_case, printer_factory):

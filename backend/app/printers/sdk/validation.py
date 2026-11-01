@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import inspect
+import json
 import sys
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -29,8 +31,7 @@ class SDKValidationError(ValueError):
         super().__init__(f"{path}: {message}" if path else message)
 
 
-def validate_json_schema(schema: Mapping, *, path: str = "schema") -> None:
-    """Only self-contained Draft 2020-12 schemas; validation never uses network IO."""
+def _validate_json_schema_uncached(schema: Mapping, *, path: str | None = None) -> None:
     if schema.get("$schema") not in (None, "https://json-schema.org/draft/2020-12/schema"):
         raise SDKValidationError("Only JSON Schema Draft 2020-12 is supported", path=path)
 
@@ -81,11 +82,43 @@ def validate_json_schema(schema: Mapping, *, path: str = "schema") -> None:
             raise SDKValidationError("Schema reference cannot be resolved locally", path=path) from exc
 
 
+@lru_cache(maxsize=512)
+def _compiled_schema(encoded: str) -> Draft202012Validator:
+    # Own the schema: a provider may mutate its descriptor after validation.
+    # Only successful checks are cached, including all local-reference fences.
+    schema = json.loads(encoded)
+    _validate_json_schema_uncached(schema)
+    return Draft202012Validator(schema)
+
+
+def _schema_validator(schema: Mapping, *, path: str) -> Draft202012Validator:
+    try:
+        encoded = json.dumps(dict(schema), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if json.loads(encoded) != dict(schema):
+            raise TypeError("Schema is not a JSON object")
+    except (TypeError, ValueError, RecursionError):
+        # Preserve the original diagnostics for mappings that cannot be encoded
+        # as a JSON content key. Ordinary SDK schemas always contain JSON values.
+        _validate_json_schema_uncached(schema, path=path)
+        return Draft202012Validator(dict(schema))
+    try:
+        return _compiled_schema(encoded)
+    except SDKValidationError as exc:
+        raise SDKValidationError(str(exc), path=path) from exc
+
+
+def validate_json_schema(schema: Mapping, *, path: str = "schema") -> None:
+    """Only self-contained Draft 2020-12 schemas; validation never uses network IO."""
+    _schema_validator(schema, path=path)
+
+
 def validate_value(value: Any, schema: Mapping, *, path: str = "value") -> None:
-    validate_json_schema(schema, path=path)
+    validator = _schema_validator(schema, path=path)
     try:
         errors = sorted(
-            Draft202012Validator(dict(schema), format_checker=FormatChecker()).iter_errors(value),
+            # Validate every actual value, with a fresh checker as before. The
+            # cache only removes repeated validation of an unchanged schema.
+            validator.evolve(format_checker=FormatChecker()).iter_errors(value),
             key=lambda error: str(error.json_path),
         )
     except Exception as exc:

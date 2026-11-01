@@ -245,6 +245,7 @@ class HostEventBridge:
         self._sequence = -1
         self._started_jobs: dict[str, None] = {}
         self._terminal_jobs: dict[str, None] = {}
+        self._progress_jobs: dict[str, tuple[int | None, int | None]] = {}
         self._lock = RLock()
 
     def snapshot_context(self) -> tuple[DeviceSnapshot | None, DeviceDescriptor | None]:
@@ -252,8 +253,8 @@ class HostEventBridge:
         with self._lock:
             return self.latest_snapshot, self.latest_descriptor
 
-    def _remember(self, collection, job_id):
-        collection[job_id] = None
+    def _remember(self, collection, job_id, value=None):
+        collection[job_id] = value
         if len(collection) > 256:
             collection.pop(next(iter(collection)))
 
@@ -270,9 +271,11 @@ class HostEventBridge:
         with previous._lock:
             started = {key: value for key, value in previous._started_jobs.items() if key not in excluded}
             terminal = {key: value for key, value in previous._terminal_jobs.items() if key not in excluded}
+            progress = {key: value for key, value in previous._progress_jobs.items() if key not in excluded}
         with self._lock:
             self._started_jobs.update(started)
             self._terminal_jobs.update(terminal)
+            self._progress_jobs.update(progress)
 
     def _notify(self, name, value):
         callback = self.callbacks.get(name)
@@ -368,10 +371,20 @@ class HostEventBridge:
                 return True
             job = job_data.job
             if event.event == "job.progress":
-                if job.fraction is not None:
-                    self._notify("on_print_progress", round(job.fraction * 100))
-                if job.layer is not None:
-                    self._notify("on_layer_change", job.layer)
+                job_id = job.job_id
+                if job_id is None:
+                    raise SDKValidationError("Job progress requires a stable job ID")
+                last_percent, last_layer = self._progress_jobs.get(job_id, (None, None))
+                percent = round(job.fraction * 100) if job.fraction is not None else last_percent
+                layer = job.layer if job.layer is not None else last_layer
+                # Progress and layer callbacks drive photos and notifications.
+                # Repeated telemetry still updates the live snapshot, but must
+                # not repeat those workflows for an unchanged physical value.
+                self._remember(self._progress_jobs, job_id, (percent, layer))
+                if job.fraction is not None and percent != last_percent:
+                    self._notify("on_print_progress", percent)
+                if job.layer is not None and layer != last_layer:
+                    self._notify("on_layer_change", layer)
                 return True
             filename = (
                 (job_data.artifact.filename if job_data.artifact else None)

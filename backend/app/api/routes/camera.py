@@ -150,11 +150,82 @@ _disconnect_events: dict[str, asyncio.Event] = {}
 # Track last frame time per stream_id (not just per printer_id) for stale detection
 _stream_last_frame_times: dict[str, float] = {}
 
-# A viewer id (a random id per viewer mount, sent with its stream and its
-# /camera/stop): what the frontend generates, and nothing that could forge a log
-# line. Every camera fans out now, so the subscriber guard of the stop route
-# decides; the id is accepted for the frontends that send it.
+# A mount keeps its viewer id across stream renewals. Replacing that mount's
+# response releases its old browser connection without ending other viewers.
 ViewerId = Annotated[str | None, Query(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
+_viewer_streams: dict[tuple[int, tuple, str], asyncio.Event] = {}
+
+
+def _stream_viewer_owner(opener: StreamOpener | None) -> tuple | None:
+    if opener is None or not opener.auth_on:
+        return ("anonymous",)
+    if opener.api_key_id is not None:
+        return ("api_key", opener.api_key_id, opener.api_key_prefix)
+    if opener.long_lived_user_id is not None:
+        return ("user_id", opener.long_lived_user_id)
+    if opener.username:
+        return ("user", opener.username)
+    return None
+
+
+def _stop_viewer_owners(user, api_key) -> set[tuple]:
+    if isinstance(api_key, APIKey):
+        return {("api_key", api_key.id, api_key.key_prefix)}
+    if user is None:
+        return {("anonymous",)}
+    owners = set()
+    if isinstance(getattr(user, "username", None), str):
+        owners.add(("user", user.username))
+    if type(getattr(user, "id", None)) is int:
+        owners.add(("user_id", user.id))
+    return owners
+
+
+async def _viewer_frames(frames, printer_id: int, opener: StreamOpener | None, viewer: str | None):
+    """Close superseded responses even while their camera waits for a frame.
+
+    Browsers can retain an MJPEG response when an attached image changes its
+    URL. Without replacement, renewals exhaust the site's HTTP/1 connections.
+    Register when the body starts and retain public owner identity, never tokens.
+    """
+    owner = _stream_viewer_owner(opener)
+    if not viewer or owner is None:
+        async with contextlib.aclosing(frames) as chunks:
+            async for chunk in chunks:
+                yield chunk
+        return
+    key = (printer_id, owner, viewer)
+    stopped = asyncio.Event()
+    previous = _viewer_streams.get(key)
+    _viewer_streams[key] = stopped
+    if previous is not None:
+        previous.set()
+    wake = asyncio.create_task(stopped.wait())
+    try:
+        async with contextlib.aclosing(frames) as chunks:
+            while not stopped.is_set():
+                pending = asyncio.create_task(anext(chunks))
+                try:
+                    done, _ = await asyncio.wait({pending, wake}, return_when=asyncio.FIRST_COMPLETED)
+                    if wake in done:
+                        return
+                    try:
+                        chunk = pending.result()
+                    except StopAsyncIteration:
+                        return
+                finally:
+                    if not pending.done():
+                        pending.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                        await pending
+                yield chunk
+    finally:
+        wake.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await wake
+        if _viewer_streams.get(key) is stopped:
+            _viewer_streams.pop(key, None)
+
 
 # How much of a streaming ffmpeg's stderr to retain: enough for the input
 # analysis plus a burst of errors, capped so a long-running stream can't grow it.
@@ -955,7 +1026,7 @@ async def camera_stream(
                     logger.info("External camera viewer left printer %s", printer_id)
 
         return StreamingResponse(
-            _while_allowed(external_viewer(), opener, printer_id),
+            _viewer_frames(_while_allowed(external_viewer(), opener, printer_id), printer_id, opener, viewer),
             media_type="multipart/x-mixed-replace; boundary=frame",
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -970,13 +1041,6 @@ async def camera_stream(
         fps = camera_plugin.camera_operation_for(camera_config, "stream_fps", printer.model, fps)
     except PrinterPluginError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    # Track stream start time. Set only if absent so the value reflects when
-    # the SHARED upstream first started streaming, not when each new viewer
-    # attached — otherwise /camera/status would report stream_uptime jumping
-    # backward whenever a second viewer joins. The upstream generator's
-    # finally clears this entry when the upstream actually ends.
-    _stream_start_times.setdefault(printer_id, time.time())
 
     # Fan-out broadcaster (#1089): one upstream connection per printer, shared
     # across all viewers. Most Bambu printers only allow a single concurrent
@@ -1008,23 +1072,6 @@ async def camera_stream(
         )
         return _addon_upstream(upstream, printer_id, upstream_stream_id, disconnect_event)
 
-    # Subscribe with a one-shot retry to close a tiny race: the grace-window
-    # teardown can flip the broadcaster to `stopped=True` between the registry
-    # lookup and our subscribe call. The retry forces the registry to mint a
-    # fresh broadcaster (since the now-stopped one is replaced), and the second
-    # subscribe is guaranteed to land on it before any teardown can fire.
-    broadcaster: MjpegBroadcaster = await get_or_create_broadcaster(fanout_key, _factory)
-    try:
-        queue = await broadcaster.subscribe()
-    except RuntimeError:
-        broadcaster = await get_or_create_broadcaster(fanout_key, _factory)
-        queue = await broadcaster.subscribe()
-    logger.info(
-        "Camera viewer attached to %s (subscribers=%d)",
-        fanout_key,
-        broadcaster.subscriber_count,
-    )
-
     async def _is_disconnected() -> bool:
         try:
             return await request.is_disconnected()
@@ -1040,16 +1087,35 @@ async def camera_stream(
         # Chamber light while this viewer watches (#1655). Held per viewer, so
         # it goes off once the last one leaves.
         async with camera_light(printer, wait=False):
-            async for chunk in iter_subscriber(
-                broadcaster,
-                queue,
-                is_disconnected=_is_disconnected,
-                on_unsubscribe=_log_detach,
-            ):
-                yield chunk
+            # A response abandoned before its body starts must not subscribe.
+            # Retry once if the grace-window teardown won the lookup race.
+            broadcaster: MjpegBroadcaster = await get_or_create_broadcaster(fanout_key, _factory)
+            try:
+                queue = await broadcaster.subscribe()
+            except RuntimeError:
+                broadcaster = await get_or_create_broadcaster(fanout_key, _factory)
+                queue = await broadcaster.subscribe()
+            # Keep the shared upstream's original start time across new viewers.
+            _stream_start_times.setdefault(printer_id, time.time())
+            logger.info(
+                "Camera viewer attached to %s (subscribers=%d, viewer=%s)",
+                fanout_key,
+                broadcaster.subscriber_count,
+                viewer or "legacy",
+            )
+            async with contextlib.aclosing(
+                iter_subscriber(
+                    broadcaster,
+                    queue,
+                    is_disconnected=_is_disconnected,
+                    on_unsubscribe=_log_detach,
+                )
+            ) as chunks:
+                async for chunk in chunks:
+                    yield chunk
 
     return StreamingResponse(
-        _while_allowed(_generate(), opener, printer_id),
+        _viewer_frames(_while_allowed(_generate(), opener, printer_id), printer_id, opener, viewer),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -1064,11 +1130,15 @@ async def stop_camera_stream(
     printer_id: int,
     _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
     viewer: ViewerId = None,
+    api_key: APIKey | None = Depends(current_api_key_if_present),
 ):
     """Stop active camera streams for a printer.
 
     Called by the frontend on viewer unmount (cam-wall tile, embedded viewer,
     popup window). Accepts both GET and POST (POST for sendBeacon compatibility).
+
+    With a viewer id, end only this owner's matching response first. Other
+    viewers keep sharing the upstream through the reference-count guard below.
 
     Reference-count guard: every viewer of a printer subscribes to the same
     fan-out broadcaster, so a force-shutdown triggered by ONE leaving viewer
@@ -1081,6 +1151,11 @@ async def stop_camera_stream(
     External cameras fan out too (RC-C6), under their own broadcaster key, so
     their viewers count the same way.
     """
+    if viewer:
+        for owner in _stop_viewer_owners(_, api_key):
+            event = _viewer_streams.get((printer_id, owner, viewer))
+            if event is not None:
+                event.set()
     remaining_subscribers = sum(get_subscriber_count(key) for key in _printer_broadcaster_keys(printer_id))
     if remaining_subscribers >= 1:
         logger.info(
@@ -1119,6 +1194,10 @@ async def forget_printer(printer_id: int) -> None:
 async def _stop_printer_streams(printer_id: int) -> int:
     """Stop the fan-out broadcasters and the stream processes of a printer."""
     stopped = 0
+
+    for (owner_printer_id, _owner, _viewer), event in list(_viewer_streams.items()):
+        if owner_printer_id == printer_id:
+            event.set()
 
     for stream_id, owner_id in list(_active_addon_streams.items()):
         if owner_id == printer_id:
