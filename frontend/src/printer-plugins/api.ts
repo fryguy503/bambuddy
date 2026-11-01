@@ -4,13 +4,43 @@ import type { OperationReceipt, PrinterDevice, PrinterDeviceState, PrinterJobDes
 const printerPath = (printerId: number) => `/printers/${printerId}`;
 export const JOB_DESCRIPTION_TIMEOUT_MS = 65_000;
 
+let inspectionActive = false;
+const waitingInspections: Array<() => void> = [];
+
+/** Keep large artifact reads from competing with each other and live telemetry. */
+function acquireInspection(signal?: AbortSignal): Promise<() => void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      const index = waitingInspections.indexOf(start);
+      if (index >= 0) waitingInspections.splice(index, 1);
+      reject(new DOMException('Request aborted', 'AbortError'));
+    };
+    const start = () => {
+      signal?.removeEventListener('abort', abort);
+      inspectionActive = true;
+      resolve(() => {
+        inspectionActive = false;
+        waitingInspections.shift()?.();
+      });
+    };
+    if (signal?.aborted) abort();
+    else if (!inspectionActive) start();
+    else {
+      waitingInspections.push(start);
+      signal?.addEventListener('abort', abort, { once: true });
+    }
+  });
+}
+
 async function describeJob(printerId: number, source: PrinterJobSource, signal?: AbortSignal): Promise<PrinterJobDescription> {
+  const release = await acquireInspection(signal);
   const controller = new AbortController();
   const cancel = () => controller.abort();
   if (signal?.aborted) cancel();
   else signal?.addEventListener('abort', cancel, { once: true });
   const deadline = setTimeout(cancel, JOB_DESCRIPTION_TIMEOUT_MS);
   try {
+    if (signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
     return await request<PrinterJobDescription>(`${printerPath(printerId)}/job-description`, {
       method: 'POST', signal: controller.signal,
       body: JSON.stringify({ library_file_id: source.libraryFileId, archive_id: source.archiveId, plate_id: source.plateId }),
@@ -21,6 +51,7 @@ async function describeJob(printerId: number, source: PrinterJobSource, signal?:
   } finally {
     clearTimeout(deadline);
     signal?.removeEventListener('abort', cancel);
+    release();
   }
 }
 

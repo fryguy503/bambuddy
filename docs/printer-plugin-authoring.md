@@ -344,6 +344,12 @@ SDK 2.2 adds `JobDescription` and `JobInput`. Plugins that rely on this print
 setup contract must declare `requires_api = ">=2.2.0,<3.0.0"`. The host authorizes
 the library file or archive before passing its resolved local path to
 `describe_job`; the plugin owns parsing that file's printer-specific format.
+Synchronous inspection runs in a dedicated, bounded worker pool so large files
+do not occupy status-update workers. The endpoint has a 60-second total budget;
+it returns `503` when inspection capacity is busy and `408` when reading times
+out. Cancellation does not terminate a running Python worker: the host retains
+its plugin runtime and capacity until that inspection actually finishes.
+Asynchronous hooks must keep blocking file and CPU work off the event loop.
 Return an `options_schema` with the actual supported print settings and their
 labels, descriptions, defaults and limits. Keep the `job.start` schema consistent
 with those options. An unrestricted options dictionary cannot describe the
