@@ -191,3 +191,25 @@ in the deployment configuration for subsequent restarts. Do not use
 `bambuddy-temp` project. It requires that project's existing volumes and network;
 it is not the Synology profile. Use the profile matching the actual installation
 and preserve its project name, published address/port and storage.
+
+## Filament card appearance
+
+After rebuilding the host application, open **Settings → General → Appearance**.
+Choose **Color header with details** under **Filament card style** for wider
+color headers, slot labels, material, available color names and brands, and the
+remaining percentage. **Classic color circles** remains the default. The same
+setting applies to Bambu AMS/AMS-HT/external holders and plugin material sources,
+including Anycubic ACE slots and external holders.
+
+**Low filament red border** works with either style and is enabled by default.
+The threshold defaults to **15%**, can be set to a whole percentage from **1–100%**,
+and includes known zero values. Only a loaded slot with a known remaining
+percentage at or below the threshold gets the border; empty slots and unknown
+remaining levels do not trigger it. The generic plugin view also excludes stale
+and unavailable readings. A remaining mass in grams alone is not a remaining
+percentage. Existing active-slot and runout indicators remain visible.
+
+These preferences are saved in the current browser and take effect immediately.
+This is a host frontend change; an Anycubic or Bambu plugin package update is not
+required solely for this appearance option. Rebuild and recreate the host with
+the existing Synology deployment steps before enabling it on the NAS.

@@ -35,17 +35,30 @@ import type { AMSUnit, HeaterSensorKind, InventorySpool, LinkedSpoolInfo, Printe
 import { api } from '../../api/client';
 import { EmptySlotHoverCard, FilamentHoverCard } from '../../components/FilamentHoverCard';
 import { FilamentSlotCircle } from '../../components/FilamentSlotCircle';
+import { FilamentSlotDetails } from '../../components/FilamentSlotDetails';
 import { ChamberLight } from '../../components/icons/ChamberLight';
 import { useTheme } from '../../contexts/ThemeContext';
-import { FTS_INLET_SIDE, getAmsLabel, getEmptySlotKind, getFallbackSpoolTag, getFillBarColor, getGlobalTrayId, getSpoolmanFillLevel, isAmsHtUnit, isBambuLabSpool, resolveSlotExtruder, slotPresetDescribesTray, trayForSlot } from '../../utils/amsHelpers';
+import { FTS_INLET_SIDE, formatSlotLabel, getAmsLabel, getEmptySlotKind, getFallbackSpoolTag, getFillBarColor, getGlobalTrayId, getSpoolmanFillLevel, isAmsHtUnit, isBambuLabSpool, resolveSlotExtruder, slotPresetDescribesTray, trayForSlot } from '../../utils/amsHelpers';
 import { isBedSlinger } from '../../utils/bedSlinger';
-import { getColorName, isLightColor, parseFilamentColor } from '../../utils/colors';
+import { getColorName, isLightColor, parseFilamentColor, resolveSpoolColorName } from '../../utils/colors';
 import { computePopoverPosition } from '../../utils/popoverPosition';
 import {
   buildPresetOptions
 } from '../../utils/temperatureFanPresets';
 import { NozzleTemperatureControlBox } from './LegacyNozzleTemperatureControl';
 
+
+// Match the hover card: explicit spool names outrank the colour catalogue,
+// but a synthesized subtype or printer colour code is not a colour name.
+function filamentCardColorName(
+  spool: { color_name?: string | null; color_name_is_synthesized?: boolean } | null | undefined,
+  fallback: string | null | undefined,
+) {
+  const assignedName = spool?.color_name_is_synthesized
+    ? null
+    : resolveSpoolColorName(spool?.color_name ?? null, null)?.trim();
+  return assignedName || fallback;
+}
 
 // Which cannot-dry code to name when the firmware reports several at once.
 // Same priority as the backend's drying_preflight.primary_reason_code, so the
@@ -2207,6 +2220,12 @@ export function LegacyBambuMaterialSources({
   onUnassignSpool,
   setConfigureSlotModal,
 }: LegacyBambuMaterialSourcesProps) {
+  const { filamentCardStyle, lowFilamentBorderEnabled, lowFilamentThreshold } = useTheme();
+  const lowFilamentBorder = (fill: number | null, empty: boolean) =>
+    lowFilamentBorderEnabled && !empty && fill !== null && Number.isFinite(fill)
+      && fill >= 0 && fill <= lowFilamentThreshold
+      ? 'border-red-500'
+      : filamentCardStyle === 'detailed' ? 'border-bambu-dark-tertiary' : 'border-transparent';
   if (!status) return null;
   // Separate regular AMS (4-tray) from HT AMS (1-tray), by unit id
   const regularAms = amsData.filter(ams => !isAmsHtUnit(ams.id));
@@ -2540,22 +2559,13 @@ export function LegacyBambuMaterialSources({
                     ? `P${activePrintSlotIdx + 1}`
                     : null;
                   // Slot visual content (goes inside hover card)
-                  const slotVisual = (
-                    <div
-                      className={`relative w-full bg-bambu-dark-secondary rounded-lg p-1 text-center ${isEmpty ? 'opacity-50' : ''} ${isExpectedSlot
-                          ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-bambu-dark animate-pulse'
-                          : isRanOutSlot
-                            ? 'ring-2 ring-red-500/60 ring-offset-1 ring-offset-bambu-dark'
-                            : isActive
-                              ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark'
-                              : ''
-                        }`}
-                    >
+                  const slotBadges = (
+                    <>
                       {isExpectedSlot && (
                         <span
                           aria-label={t('printers.expectedSlot.ariaLabel', { n: slotIdx + 1 })}
                           title={t('printers.expectedSlot.title')}
-                          className="absolute top-0.5 left-0.5 px-1 py-px text-[length:var(--pc-t8,8px)] font-bold text-bambu-dark bg-amber-400 rounded pointer-events-none leading-none"
+                          className={`${filamentCardStyle === 'classic' ? 'absolute z-10 top-0.5 left-0.5 ' : ''}px-1 py-px text-[length:var(--pc-t8,8px)] font-bold text-bambu-dark bg-amber-400 rounded pointer-events-none leading-none`}
                         >
                           ↓
                         </span>
@@ -2564,35 +2574,67 @@ export function LegacyBambuMaterialSources({
                         <span
                           aria-label={t('printers.activeJobSlot.ariaLabel', { n: activePrintSlotIdx + 1 })}
                           title={t('printers.activeJobSlot.title', { n: activePrintSlotIdx + 1 })}
-                          className="absolute top-0.5 right-0.5 px-1 py-px text-[length:var(--pc-t8,8px)] font-bold text-bambu-dark bg-bambu-green rounded pointer-events-none leading-none"
+                          className={`${filamentCardStyle === 'classic' ? 'absolute z-10 top-0.5 right-0.5 ' : ''}px-1 py-px text-[length:var(--pc-t8,8px)] font-bold text-bambu-dark bg-bambu-green rounded pointer-events-none leading-none`}
                         >
                           {activePrintSlotLabel}
                         </span>
                       )}
-                      {/* Filament color circle with 1-based slot number centered inside */}
-                      <FilamentSlotCircle
-                        trayColor={tray?.tray_color}
-                        trayType={tray?.tray_type}
-                        isEmpty={isEmpty}
-                        emptyKind={emptyKind}
-                        slotNumber={slotIdx + 1}
-                      />
-                      <div className="text-[length:var(--pc-t9,9px)] text-white font-bold truncate">
-                        {tray?.tray_type || t(emptyKind === 'reset' ? 'ams.slotUnconfigured' : 'ams.slotEmpty')}
-                      </div>
-                      <KValueLine k={filamentData ? tray?.k : null} reserve={anySlotHasKValue} />
-                      {/* Fill bar */}
-                      <div className="mt-1 h-1.5 bg-black/30 rounded-full overflow-hidden">
-                        {effectiveFill !== null && effectiveFill >= 0 && !isEmpty && tray && (
-                          <div
-                            className="h-full rounded-full transition-all"
-                            style={{
-                              width: `${effectiveFill}%`,
-                              backgroundColor: getFillBarColor(effectiveFill),
-                            }}
+                    </>
+                  );
+                  const slotVisual = (
+                    <div data-filament-card={filamentCardStyle} data-filament-label={formatSlotLabel(ams.id, slotIdx, false, false)}
+                      className={`relative w-full bg-bambu-dark-secondary rounded-lg p-1 text-center border ${lowFilamentBorder(effectiveFill, isEmpty)} ${isEmpty ? 'opacity-50' : ''} ${
+                        isExpectedSlot
+                          ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-bambu-dark animate-pulse'
+                          : isRanOutSlot
+                            ? 'ring-2 ring-red-500/60 ring-offset-1 ring-offset-bambu-dark'
+                            : isActive
+                              ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark'
+                              : ''
+                      }`}
+                    >
+                      {filamentCardStyle === 'classic' && slotBadges}
+                      {filamentCardStyle === 'detailed' ? (
+                        <FilamentSlotDetails
+                          label={formatSlotLabel(ams.id, slotIdx, false, false)}
+                          color={tray?.tray_color || ''}
+                          material={tray?.tray_type || t(emptyKind === 'reset' ? 'ams.slotUnconfigured' : 'ams.slotEmpty')}
+                          colorName={filamentCardColorName((slotSpoolForFill ?? inventoryAssignment?.spool), filamentData?.colorName)}
+                          brand={(slotSpoolForFill ?? inventoryAssignment?.spool)?.brand || filamentData?.vendor}
+                          fill={effectiveFill}
+                          empty={isEmpty}
+                        >
+                          {slotBadges}
+                        </FilamentSlotDetails>
+                      ) : (
+                        <>
+                          {/* Filament color circle with 1-based slot number centered inside */}
+                          <FilamentSlotCircle
+                            trayColor={tray?.tray_color}
+                            trayType={tray?.tray_type}
+                            isEmpty={isEmpty}
+                            emptyKind={emptyKind}
+                            slotNumber={slotIdx + 1}
                           />
-                        )}
-                      </div>
+                          <div className="text-[length:var(--pc-t9,9px)] text-white font-bold truncate">
+                            {tray?.tray_type || t(emptyKind === 'reset' ? 'ams.slotUnconfigured' : 'ams.slotEmpty')}
+                          </div>
+                          <KValueLine k={filamentData ? tray?.k : null} reserve={anySlotHasKValue} />
+                          {/* Fill bar */}
+                          <div className="mt-1 h-1.5 bg-black/30 rounded-full overflow-hidden">
+                            {effectiveFill !== null && effectiveFill >= 0 && !isEmpty && tray && (
+                              <div
+                                className="h-full rounded-full transition-all"
+                                style={{
+                                  width: `${effectiveFill}%`,
+                                  backgroundColor: getFillBarColor(effectiveFill),
+                                }}
+                              />
+                            )}
+                          </div>
+                        </>
+                      )}
+                      {filamentCardStyle === 'detailed' && <KValueLine k={isEmpty ? null : tray?.k} reserve={anySlotHasKValue} />}
                     </div>
                   );
 
@@ -2830,22 +2872,13 @@ export function LegacyBambuMaterialSources({
             ? `P${htActivePrintSlotIdx + 1}`
             : null;
           // Slot visual content (goes inside hover card)
-          const slotVisual = (
-            <div
-              className={`relative w-full bg-bambu-dark-secondary rounded-lg p-1 text-center ${isEmpty ? 'opacity-50' : ''} ${isExpectedSlot
-                  ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-bambu-dark animate-pulse'
-                  : isRanOutSlot
-                    ? 'ring-2 ring-red-500/60 ring-offset-1 ring-offset-bambu-dark'
-                    : isActive
-                      ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark'
-                      : ''
-                }`}
-            >
+          const slotBadges = (
+            <>
               {isExpectedSlot && (
                 <span
                   aria-label={t('printers.expectedSlot.ariaLabel', { n: 1 })}
                   title={t('printers.expectedSlot.title')}
-                  className="absolute top-0.5 left-0.5 px-1 py-px text-[length:var(--pc-t8,8px)] font-bold text-bambu-dark bg-amber-400 rounded pointer-events-none leading-none"
+                          className={`${filamentCardStyle === 'classic' ? 'absolute z-10 top-0.5 left-0.5 ' : ''}px-1 py-px text-[length:var(--pc-t8,8px)] font-bold text-bambu-dark bg-amber-400 rounded pointer-events-none leading-none`}
                 >
                   ↓
                 </span>
@@ -2854,35 +2887,67 @@ export function LegacyBambuMaterialSources({
                 <span
                   aria-label={t('printers.activeJobSlot.ariaLabel', { n: htActivePrintSlotIdx + 1 })}
                   title={t('printers.activeJobSlot.title', { n: htActivePrintSlotIdx + 1 })}
-                  className="absolute top-0.5 right-0.5 px-1 py-px text-[length:var(--pc-t8,8px)] font-bold text-bambu-dark bg-bambu-green rounded pointer-events-none leading-none"
+                  className={`${filamentCardStyle === 'classic' ? 'absolute z-10 top-0.5 right-0.5 ' : ''}px-1 py-px text-[length:var(--pc-t8,8px)] font-bold text-bambu-dark bg-bambu-green rounded pointer-events-none leading-none`}
                 >
                   {htActivePrintSlotLabel}
                 </span>
               )}
-              {/* Filament color circle with 1-based slot number centered inside */}
-              <FilamentSlotCircle
-                trayColor={tray?.tray_color}
-                trayType={tray?.tray_type}
-                isEmpty={isEmpty}
-                emptyKind={emptyKind}
-                slotNumber={1}
-              />
-              <div className="text-[length:var(--pc-t9,9px)] text-white font-bold truncate">
-                {tray?.tray_type || t(emptyKind === 'reset' ? 'ams.slotUnconfigured' : 'ams.slotEmpty')}
-              </div>
-              <KValueLine k={filamentData ? tray?.k : null} reserve={anySlotHasKValue} />
-              {/* Fill bar */}
-              <div className="mt-1 h-1.5 bg-black/30 rounded-full overflow-hidden">
-                {htEffectiveFill !== null && htEffectiveFill >= 0 && !isEmpty && (
-                  <div
-                    className="h-full rounded-full transition-all"
-                    style={{
-                      width: `${htEffectiveFill}%`,
-                      backgroundColor: getFillBarColor(htEffectiveFill),
-                    }}
+            </>
+          );
+          const slotVisual = (
+            <div data-filament-card={filamentCardStyle} data-filament-label={formatSlotLabel(ams.id, htSlotId, true, false)}
+              className={`relative w-full bg-bambu-dark-secondary rounded-lg p-1 text-center border ${lowFilamentBorder(htEffectiveFill, isEmpty)} ${isEmpty ? 'opacity-50' : ''} ${
+                isExpectedSlot
+                  ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-bambu-dark animate-pulse'
+                  : isRanOutSlot
+                    ? 'ring-2 ring-red-500/60 ring-offset-1 ring-offset-bambu-dark'
+                    : isActive
+                      ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark'
+                      : ''
+              }`}
+            >
+              {filamentCardStyle === 'classic' && slotBadges}
+              {filamentCardStyle === 'detailed' ? (
+                <FilamentSlotDetails
+                  label={formatSlotLabel(ams.id, htSlotId, true, false)}
+                  color={tray?.tray_color || ''}
+                  material={tray?.tray_type || t(emptyKind === 'reset' ? 'ams.slotUnconfigured' : 'ams.slotEmpty')}
+                  colorName={filamentCardColorName((htSlotSpoolForFill ?? htInventoryAssignment?.spool), filamentData?.colorName)}
+                  brand={(htSlotSpoolForFill ?? htInventoryAssignment?.spool)?.brand || filamentData?.vendor}
+                  fill={htEffectiveFill}
+                  empty={isEmpty}
+                >
+                  {slotBadges}
+                </FilamentSlotDetails>
+              ) : (
+                <>
+                  {/* Filament color circle with 1-based slot number centered inside */}
+                  <FilamentSlotCircle
+                    trayColor={tray?.tray_color}
+                    trayType={tray?.tray_type}
+                    isEmpty={isEmpty}
+                    emptyKind={emptyKind}
+                    slotNumber={1}
                   />
-                )}
-              </div>
+                  <div className="text-[length:var(--pc-t9,9px)] text-white font-bold truncate">
+                    {tray?.tray_type || t(emptyKind === 'reset' ? 'ams.slotUnconfigured' : 'ams.slotEmpty')}
+                  </div>
+                  <KValueLine k={filamentData ? tray?.k : null} reserve={anySlotHasKValue} />
+                  {/* Fill bar */}
+                  <div className="mt-1 h-1.5 bg-black/30 rounded-full overflow-hidden">
+                    {htEffectiveFill !== null && htEffectiveFill >= 0 && !isEmpty && (
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${htEffectiveFill}%`,
+                          backgroundColor: getFillBarColor(htEffectiveFill),
+                        }}
+                      />
+                    )}
+                  </div>
+                </>
+              )}
+              {filamentCardStyle === 'detailed' && <KValueLine k={isEmpty ? null : tray?.k} reserve={anySlotHasKValue} />}
             </div>
           );
 
@@ -3257,32 +3322,47 @@ export function LegacyBambuMaterialSources({
                 const isEmpty = !extTray.tray_type;
                 const emptyKind = getEmptySlotKind(extTray);
                 const extSlotContent = (
-                  <div className={`w-full bg-bambu-dark-secondary rounded-lg p-1 text-center ${isEmpty ? 'opacity-50' : ''} ${isExtActive ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark' : ''}`}>
-                    {/* Color circle: L/R inside on dual-nozzle external (replaces
-                                      the separate Ext-L/Ext-R caption that made the row taller than
-                                      regular AMS slots), 1-based slot number on single-nozzle. */}
-                    <FilamentSlotCircle
-                      trayColor={extTray.tray_color}
-                      trayType={extTray.tray_type}
-                      isEmpty={isEmpty}
-                      emptyKind={emptyKind}
-                      slotNumber={isDualNozzle ? (extTrayId === 254 ? 'L' : 'R') : slotTrayId + 1}
-                    />
-                    <div className={`text-[length:var(--pc-t9,9px)] font-bold truncate ${isEmpty ? 'text-white/40' : 'text-white'}`}>
-                      {extTray.tray_type || t('ams.slotEmpty')}
-                    </div>
-                    <KValueLine k={isEmpty ? null : extTray.k} reserve={anySlotHasKValue} />
-                    <div className="mt-1 h-1.5 bg-black/30 rounded-full overflow-hidden">
-                      {extEffectiveFill !== null && extEffectiveFill >= 0 && !isEmpty && (
-                        <div
-                          className="h-full rounded-full transition-all"
-                          style={{
-                            width: `${extEffectiveFill}%`,
-                            backgroundColor: getFillBarColor(extEffectiveFill),
-                          }}
+                  <div data-filament-card={filamentCardStyle} data-filament-label={extLabel || formatSlotLabel(255, slotTrayId, false, true)} className={`w-full bg-bambu-dark-secondary rounded-lg p-1 text-center border ${lowFilamentBorder(extEffectiveFill, isEmpty)} ${isEmpty ? 'opacity-50' : ''} ${isExtActive ? 'ring-2 ring-bambu-green ring-offset-1 ring-offset-bambu-dark' : ''}`}>
+                    {filamentCardStyle === 'detailed' ? (
+                      <FilamentSlotDetails
+                        label={extLabel || formatSlotLabel(255, slotTrayId, false, true)}
+                        color={extTray.tray_color || ''}
+                        material={extTray.tray_type || t('ams.slotEmpty')}
+                        colorName={filamentCardColorName((extSlotSpoolForFill ?? extInventoryAssignment?.spool), extFilamentData?.colorName)}
+                        brand={(extSlotSpoolForFill ?? extInventoryAssignment?.spool)?.brand || extFilamentData?.vendor}
+                        fill={extEffectiveFill}
+                        empty={isEmpty}
+                      />
+                    ) : (
+                      <>
+                        {/* Color circle: L/R inside on dual-nozzle external (replaces
+                            the separate Ext-L/Ext-R caption that made the row taller than
+                            regular AMS slots), 1-based slot number on single-nozzle. */}
+                        <FilamentSlotCircle
+                          trayColor={extTray.tray_color}
+                          trayType={extTray.tray_type}
+                          isEmpty={isEmpty}
+                          emptyKind={emptyKind}
+                          slotNumber={isDualNozzle ? (extTrayId === 254 ? 'L' : 'R') : slotTrayId + 1}
                         />
-                      )}
-                    </div>
+                        <div className={`text-[length:var(--pc-t9,9px)] font-bold truncate ${isEmpty ? 'text-white/40' : 'text-white'}`}>
+                          {extTray.tray_type || t('ams.slotEmpty')}
+                        </div>
+                        <KValueLine k={isEmpty ? null : extTray.k} reserve={anySlotHasKValue} />
+                        <div className="mt-1 h-1.5 bg-black/30 rounded-full overflow-hidden">
+                          {extEffectiveFill !== null && extEffectiveFill >= 0 && !isEmpty && (
+                            <div
+                              className="h-full rounded-full transition-all"
+                              style={{
+                                width: `${extEffectiveFill}%`,
+                                backgroundColor: getFillBarColor(extEffectiveFill),
+                              }}
+                            />
+                          )}
+                        </div>
+                      </>
+                    )}
+                    {filamentCardStyle === 'detailed' && <KValueLine k={isEmpty ? null : extTray.k} reserve={anySlotHasKValue} />}
                   </div>
                 );
 

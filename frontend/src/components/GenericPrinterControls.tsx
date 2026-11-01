@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Flame, Gauge, Home, Lightbulb, Move, Package, Pause, Play, Square, Wrench, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { FilamentSlotDetails } from './FilamentSlotDetails';
 import type { Permission } from '../api/client';
 import { printerDeviceApi } from '../printer-plugins/api';
 import type { JsonSchema, OperationReceipt, PrinterDevice, PrinterDeviceState, PrinterOperation, PrinterResource, ResourceProperty } from '../printer-plugins/types';
@@ -161,6 +163,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
   printerId: number; device: PrinterDevice; snapshot?: PrinterDeviceState; hasPermission: PermissionCheck; compact?: boolean; presets?: PrinterControlPresets; advancedMode?: 'inline' | 'hidden'; advancedOnly?: boolean; printerName?: string;
 }) {
   const { t } = useTranslation();
+  const { filamentCardStyle, lowFilamentBorderEnabled, lowFilamentThreshold } = useTheme();
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<{ initial: Selection; operations: PrinterOperation[] } | null>(null);
   const [popover, setPopover] = useState<{ selection: CardControl; anchor: HTMLElement } | null>(null);
@@ -261,6 +264,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
   const secondary = operations.filter(operation => !primaryJobOperations.has(operation.id));
   const iconClass = 'flex h-8 min-w-8 items-center justify-center rounded-lg bg-bambu-dark px-2 text-bambu-gray transition-colors hover:bg-bambu-dark-tertiary hover:text-white disabled:cursor-not-allowed disabled:opacity-40';
   const popoverProps = { device, snapshot, hasPermission, canSend, send, schemaFor: operationSchema, busy: quick.isPending, onClose: closePopover, onAdvanced: openControl, onAssign: (operation: PrinterOperation, resource: PrinterResource) => setAssignment({ operation, resource }) };
+  const materialsFresh = freshJobState(snapshot);
   const materialTile = (source: PrinterResource, ordinal?: number) => {
     const state = stateFor(source);
     const properties = readableProperties(source, hasPermission);
@@ -272,7 +276,7 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
     };
     const reportedStatus = state?.status;
     const status = reportedStatus && ['empty', 'loaded', 'unconfigured', 'unknown'].includes(reportedStatus) ? freshJobState(snapshot) ? reportedStatus : 'unknown' : undefined;
-    const noMaterial = !!status && status !== 'loaded';
+    const noMaterial = !materialsFresh || state?.available === false || !!status && status !== 'loaded';
     const material = find(['material', 'material_type', 'filament_type']);
     const color = find(['color', 'colour']);
     const remaining = find(['remaining', 'remaining_percent', 'remaining_mass']);
@@ -292,7 +296,10 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
     const nullableInventory = inventoryField?.type === 'null' || Array.isArray(inventoryField?.type) && inventoryField.type.includes('null')
       || Array.isArray(inventoryField?.anyOf) && inventoryField.anyOf.some(field => !!field && typeof field === 'object' && 'type' in field && field.type === 'null');
     const spool = knownValue(['spool_id']);
-    const spoolId = typeof spool === 'number' && Number.isSafeInteger(spool) && spool > 0 ? spool : undefined;
+    // Providers may serialize host inventory IDs as decimal strings. Only
+    // those strings address the numeric inventory API; opaque IDs stay opaque.
+    const inventoryId = typeof spool === 'string' && /^[1-9]\d*$/.test(spool) ? Number(spool) : spool;
+    const spoolId = typeof inventoryId === 'number' && Number.isSafeInteger(inventoryId) && inventoryId > 0 ? inventoryId : undefined;
     const vendor = knownValue(['vendor', 'brand']);
     const colorName = knownValue(['color_name', 'colour_name']);
     const actionClass = 'block w-full rounded px-2 py-1.5 text-left text-xs font-medium text-white hover:bg-bambu-dark disabled:cursor-not-allowed disabled:text-bambu-gray disabled:opacity-40';
@@ -304,12 +311,13 @@ export function GenericPrinterControls({ printerId, device, snapshot, hasPermiss
       if (key && field?.enum) return field.enum.map((value, index) => <button type="button" key={operation.id + ':' + index} className={actionClass} disabled={!canSend(operation, source) || quick.isPending} onClick={() => void send(operation, { [key]: value }, source)}>{typeof labels[index] === 'string' ? labels[index] : String(value)}</button>);
       return <button type="button" key={operation.id} className={actionClass} disabled={!canSend(operation, source) || quick.isPending} onClick={() => hint?.editor === 'refresh' ? void send(operation, {}, source) : openControl(operation, source)}>{operation.label}</button>;
     });
-    const tileClass = 'block w-full min-w-0 rounded bg-bambu-dark-secondary p-2 text-center text-xs text-bambu-gray transition-colors disabled:cursor-default disabled:opacity-70';
+    const lowFilament = lowFilamentBorderEnabled && !noMaterial && fill !== undefined && fill <= lowFilamentThreshold;
+    const tileClass = 'block w-full min-w-0 rounded border bg-bambu-dark-secondary text-center text-xs text-bambu-gray transition-colors disabled:cursor-default disabled:opacity-70 ' + (filamentCardStyle === 'detailed' ? 'p-1 ' : 'p-2 ') + (lowFilament ? 'border-red-500' : filamentCardStyle === 'detailed' ? 'border-bambu-dark-tertiary' : 'border-transparent');
     return <article key={source.id} aria-label={source.label} className="min-w-0"><ResourceFilamentCard label={source.label} profile={profile} color={swatch} colorName={typeof colorName === 'string' && !noMaterial ? colorName : undefined} vendor={typeof vendor === 'string' && !noMaterial ? vendor : undefined} fill={fill} spoolId={spoolId} canReadInventory={hasPermission('inventory:read')}
       onAssign={inventory && canSend(inventory, source) && !quick.isPending ? () => setAssignment({ operation: inventory, resource: source }) : undefined}
       onUnassign={inventory && inventoryParameter && canSend(inventory, source) && !quick.isPending && nullableInventory ? () => { void send(inventory, { [inventoryParameter]: null }, source); } : undefined}
       onConfigure={configure && canSend(configure, source) && !quick.isPending ? () => { const anchor = materialAnchors.current.get(source.id); if (anchor) showPopover({ kind: 'slot', operations: choices, resource: source, configure: true }, anchor); } : undefined}
-      actions={actions.length ? actions : undefined}><button type="button" ref={element => { if (element) materialAnchors.current.set(source.id, element); else materialAnchors.current.delete(source.id); }} aria-label={'Controls for ' + source.label} className={tileClass + ' hover:bg-bambu-dark-tertiary'}>{body}</button></ResourceFilamentCard></article>;
+      actions={actions.length ? actions : undefined}>{identity => <button type="button" ref={element => { if (element) materialAnchors.current.set(source.id, element); else materialAnchors.current.delete(source.id); }} aria-label={'Controls for ' + source.label} data-filament-card={filamentCardStyle} className={tileClass + ' hover:bg-bambu-dark-tertiary'}>{filamentCardStyle === 'detailed' ? <><FilamentSlotDetails label={source.label} color={swatch || ''} material={profile} colorName={identity.colorName} brand={identity.brand} fill={fill ?? null} empty={noMaterial}>{ordinal !== undefined && <span aria-label={'Slot ' + ordinal} className="rounded bg-black/60 px-1 text-[length:var(--pc-t9,9px)] font-medium text-white">{ordinal}</span>}</FilamentSlotDetails>{remaining && !noMaterial && fill === undefined && <span className="mt-1 block text-right text-[10px]">{displayReading(remainingReading, remaining[1].value_schema, remaining[1].unit, remaining[0])}</span>}</> : body}</button>}</ResourceFilamentCard></article>;
   };
   const dryingMetrics = (feeder: PrinterResource, operation?: PrinterOperation) => {
     const presentation = operation && hintFor(operation);

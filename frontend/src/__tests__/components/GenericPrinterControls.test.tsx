@@ -12,6 +12,7 @@ import { ToastProvider } from '../../contexts/ToastContext';
 import type { ResourceSpoolTarget } from '../../components/AssignSpoolModal';
 
 vi.mock('../../printer-plugins/api', () => ({ printerDeviceApi: { execute: vi.fn(), task: vi.fn(), cancel: vi.fn() } }));
+vi.mock('../../contexts/ThemeContext', () => ({ useTheme: () => ({ filamentCardStyle: 'classic', lowFilamentBorderEnabled: true, lowFilamentThreshold: 15 }) }));
 const assignmentModal = vi.hoisted(() => ({ target: undefined as ResourceSpoolTarget | undefined }));
 vi.mock('../../components/AssignSpoolModal', () => ({ AssignSpoolModal: ({ resourceTarget }: { resourceTarget: ResourceSpoolTarget }) => {
   assignmentModal.target = resourceTarget;

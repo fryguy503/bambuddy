@@ -260,7 +260,9 @@ describe('PrintersPage — printer card body scale (#1848)', () => {
     expect(heading.className).toContain('text-xl');
 
     // Body labels now reference the scaled property rather than a fixed px.
-    const scaled = document.querySelectorAll('#printer-card-1 [class*="--pc-t"]');
-    expect(scaled.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      const scaled = document.querySelectorAll('#printer-card-1 [class*="--pc-t"]');
+      expect(scaled.length).toBeGreaterThan(0);
+    });
   });
 });
