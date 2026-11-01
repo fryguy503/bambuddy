@@ -1411,6 +1411,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "En cola",
+      selectionHelp: "Elige una ranura con filamento cargado para este trabajo. Conservará su posición en la cola.",
+      refreshHelp: "Esperando el estado actual del filamento. Este trabajo permanece en la cola.",
+      updateSelection: "Actualizar selección de filamento",
+    },
     filamentShort: {
       rowBadge: 'Filamento insuficiente para la bobina asignada',
       rowTooltip: 'El planificador marco este elemento. Pulsa Reproducir para ver el deficit por slot y decidir si imprimir de todos modos.',

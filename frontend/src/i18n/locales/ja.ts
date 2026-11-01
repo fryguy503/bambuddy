@@ -1410,6 +1410,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "待機中",
+      selectionHelp: "このジョブに使用するフィラメントが装填されたスロットを選択してください。キューの順番は維持されます。",
+      refreshHelp: "フィラメントの現在の状態を待機しています。このジョブはキューに残ります。",
+      updateSelection: "フィラメントの選択を更新",
+    },
     filamentShort: {
       rowBadge: '割り当てられたスプールのフィラメントが不足しています',
       rowTooltip: 'スケジューラーがこのアイテムをフラグしました。再生ボタンをクリックしてスロットごとの不足量を確認し、それでも印刷するか判断してください。',

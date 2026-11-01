@@ -1363,6 +1363,12 @@ export default {
   },
 
   queue: {
+    materialHold: {
+      waiting: "대기 중",
+      selectionHelp: "이 작업에 사용할 필라멘트가 장착된 슬롯을 선택하세요. 대기열 순서는 유지됩니다.",
+      refreshHelp: "현재 필라멘트 상태를 기다리는 중입니다. 이 작업은 대기열에 유지됩니다.",
+      updateSelection: "필라멘트 선택 변경",
+    },
     title: '인쇄 대기열',
     subtitle: '인쇄 작업을 예약하고 관리하세요',
     editQueueItem: '대기열 항목 편집',

@@ -22,12 +22,15 @@ from backend.app.printers.sdk.jobs import (
     JobArtifact,
     JobDescription,
     JobInput,
+    JobPreflightIssue,
+    JobPreflightResult,
     JobProgress,
     JobRequest,
     MaterialBinding,
     MaterialInventoryItem,
     material_inventory,
     validate_job_description,
+    validate_job_preflight,
     validate_job_request,
 )
 from backend.app.printers.sdk.manifest import PluginManifest

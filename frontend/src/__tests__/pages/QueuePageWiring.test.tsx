@@ -48,6 +48,17 @@ const baseItem = {
 const pendingA = { ...baseItem, id: 11, position: 1, archive_name: 'Pending A' };
 const pendingB = { ...baseItem, id: 12, position: 2, archive_name: 'Pending B' };
 const pendingC = { ...baseItem, id: 13, position: 3, archive_name: 'Pending C' };
+const materialHeld = {
+  ...pendingA,
+  waiting_reason: 'Needs material selection: the selected slot is empty.',
+  sdk_job: {
+    job_id: 'queued-plan', artifact: { uri: 'archive:1', format: 'gcode' }, selected_tool_ids: [], bindings: [], options: {},
+    extensions: { 'bambuddy:queue_hold': {
+      kind: 'material_selection', code: 'material.unavailable', message: 'The selected slot is empty.',
+      input_ids: ['T0'], resource_ids: ['source:ace:0:1'],
+    } },
+  },
+};
 const printing = {
   ...baseItem,
   id: 21,
@@ -180,6 +191,31 @@ function dialogOf(title: HTMLElement): HTMLElement {
 }
 
 describe('QueuePage wiring: row actions', () => {
+  it('opens the existing queue editor for material selection without starting or duplicating the job', async () => {
+    useQueue([materialHeld]);
+    render(<QueuePage />);
+    const action = await screen.findByRole('button', { name: 'Update filament selection' });
+    expect(screen.getByText('Needs material selection: the selected slot is empty.')).toBeInTheDocument();
+    expect(screen.getByText(/It will keep its place in the queue/)).toBeInTheDocument();
+    expect(screen.queryByText('Dispatch failed')).not.toBeInTheDocument();
+    await userEvent.click(action);
+    expect(await screen.findByRole('heading', { name: 'Edit Queue Item' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(mutationCalls()).toHaveLength(0);
+  });
+
+  it('keeps a telemetry hold queued while optionally letting the operator choose another fresh source', async () => {
+    useQueue([{ ...materialHeld, waiting_reason: 'Waiting for material status: refreshing telemetry.', sdk_job: {
+      ...materialHeld.sdk_job, extensions: { 'bambuddy:queue_hold': {
+        ...materialHeld.sdk_job.extensions['bambuddy:queue_hold'], kind: 'refresh',
+      } },
+    } }]);
+    render(<QueuePage />);
+    expect(await screen.findByText('Waiting for current filament status. This job remains in the queue.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update filament selection' })).toBeEnabled();
+    expect(mutationCalls()).toHaveLength(0);
+  });
+
   it('Stop on a printing item -> confirm -> POST /queue/{id}/stop for that item', async () => {
     const user = userEvent.setup();
     render(<QueuePage />);
@@ -413,6 +449,17 @@ describe('QueuePage wiring: permission gates', () => {
       ),
     );
   };
+
+  it('uses the existing queue ownership permission for material selection', async () => {
+    signInWith(['queue:read', 'queue:update_own'], 7);
+    useQueue([{ ...materialHeld, created_by_id: 8 }]);
+    render(<QueuePage />);
+    const action = await screen.findByRole('button', { name: 'Update filament selection' });
+    expect(action).toBeDisabled();
+    await userEvent.click(action);
+    expect(screen.queryByRole('heading', { name: 'Edit Queue Item' })).not.toBeInTheDocument();
+    expect(mutationCalls()).toHaveLength(0);
+  });
 
   it('Clear History is disabled without queue:delete_all and sends nothing when clicked', async () => {
     signInWith(['queue:read', 'queue:delete_own']);

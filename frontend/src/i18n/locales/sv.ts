@@ -1421,6 +1421,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "I kö",
+      selectionHelp: "Välj en plats med laddat filament för det här jobbet. Det behåller sin plats i kön.",
+      refreshHelp: "Väntar på aktuell filamentstatus. Jobbet ligger kvar i kön.",
+      updateSelection: "Uppdatera filamentval",
+    },
     title: 'Utskriftskö',
     subtitle: 'Schemalägg och hantera dina utskriftsjobb',
     filamentShort: {

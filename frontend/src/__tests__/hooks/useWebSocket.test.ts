@@ -471,6 +471,28 @@ describe('useWebSocket hook', () => {
       expect(received).toEqual([{ printer_id: 3, printer_name: 'X1C', reason: 'no_camera_frame' }]);
     });
 
+    it('refreshes the queue and forwards a recoverable material hold without making it a failed dispatch', async () => {
+      vi.useFakeTimers();
+      const { useWebSocket } = await import('../../hooks/useWebSocket');
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+      const received: unknown[] = [];
+      const listener = (event: Event) => received.push((event as CustomEvent).detail);
+      window.addEventListener('bambuddy:dispatch-toast', listener);
+      try {
+        renderHook(() => useWebSocket(), { wrapper: createWrapper(queryClient) });
+        const ws = await waitForWs();
+        const message = { type: 'queue_item_waiting', queue_item_id: 32, printer_id: 1,
+          reason: 'material_selection', message: 'Choose a loaded ACE slot.' };
+        act(() => { ws.open(); ws.simulateMessage(message); });
+        await act(async () => { vi.advanceTimersByTime(5000); });
+        expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['queue'] });
+        expect(received).toEqual([message]);
+      } finally {
+        window.removeEventListener('bambuddy:dispatch-toast', listener);
+        vi.useRealTimers();
+      }
+    });
+
     it('invalidates inventory queries on inventory_changed message', async () => {
       vi.useFakeTimers();
       const { useWebSocket } = await import('../../hooks/useWebSocket');

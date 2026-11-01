@@ -288,3 +288,229 @@ async def test_core_scheduler_preserves_validated_public_sdk_rejection(db_sessio
     assert "PRIVATE-DETAILS" not in str(failed_toast.call_args.kwargs)
     assert len(case.plugin.requests) == 1
     case.legacy_start.assert_not_called()
+
+
+def material_issue(recovery="material_selection"):
+    return {
+        "code": "fixture.material_empty",
+        "message": "Choose a loaded source",
+        "recovery": recovery,
+        "input_ids": [],
+        "resource_ids": ["tool:dock-foxtrot"],
+    }
+
+
+@pytest.mark.parametrize("manual_start", [False, True])
+@pytest.mark.parametrize("recovery", ["material_selection", "refresh"])
+async def test_recoverable_preflight_stays_queued_before_upload_and_preserves_policy(
+    db_session, resource_case, monkeypatch, manual_start, recovery
+):
+    case = resource_case
+    case.item.manual_start = manual_start
+    case.item.position = 7
+    await db_session.commit()
+    preflight = AsyncMock(return_value={"issues": [material_issue(recovery)]})
+    monkeypatch.setattr(case.plugin, "preflight_job", preflight)
+    waiting, failed, toast = AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(scheduler_module.notification_service, "on_queue_job_waiting", waiting)
+    monkeypatch.setattr(scheduler_module.notification_service, "on_queue_job_failed", failed)
+    monkeypatch.setattr(scheduler_module.ws_manager, "send_queue_item_waiting", toast)
+    for _ in range(2):
+        await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == "pending" and case.item.completed_at is None and case.item.started_at is None
+    assert case.item.manual_start is manual_start and case.item.position == 7
+    assert case.item.error_message is None
+    assert case.item.sdk_job["extensions"]["bambuddy:queue_hold"]["kind"] == recovery
+    case.upload.assert_not_awaited()
+    case.scheduler._preheat_and_soak.assert_not_awaited()
+    assert case.plugin.requests == []
+    waiting.assert_awaited_once()
+    failed.assert_not_awaited()
+    assert toast.await_count == 2
+
+
+async def test_ready_recheck_clears_material_hold_and_dispatches_same_queue_item(
+    db_session, resource_case, monkeypatch
+):
+    case = resource_case
+    monkeypatch.setattr(case.plugin, "preflight_job", AsyncMock(return_value={"issues": [material_issue()]}))
+    await case.scheduler._start_print(db_session, case.item)
+    identity, position = case.item.id, case.item.position
+    monkeypatch.setattr(case.plugin, "preflight_job", AsyncMock(return_value={"issues": []}))
+    await case.scheduler._start_print(db_session, case.item)
+    assert case.item.id == identity and case.item.position == position
+    assert case.item.status == "printing"
+    assert "bambuddy:queue_hold" not in case.item.sdk_job["extensions"]
+    assert case.item.waiting_reason is None
+    case.upload.assert_awaited_once()
+    assert len(case.plugin.requests) == 1
+
+
+async def test_changed_physical_material_binding_is_preflighted_before_dispatch(db_session, resource_case, monkeypatch):
+    from backend.app.printers.sdk import JobArtifact, JobRequest, MaterialBinding
+
+    case = resource_case
+    case.plugin.descriptor = case.plugin.descriptor.model_copy(deep=True)
+    for identity in ("feed:empty", "feed:loaded"):
+        case.plugin.descriptor.resources.append(
+            ResourceDescriptor(
+                id=identity,
+                kind="material_source",
+                label=identity,
+                relations={"tools": ["tool:dock-foxtrot"]},
+            )
+        )
+    case.plugin.models = (PrinterModel("future", "Future six-tool printer", device_template=case.plugin.descriptor),)
+    plan = JobRequest(
+        job_id="selection",
+        artifact=JobArtifact(uri="opaque.gcode", format="gcode"),
+        selected_tool_ids=["tool:dock-foxtrot"],
+        bindings=[MaterialBinding(input_id="material-a", tool_id="tool:dock-foxtrot", source_id="feed:empty")],
+    )
+    case.item.sdk_job = plan.model_dump(mode="json")
+    await db_session.commit()
+    checked = []
+
+    async def preflight(config, connection, job, path):
+        source = job.bindings[0].source_id
+        checked.append(source)
+        return {
+            "issues": []
+            if source == "feed:loaded"
+            else [
+                {
+                    **material_issue(),
+                    "input_ids": ["material-a"],
+                    "resource_ids": ["feed:empty"],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(case.plugin, "preflight_job", preflight)
+    await case.scheduler._start_print(db_session, case.item)
+    assert case.item.status == "pending" and checked == ["feed:empty"]
+    plan.bindings[0].source_id = "feed:loaded"
+    case.item.sdk_job = plan.model_dump(mode="json")
+    await db_session.commit()
+    await case.scheduler._start_print(db_session, case.item)
+    assert checked == ["feed:empty", "feed:loaded"]
+    assert case.item.status == "printing"
+    assert case.plugin.requests[0].parameters["bindings"][0]["source_id"] == "feed:loaded"
+    case.upload.assert_awaited_once()
+
+
+async def test_preflight_hold_does_not_consume_a_library_source(db_session, resource_case, monkeypatch):
+    from backend.app.models.archive import PrintArchive
+    from backend.app.models.library import LibraryFile
+
+    case = resource_case
+    archive = await db_session.get(PrintArchive, case.item.archive_id)
+    library = LibraryFile(filename=archive.filename, file_path=archive.file_path, file_size=23, file_type="gcode")
+    db_session.add(library)
+    await db_session.flush()
+    case.item.archive_id, case.item.library_file_id = None, library.id
+    case.item.cleanup_library_after_dispatch = True
+    await db_session.commit()
+    monkeypatch.setattr(case.plugin, "preflight_job", AsyncMock(return_value={"issues": [material_issue()]}))
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.archive_id is None and case.item.library_file_id == library.id
+    assert await db_session.get(LibraryFile, library.id) is library
+    case.upload.assert_not_awaited()
+
+
+async def test_preflight_deferral_releases_dispatch_claim_and_unconfirmed_budget(
+    test_engine, db_session, resource_case, monkeypatch
+):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    case = resource_case
+    monkeypatch.setattr(scheduler_module, "async_session", async_sessionmaker(test_engine, expire_on_commit=False))
+    monkeypatch.setattr(case.plugin, "preflight_job", AsyncMock(return_value={"issues": [material_issue()]}))
+    await case.scheduler._dispatch_one(case.item.id, case.printer.id)
+    await db_session.refresh(case.item)
+    assert case.item.status == "pending"
+    assert case.item.dispatching_at is None
+    assert case.item.id not in case.scheduler._unconfirmed_budget_reservations
+    assert case.item.id not in case.scheduler._unconfirmed_expected_print
+    assert case.item.id not in case.scheduler._unconfirmed_print_user
+    case.upload.assert_not_awaited()
+
+
+async def test_cancellation_during_preflight_cannot_be_resurrected_as_waiting(db_session, resource_case, monkeypatch):
+    case = resource_case
+
+    async def cancel(config, connection, job, path):
+        case.item.status = "cancelled"
+        await db_session.commit()
+        return {"issues": [material_issue()]}
+
+    monkeypatch.setattr(case.plugin, "preflight_job", cancel)
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == "cancelled"
+    assert not case.item.sdk_job
+    case.upload.assert_not_awaited()
+
+
+@pytest.mark.parametrize("outcome", ["ready", "held", "invalid"])
+async def test_edited_job_plan_during_preflight_is_preserved_and_revalidated_next_attempt(
+    db_session, resource_case, monkeypatch, outcome
+):
+    from sqlalchemy import update
+
+    case = resource_case
+
+    async def edit(config, connection, job, path):
+        await db_session.execute(
+            update(PrintQueueItem)
+            .where(PrintQueueItem.id == case.item.id)
+            .values(job_options={"operator_revision": "new"})
+            .execution_options(synchronize_session=False)
+        )
+        await db_session.commit()
+        if outcome == "invalid":
+            from backend.app.printers.sdk import SDKValidationError
+
+            raise SDKValidationError("The old job plan was invalid")
+        return {"issues": [material_issue()] if outcome == "held" else []}
+
+    monkeypatch.setattr(case.plugin, "preflight_job", edit)
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == "pending"
+    assert case.item.job_options == {"operator_revision": "new"}
+    assert case.item.sdk_job is None
+    assert case.item.waiting_reason is None
+    case.upload.assert_not_awaited()
+    assert case.plugin.requests == []
+
+
+@pytest.mark.parametrize("not_submitted", [True, False])
+async def test_only_explicit_known_unsent_material_rejection_returns_to_pending(
+    db_session, resource_case, monkeypatch, not_submitted
+):
+    case = resource_case
+
+    def reject(request):
+        return OperationReceipt(
+            operation_id=request.operation_id,
+            request_id=request.request_id,
+            status="failed",
+            error=OperationError(
+                code="job.material_selection_required",
+                message="Choose a loaded source",
+                retryable=True,
+                details={"not_submitted": not_submitted, "issues": [material_issue()]},
+            ),
+        )
+
+    monkeypatch.setattr(case.plugin, "operation_handlers", lambda connection: {"job.start": reject})
+    monkeypatch.setattr(scheduler_module, "delete_file_async", AsyncMock(return_value=True))
+    await case.scheduler._start_print(db_session, case.item)
+    await db_session.refresh(case.item)
+    assert case.item.status == ("pending" if not_submitted else "failed")
+    assert (
+        bool(case.item.sdk_job and case.item.sdk_job.get("extensions", {}).get("bambuddy:queue_hold")) is not_submitted
+    )

@@ -120,6 +120,17 @@ async def _validate_sdk_queue_plan(db: AsyncSession, printer_id: int | None, val
         raise HTTPException(400, f"Invalid printer job plan: {error}") from error
 
 
+def _clear_saved_job_hold(item: PrintQueueItem, values: dict) -> None:
+    if "sdk_job" not in values:
+        return
+    from backend.app.printers.job_dispatch import QUEUE_HOLD_KEY, without_queue_hold
+
+    if isinstance(values["sdk_job"], dict):
+        values["sdk_job"] = without_queue_hold(values["sdk_job"])
+    if isinstance(item.sdk_job, dict) and QUEUE_HOLD_KEY in (item.sdk_job.get("extensions") or {}):
+        item.waiting_reason = None
+
+
 def _variant_summaries(item: PrintQueueItem) -> list[QueueVariantSummary]:
     """Cross-model candidates for display (#671), or [] if they weren't loaded.
 
@@ -1743,6 +1754,7 @@ async def bulk_update_queue_items(
             item.target_model = None
             item.target_location = None
             drop_printer_resolved(item)
+        _clear_saved_job_hold(item, item_update_data)
         for field, value in item_update_data.items():
             setattr(item, field, value)
         updated_count += 1
@@ -2623,6 +2635,7 @@ async def update_queue_item(
     if claimed is not None:
         raise HTTPException(409, "Item is being dispatched — cancel it first to make changes")
 
+    _clear_saved_job_hold(item, update_data)
     for field, value in update_data.items():
         setattr(item, field, value)
 

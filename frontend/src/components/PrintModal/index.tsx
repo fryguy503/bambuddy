@@ -48,6 +48,7 @@ import { usePrinterDevice } from '../../hooks/usePrinterDevice';
 import { jobDescriptionQueryKey, usePrinterJobDescription } from '../../hooks/usePrinterJobDescription';
 import { printerDeviceApi } from '../../printer-plugins/api';
 import { printerModelSupports } from '../../printer-plugins/catalog';
+import { queueJobHold } from '../../printer-plugins/queueHold';
 import { GenericPrintSetup } from '../GenericPrintSetup';
 import { emptyGenericJobSetup, jobInputKey, remapJobSetupForDescription } from '../../printer-plugins/forms';
 import type { GenericJobSetup, PrinterDevice, PrinterDeviceState, PrinterJobDescription } from '../../printer-plugins/types';
@@ -1145,12 +1146,13 @@ export function PrintModal({
     });
   };
 
+  // A material correction keeps the original queue/manual-start policy.
   // Saving an existing job. Only Queue has a manual-start checkbox, so a
   // scheduled job keeps whatever wait it had: a student's scheduled job waits
   // for review (#1620), and editing it must not start it.
-  const editManualStart =
-    needsReview ||
-    (scheduleOptions.scheduleType === 'queue'
+  const editManualStart = queueJobHold(queueItem?.sdk_job)
+    ? !!queueItem?.manual_start
+    : needsReview || (scheduleOptions.scheduleType === 'queue'
       ? scheduleOptions.requireManualStart
       : scheduleOptions.scheduleType === 'scheduled' && !!queueItem?.manual_start);
 

@@ -30,8 +30,8 @@ describe('independent queue job plans', () => {
     const payloads = descriptions.map((value, index) => describedJobPayload(setup, value, device,
       { jobId: `job-${index}`, name: 'part', plateId: null }));
     expect(payloads.map(payload => payload.sdk_job?.bindings)).toEqual([
-      [{ input_id: 'T0', tool_id: 'tool:head-nine', source_id: 'source:ace-two-slot-four', required_mass_grams: 11 }],
-      [{ input_id: 'T7', tool_id: 'tool:head-nine', source_id: 'source:ace-two-slot-four', required_mass_grams: 12 }],
+      [{ input_id: 'T0', tool_id: 'tool:head-nine', source_id: 'source:ace-two-slot-four', required_mass_grams: 11, material: { material_type: 'PLA', color: '#0000FFFF' } }],
+      [{ input_id: 'T7', tool_id: 'tool:head-nine', source_id: 'source:ace-two-slot-four', required_mass_grams: 12, material: { material_type: 'PLA', color: '#0000FFFF' } }],
     ]);
     expect(payloads.map(payload => payload.sdk_job?.artifact.uri)).toEqual(['library:11', 'library:12']);
     expect(payloads[1].job_options).toEqual({ calibration: true });
@@ -42,6 +42,20 @@ describe('independent queue job plans', () => {
     const merged = mergeQueueJobDescriptions([description(11, 'T0', false), description(12, 'T0', false)])!;
     expect(merged.inputs).toHaveLength(2);
     expect(new Set(merged.inputs.map(input => jobInputKey(input, merged.artifact.uri))).size).toBe(2);
+  });
+
+  it('retains the exact sliced material subtype without inventing absent requirements', () => {
+    const value = description(11, 'T0');
+    value.inputs[0].material_type = 'PLA Matte';
+    const setup = { ...emptyGenericJobSetup(), material_bindings: { [jobInputKey(value.inputs[0], value.artifact.uri)]: 'source:ace-two-slot-four' } };
+    const first = describedJobPayload(setup, value, device, { jobId: 'one', name: 'part', plateId: null });
+    expect(first.sdk_job?.bindings[0].material).toEqual({ material_type: 'PLA Matte', color: '#0000FFFF' });
+    value.inputs[0].material_type = null;
+    value.inputs[0].color = null;
+    value.inputs[0].required_mass_grams = null;
+    const missing = describedJobPayload(setup, value, device, { jobId: 'two', name: 'part', plateId: null });
+    expect(missing.sdk_job?.bindings[0]).not.toHaveProperty('material');
+    expect(missing.sdk_job?.bindings[0]).not.toHaveProperty('required_mass_grams');
   });
 
   it('rejects conflicting material declarations and incompatible shared routes', () => {

@@ -1411,6 +1411,12 @@ export default {
   },
 
   queue: {
+    materialHold: {
+      waiting: "Kuyrukta",
+      selectionHelp: "Bu iş için filament yüklü bir yuva seçin. Kuyruktaki sırası korunur.",
+      refreshHelp: "Güncel filament durumu bekleniyor. Bu iş kuyrukta kalır.",
+      updateSelection: "Filament seçimini güncelle",
+    },
     title: 'Baskı Kuyruğu',
     subtitle: 'Baskı işlerinizi zamanlayın ve yönetin',
     filamentShort: {

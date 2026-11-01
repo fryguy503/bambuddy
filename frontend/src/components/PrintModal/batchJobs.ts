@@ -86,8 +86,16 @@ export function describedJobPayload(
   const job = buildSdkJobPlan(normalized, { ...options, artifact: description.artifact });
   const inputs = new Map(description.inputs.map(input => [input.id, input]));
   job.bindings = job.bindings.map(binding => {
-    const mass = inputs.get(binding.input_id)?.required_mass_grams;
-    return mass != null ? { ...binding, required_mass_grams: mass } : binding;
+    const input = inputs.get(binding.input_id);
+    const material = {
+      ...(input?.material_type ? { material_type: input.material_type } : {}),
+      ...(input?.color ? { color: input.color } : {}),
+    };
+    return {
+      ...binding,
+      ...(input?.required_mass_grams != null ? { required_mass_grams: input.required_mass_grams } : {}),
+      ...(Object.keys(material).length ? { material } : {}),
+    };
   });
   return {
     tool_ids: normalized.tool_ids, material_bindings: normalized.material_bindings,

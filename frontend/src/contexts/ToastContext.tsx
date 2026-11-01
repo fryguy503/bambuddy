@@ -13,7 +13,7 @@ type ToastType = 'success' | 'error' | 'warning' | 'info' | 'loading';
 // the #1625 follow-up). Same shape, same DOM, same styling, same i18n
 // surface — guarantees the modal looks identical to the pre-scheduler
 // experience that users remember.
-type DispatchJobStatus = 'processing' | 'completed' | 'failed';
+type DispatchJobStatus = 'processing' | 'completed' | 'failed' | 'waiting';
 
 interface DispatchToastJob {
   jobId: number;
@@ -25,6 +25,7 @@ interface DispatchToastJob {
   uploadProgressPct?: number;
   failReason?: string;
   failMessage?: string;
+  waitMessage?: string;
 }
 
 interface DispatchToastData {
@@ -32,6 +33,7 @@ interface DispatchToastData {
   processing: number;
   completed: number;
   failed: number;
+  waiting: number;
   jobs: DispatchToastJob[];
 }
 
@@ -114,6 +116,7 @@ interface DispatchEventDetail {
   pct?: number;
   reason?: string;
   error_message?: string;
+  message?: string;
 }
 
 function isAwaitingPrinter(job: DispatchToastJob): boolean {
@@ -133,6 +136,7 @@ function recomputeAggregate(jobs: DispatchToastJob[]): DispatchToastData {
     processing: jobs.filter((j) => j.status === 'processing').length,
     completed: jobs.filter((j) => j.status === 'completed').length,
     failed: jobs.filter((j) => j.status === 'failed').length,
+    waiting: jobs.filter((j) => j.status === 'waiting').length,
     jobs,
   };
 }
@@ -271,6 +275,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               failMessage: typeof detail.error_message === 'string' ? detail.error_message.trim().slice(0, 2000) : undefined,
             };
             break;
+          case 'queue_item_waiting': {
+            // Scheduler rechecks are not new dispatches. An untracked hold
+            // updates the queue page without creating a new toast every tick.
+            if (!existingJob || !['processing', 'waiting'].includes(existingJob.status)) return prev;
+            const message = typeof detail.message === 'string' ? detail.message.trim().slice(0, 2000) : undefined;
+            if (existingJob.status === 'waiting' && existingJob.waitMessage === message) return prev;
+            nextJob = { ...existingJob, status: 'waiting', waitMessage: message };
+            break;
+          }
           default:
             return prev;
         }
@@ -288,8 +301,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
         const toastShape: Toast = {
           id: DISPATCH_TOAST_ID,
-          message: t('dispatchToast.startingPrints'),
-          type: 'loading',
+          message: t(dispatchData.processing === 0 && dispatchData.waiting > 0 ? 'queue.title' : 'dispatchToast.startingPrints'),
+          type: dispatchData.processing === 0 && dispatchData.waiting > 0 ? 'info' : 'loading',
           persistent: true,
           dispatchData,
         };
@@ -369,10 +382,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   <div className="flex items-start gap-2">
                     {icons[toast.type]}
                     <div>
-                      <p className="text-white text-sm font-medium">{t('dispatchToast.startingPrints')}</p>
+                      <p className="text-white text-sm font-medium">{toast.message}</p>
                       <p className="text-xs text-bambu-gray mt-0.5">
                         {t('dispatchToast.progressSummary', {
-                          complete: toast.dispatchData.completed + toast.dispatchData.failed,
+                          complete: toast.dispatchData.completed + toast.dispatchData.failed + toast.dispatchData.waiting,
                           total: toast.dispatchData.total,
                           processing: toast.dispatchData.processing,
                         })}
@@ -407,11 +420,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                         processing: 'bg-bambu-green',
                         completed: 'bg-green-500',
                         failed: 'bg-red-500',
+                        waiting: 'bg-yellow-500',
                       };
                       const progressByStatus: Record<DispatchJobStatus, number> = {
                         processing: 60,
                         completed: 100,
                         failed: 100,
+                        waiting: 0,
                       };
                       return (
                         <div
@@ -430,7 +445,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                               className="text-[11px] uppercase tracking-wide text-bambu-gray shrink-0"
                               data-testid={`dispatch-toast-status-${job.jobId}`}
                             >
-                              {t(`dispatchToast.status.${job.status}`)}
+                              {job.status === 'waiting' ? t('queue.materialHold.waiting') : t(`dispatchToast.status.${job.status}`)}
                             </span>
                           </div>
                           {job.printerName && (
@@ -451,6 +466,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                                 {typeof job.uploadProgressPct === 'number' ? ` (${job.uploadProgressPct.toFixed(1)}%)` : ''}
                               </div>
                             ) : null
+                          ) : job.status === 'waiting' ? (
+                            <div className="break-words text-[11px] text-yellow-400">
+                              {job.waitMessage || t('queue.materialHold.selectionHelp')}
+                            </div>
                           ) : job.status === 'failed' && (job.failMessage || job.failReason) ? (
                             <div className={'text-[11px] text-red-400 ' + (job.failMessage ? 'break-words' : 'truncate')}>
                               {job.failMessage || t(`dispatchToast.failed.${job.failReason}`, { defaultValue: t('dispatchToast.failed.generic') })}

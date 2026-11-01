@@ -1421,6 +1421,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "In wachtrij",
+      selectionHelp: "Kies een sleuf met geladen filament voor deze opdracht. De positie in de wachtrij blijft behouden.",
+      refreshHelp: "Wachten op de huidige filamentstatus. Deze opdracht blijft in de wachtrij.",
+      updateSelection: "Filamentselectie bijwerken",
+    },
     title: 'Afdrukwachtrij',
     subtitle: 'Plan en beheer je afdruktaken',
     filamentShort: {

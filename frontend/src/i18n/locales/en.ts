@@ -1423,6 +1423,12 @@ export default {
 
   // Queue page
   queue: {
+    materialHold: {
+      waiting: "Queued",
+      selectionHelp: "Choose a loaded filament slot for this job. It will keep its place in the queue.",
+      refreshHelp: "Waiting for current filament status. This job remains in the queue.",
+      updateSelection: "Update filament selection",
+    },
     title: 'Print Queue',
     subtitle: 'Schedule and manage your print jobs',
     filamentShort: {

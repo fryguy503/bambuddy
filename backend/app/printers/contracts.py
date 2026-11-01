@@ -178,6 +178,16 @@ class PrinterPlugin(ABC):
 
         return validate_snapshot(self.describe_device(config), snapshot)
 
+    def preflight_job(self, config: PrinterConfig, connection: PrinterConnection, job, path):
+        """Read current job readiness without uploading, reserving or sending commands.
+
+        SDK 2.4 providers may return recoverable material-selection or refresh
+        issues. The default preserves existing providers' dispatch behavior.
+        """
+        from backend.app.printers.sdk import JobPreflightResult
+
+        return JobPreflightResult()
+
     def describe_job(self, config: PrinterConfig, artifact, path):
         """Inspect an authorized local artifact without issuing printer commands."""
         from copy import deepcopy

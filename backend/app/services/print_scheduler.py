@@ -8908,6 +8908,141 @@ class PrintScheduler:
         await db.commit()
 
     @staticmethod
+    async def _lock_resource_job(db, item_id, expected, *, statuses=("pending",)):
+        from backend.app.printers.job_dispatch import queue_job_revision
+
+        fresh = await db.scalar(
+            select(PrintQueueItem)
+            .where(PrintQueueItem.id == item_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if fresh is None or fresh.status not in statuses or queue_job_revision(fresh) != expected:
+            await db.rollback()
+            return None
+        return fresh
+
+    async def _hold_resource_job(self, db, item, printer, filename, result, *, expected=None) -> bool:
+        """Keep a known-unsent job pending without changing its scheduling policy."""
+        from backend.app.printers.contracts import PrinterConfig
+        from backend.app.printers.job_dispatch import QUEUE_HOLD_KEY, queue_hold, queue_job_plan, queue_job_revision
+
+        hold = queue_hold(result)
+        if hold is None:
+            return False
+        expected = expected if expected is not None else queue_job_revision(item)
+        fresh = await self._lock_resource_job(db, item.id, expected, statuses=("pending", "printing"))
+        if fresh is None:
+            return False
+        item = fresh
+        plan = (
+            item.sdk_job
+            if isinstance(item.sdk_job, dict)
+            else queue_job_plan(item, PrinterConfig.from_printer(printer), filename).model_dump(mode="json")
+        )
+        previous = (plan.get("extensions") or {}).get(QUEUE_HOLD_KEY)
+        plan = {**plan, "extensions": {**(plan.get("extensions") or {}), QUEUE_HOLD_KEY: hold}}
+        prefix = "Needs material selection" if hold["kind"] == "material_selection" else "Waiting for material status"
+        reason = f"{prefix}: {hold['message']}"
+        claim = item.dispatching_at
+        changed = await db.execute(
+            update(PrintQueueItem)
+            .where(
+                PrintQueueItem.id == item.id,
+                PrintQueueItem.printer_id == item.printer_id,
+                PrintQueueItem.status.in_(("pending", "printing")),
+                PrintQueueItem.dispatching_at == claim
+                if claim is not None
+                else PrintQueueItem.dispatching_at.is_(None),
+            )
+            .values(
+                status="pending",
+                started_at=None,
+                completed_at=None,
+                error_message=None,
+                color_substitutions=None,
+                waiting_reason=reason,
+                sdk_job=plan,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        if not changed.rowcount:
+            return False  # A cancellation/removal or another dispatch claim won.
+        await db.refresh(item)
+        if previous != hold:
+            try:
+                await notification_service.on_queue_job_waiting(
+                    job_name=filename,
+                    target_model=printer.model or "",
+                    waiting_reason=reason,
+                    db=db,
+                    printer_id=printer.id,
+                )
+            except Exception:
+                logger.debug("Queue readiness notification failed for item %s", item.id, exc_info=True)
+        try:
+            await ws_manager.send_queue_item_waiting(
+                user_id=item.created_by_id,
+                queue_item_id=item.id,
+                printer_id=item.printer_id,
+                reason=hold["kind"],
+                message=hold["message"],
+            )
+        except Exception:
+            logger.debug("Queue readiness event failed for item %s", item.id, exc_info=True)
+        return True
+
+    async def _preflight_resource_job(self, db, item, printer, connection) -> bool:
+        """Check live resource bindings before consuming or transferring a source."""
+        from backend.app.printers.job_dispatch import (
+            QUEUE_HOLD_KEY,
+            preflight_queue_job,
+            queue_job_revision,
+            without_queue_hold,
+        )
+        from backend.app.printers.sdk import SDKValidationError
+
+        expected = queue_job_revision(item)
+        source = None
+        if item.archive_id:
+            source = await db.get(PrintArchive, item.archive_id)
+        elif item.library_file_id:
+            source = await db.scalar(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
+        if source is None:
+            return True  # Existing source validation below reports its precise error.
+        path = Path(source.file_path)
+        path = path if path.is_absolute() else settings.base_dir / path
+        if not await asyncio.to_thread(path.is_file):
+            return True  # Preserve the existing missing-file failure below.
+        filename = source.filename
+        # File inspection must not pin a pooled database connection. Reacquire
+        # and fence the row against edits/cancellation after the provider read.
+        await db.commit()
+        try:
+            result = await preflight_queue_job(item, printer, connection, path)
+        except (SDKValidationError, ValueError):
+            fresh = await self._lock_resource_job(db, item.id, expected)
+            if fresh is not None:
+                await self._fail_dispatch(db, fresh, "Invalid resource job plan or printer preflight result")
+                logger.warning("Queue item %s: invalid printer job preflight", fresh.id, exc_info=True)
+            return False
+        if not result.ready:
+            await self._hold_resource_job(db, item, printer, filename, result, expected=expected)
+            return False
+        # A cancel or a changed binding may win during local file inspection.
+        # Row locking plus a Python comparison also works with PostgreSQL JSON
+        # columns, which cannot be compared using a plain equality predicate.
+        fresh = await self._lock_resource_job(db, item.id, expected)
+        if fresh is None:
+            return False
+        if isinstance(item.sdk_job, dict) and QUEUE_HOLD_KEY in (item.sdk_job.get("extensions") or {}):
+            item.sdk_job = without_queue_hold(item.sdk_job)
+            item.waiting_reason = None
+        await db.commit()
+        return True
+
+    @staticmethod
     async def _close_cancelled_dispatch_toast(item: PrintQueueItem, toast_uid: int | None) -> None:
         """Close the dispatch toast of an item the user cancelled while it was sent."""
         try:
@@ -9043,6 +9178,9 @@ class PrintScheduler:
                 item.printer_id,
                 pre_dispatch_state,
             )
+            return
+
+        if typed_dispatch and not await self._preflight_resource_job(db, item, printer, managed_connection):
             return
 
         # Determine source: archive or library file
@@ -9989,7 +10127,7 @@ class PrintScheduler:
         # parses + injects it only for dual-nozzle models so a null on every
         # other model is a transparent pass-through. The rack fallback is
         # resolved down there too, where the live rack position is known.
-        from backend.app.printers.job_dispatch import JobDispatchRejected, start_queue_job
+        from backend.app.printers.job_dispatch import JobDispatchRejected, queue_job_revision, start_queue_job
         from backend.app.printers.sdk import SDKValidationError
 
         dispatch_printer_id = item.printer_id
@@ -9997,9 +10135,13 @@ class PrintScheduler:
             raise ValueError("A queue job must have a printer before dispatch")
         dispatch_error = None
         if typed_dispatch:
+            checked_revision = queue_job_revision(item)
             try:
                 started = await start_queue_job(item, printer, managed_connection, remote_filename)
             except (JobDispatchRejected, SDKValidationError) as exc:
+                if isinstance(exc, JobDispatchRejected) and exc.preflight is not None:
+                    await self._hold_resource_job(db, item, printer, filename, exc.preflight, expected=checked_revision)
+                    return
                 # These are deliberate public provider/SDK errors, not raw
                 # transport exceptions or private receipt details.
                 dispatch_error = str(exc)
