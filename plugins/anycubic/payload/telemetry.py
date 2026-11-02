@@ -7,6 +7,7 @@ never sent on a Bambu wire protocol or used to trigger Bambu archive/spool hooks
 import copy
 import math
 import time
+from dataclasses import dataclass
 
 from .drying import status_fields
 from .models import get_model
@@ -41,6 +42,13 @@ _TEMPS = {
 }
 
 
+@dataclass(frozen=True)
+class TerminalObservation:
+    state: PrinterState
+    phase: str
+    identity_observed_at: float | None = None
+
+
 def number(value, low=0, high=1000000):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return None
@@ -53,8 +61,24 @@ def _text(value, limit=512):
     return None
 
 
+def _metrics(data, state):
+    changed = False
+    for source, attr, maximum in (
+        ("progress", "progress", 100),
+        ("curr_layer", "layer_num", 1000000),
+        ("total_layers", "total_layers", 1000000),
+        ("remain_time", "remaining_time", 1000000),
+    ):
+        value = number(data.get(source), 0, maximum)
+        if value is not None:
+            setattr(state, attr, value if attr == "progress" else int(value))
+            state.job_metrics.add(attr)
+            changed = True
+    return changed
+
+
 class Telemetry:
-    def __init__(self, model="Kobra S1"):
+    def __init__(self, model="Kobra S1", *, identity_timeout=60):
         selected_model = get_model(model)
         if selected_model is None:
             raise AnycubicError("Unsupported Anycubic LAN printer model")
@@ -66,6 +90,11 @@ class Telemetry:
         self.task_id = "-1"  # Firmware's documented current-job command sentinel.
         self.phase = None
         self.lifecycle_observed = False
+        self.terminal_observation: TerminalObservation | None = None
+        # Telemetry is replaced for every MQTT session. This identity may bridge
+        # an info/free followed by a partial final print report, never a restart.
+        self._active_job: tuple[PrinterState, float] | None = None
+        self._identity_timeout = identity_timeout
 
     def _temperatures(self, data):
         changed = False
@@ -100,17 +129,7 @@ class Telemetry:
             self.state.state = _PHASES[self.phase]
             self.lifecycle_observed = True
             changed = True
-        for source, attr, maximum in (
-            ("progress", "progress", 100),
-            ("curr_layer", "layer_num", 1000000),
-            ("total_layers", "total_layers", 1000000),
-            ("remain_time", "remaining_time", 1000000),
-        ):
-            value = number(data.get(source), 0, maximum)
-            if value is not None:
-                setattr(self.state, attr, value if attr == "progress" else int(value))
-                self.state.job_metrics.add(attr)
-                changed = True
+        changed = _metrics(data, self.state) or changed
         if name is not None:
             if name != self.state.gcode_file:
                 self.task_id = "-1"
@@ -122,6 +141,45 @@ class Telemetry:
             self.task_id = task or "-1"
             self.state.subtask_id = task
             changed = True
+        if self.lifecycle_observed:
+            if self.state.state in {"RUNNING", "PAUSE", "PREPARE"}:
+                self._active_job = (copy.deepcopy(self.state), time.monotonic()) if self.state.gcode_file else None
+            elif self.phase in {"finished", "stoped", "stopped", "failed"}:
+                observed = copy.deepcopy(self.state)
+                identity_time = None
+                active = self._active_job
+                malformed_name = "filename" in data and data["filename"] not in (None, "") and name is None
+                matching = (
+                    active is not None
+                    and 0 <= time.monotonic() - active[1] <= self._identity_timeout
+                    and not malformed_name
+                    and (not name or name == active[0].gcode_file)
+                    and not (task is not None and active[0].subtask_id is not None and task != active[0].subtask_id)
+                )
+                if matching and active is not None:
+                    # Retain final partial usage when free cleared the display,
+                    # even if the final report repeats its filename. Explicit
+                    # final metrics override the cached same-job values.
+                    observed = copy.deepcopy(active[0])
+                    observed.state = self.state.state
+                    if has_task:
+                        observed.subtask_id = task
+                    _metrics(data, observed)
+                    identity_time = active[1] if not name else None
+                elif not name:
+                    # Omitted identity never crosses a reconnect, a replacement
+                    # job, or the freshness bound of its active observation.
+                    observed.gcode_file = None
+                self.terminal_observation = TerminalObservation(observed, self.phase, identity_time)
+        elif self._active_job is not None:
+            previous, observed_at = self._active_job
+            if ("filename" in data and name != previous.gcode_file) or (has_task and task != previous.subtask_id):
+                self._active_job = None
+            else:
+                # Progress pushes may improve measured usage, but cannot renew
+                # authority to associate a later identityless terminal report.
+                _metrics(data, previous)
+                self._active_job = previous, observed_at
         return changed
 
     def _materials(self, data, full):
@@ -246,6 +304,7 @@ class Telemetry:
     def apply(self, kind, envelope):
         """Return true only for usable telemetry, never command receipts or errors."""
         self.lifecycle_observed = False
+        self.terminal_observation = None
         data = envelope.get("data")
         if envelope.get("code", 200) not in (0, 200) or not isinstance(data, dict):
             return False
@@ -254,6 +313,18 @@ class Telemetry:
             if isinstance(data.get("temp"), dict):
                 changed = self._temperatures(data["temp"])
             if data.get("state") == "free":
+                project = data.get("project")
+                project_phase = project.get("state") if isinstance(project, dict) else None
+                if isinstance(project_phase, str) and project_phase.lower() in {
+                    "finished",
+                    "stoped",
+                    "stopped",
+                    "failed",
+                }:
+                    # Some firmware includes the explicit final project in the
+                    # same report that clears the current job. Preserve that
+                    # evidence separately while the visible printer stays idle.
+                    self._project(project)
                 self.state.state = "IDLE"
                 self.phase = None
                 self.lifecycle_observed = True
@@ -269,6 +340,7 @@ class Telemetry:
                 if not self.lifecycle_observed:
                     self.state.state = "BUSY"
                     self.phase = None
+                    self._active_job = None
                 changed = True
             version = _text(data.get("version"), 128)
             if version:

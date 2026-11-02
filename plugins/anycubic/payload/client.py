@@ -139,7 +139,7 @@ class AnycubicMQTTClient:
         self._model_id = selected_model.model_id
         self._fingerprint = fingerprint(tls_fingerprint)
         self.on_state_change = on_state_change
-        self._telemetry = Telemetry(self.model)
+        self._telemetry = Telemetry(self.model, identity_timeout=self.STALE_TIMEOUT)
         self.state = self._telemetry.state
         self._client = None
         self._worker = None
@@ -240,7 +240,7 @@ class AnycubicMQTTClient:
             self._ace_drying_seen.clear()
             self._reset_manual_controls()
             self._reset_camera()
-            self._telemetry = Telemetry(self.model)
+            self._telemetry = Telemetry(self.model, identity_timeout=self.STALE_TIMEOUT)
             self.state = self._telemetry.state
             self._worker = threading.Thread(target=self._run, args=(generation, stop), name="anycubic-lan", daemon=True)
             self._worker.start()
@@ -287,7 +287,7 @@ class AnycubicMQTTClient:
                 self._last_message_monotonic = 0
                 self._seen_reports.clear()
                 self._report_count = 0
-                self._telemetry = Telemetry(self.model)
+                self._telemetry = Telemetry(self.model, identity_timeout=self.STALE_TIMEOUT)
                 self.state = self._telemetry.state
                 self._control_limits.clear()
                 self._reported_fans.clear()

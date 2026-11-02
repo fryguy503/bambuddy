@@ -98,7 +98,7 @@ def build(source: Path = SOURCE, output: Path | None = None):
         metadata.update(
             entrypoint="plugin:AnycubicPrinterPlugin",
             publisher_name="fryguy503",
-            homepage="https://github.com/fryguy503/bambuddy/tree/codex/anycubic-printer-plugin/plugins/anycubic",
+            homepage="https://github.com/fryguy503/bambuddy/tree/feat/anycubic-printer-plugin/plugins/anycubic",
             description="Independent Anycubic signed-LAN printer provider for Bambuddy SDK v2",
             license="AGPL-3.0-only",
             dependencies={

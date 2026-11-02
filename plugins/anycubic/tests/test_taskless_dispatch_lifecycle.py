@@ -282,6 +282,266 @@ def test_verified_taskless_failure_and_cancellation_keep_exact_dispatch_ownershi
     assert tracked.frames == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "phase,outcome",
+    [
+        ("stopped", "cancelled"),
+        ("stoped", "cancelled"),
+        ("STOPPED", "cancelled"),
+        ("failed", "failed"),
+        ("finished", "completed"),
+    ],
+)
+async def test_idle_with_explicit_final_project_settles_owned_job_and_keeps_plate_confirmation(tracked, phase, outcome):
+    from backend.app.services.printer_manager import printer_manager
+
+    tracked.seed("accepted")
+    tracked.observe()
+    tracked.receive(
+        "info",
+        {"state": "free", "project": {"state": phase, "filename": NATIVE_FILENAME, "progress": 43, "curr_layer": 9}},
+    )
+    assert tracked.native.state.state == "IDLE" and tracked.native.state.gcode_file is None
+    assert tracked.connection.state.job is None
+    assert lifecycle(tracked) == ["job.started", "job." + outcome]
+    assert tracked.connection.current_job.fraction == 0.43
+    assert tracked.connection.current_job.layer == 9
+    tracked.callbacks["on_print_complete"].assert_called_once()
+    assert tracked.callbacks["on_print_complete"].call_args.args[0]["status"] == outcome
+    assert tracked.connection.journal.get(tracked.job.job_id)["pending_outcome"] == outcome
+    assert tracked.connection.plate_clear_required is True
+    printer_manager.set_awaiting_plate_clear.assert_called_with(42, True)
+    assert tracked.connection.journal.get("plate:" + tracked.connection.printer_key)["status"] == "plate_required"
+
+    tracked.receive("info", {"state": "free", "project": {"state": phase, "filename": NATIVE_FILENAME}})
+    assert lifecycle(tracked) == ["job.started", "job." + outcome]
+    await tracked.plugin.cleanup_after_print(42, {"job_id": tracked.job.job_id}, 123, logging.getLogger(__name__))
+    assert tracked.connection.journal.unresolved() == []
+    assert tracked.connection.plate_clear_required is True
+    blocked = await tracked.plugin.invoke(
+        tracked.config,
+        tracked.connection,
+        OperationRequest(
+            operation_id="job.start",
+            parameters=tracked.job.model_copy(update={"job_id": "next-job"}).model_dump(mode="json"),
+        ),
+    )
+    assert blocked.status == "failed"
+    assert tracked.frames == []
+
+
+@pytest.mark.parametrize("after_free", [False, True])
+@pytest.mark.parametrize("phase", ["stopped", "stoped"])
+def test_partial_stop_inherits_only_recent_same_session_active_identity(tracked, after_free, phase):
+    tracked.seed("accepted")
+    tracked.observe()
+    if after_free:
+        tracked.receive("info", {"state": "free"})
+        assert lifecycle(tracked) == ["job.started"]
+    tracked.receive("print", {"state": phase})
+    assert lifecycle(tracked) == ["job.started", "job.cancelled"]
+    assert tracked.connection.current_job.fraction == 0.35
+    assert tracked.connection.plate_clear_required is True
+    assert tracked.frames == []
+
+
+@pytest.mark.parametrize("kind", ["print", "info"])
+@pytest.mark.parametrize("final_progress", [None, 51])
+def test_final_report_preserves_latest_partial_usage_after_display_clears(tracked, kind, final_progress):
+    tracked.seed("accepted")
+    tracked.observe()
+    identity_time = tracked.native._telemetry._active_job[1]
+    tracked.receive("print", {"progress": 42, "curr_layer": 12})
+    assert tracked.native._telemetry._active_job[1] == identity_time
+    tracked.receive("info", {"state": "free"})
+    data = {"state": "stopped", "filename": NATIVE_FILENAME}
+    if final_progress is not None:
+        data["progress"] = final_progress
+    tracked.receive(kind, data if kind == "print" else {"state": "free", "project": data})
+    assert lifecycle(tracked) == ["job.started", "job.cancelled"]
+    assert tracked.connection.current_job.fraction == (42 if final_progress is None else final_progress) / 100
+    assert tracked.connection.current_job.layer == 12
+
+
+def test_full_identity_terminal_does_not_import_expired_partial_usage(tracked):
+    tracked.seed("accepted")
+    tracked.observe()
+    tracked.receive("info", {"state": "free"})
+    previous, _ = tracked.native._telemetry._active_job
+    tracked.native._telemetry._active_job = previous, time.monotonic() - tracked.native.STALE_TIMEOUT - 1
+    tracked.receive("print", {"state": "stopped", "filename": NATIVE_FILENAME})
+    assert lifecycle(tracked) == ["job.started", "job.cancelled"]
+    assert tracked.connection.current_job.fraction == 0
+    assert tracked.connection.current_job.layer == 0
+
+
+@pytest.mark.parametrize("replacement", [{"filename": "other-abcdef123456.gcode"}, {"taskid": "other-task"}])
+def test_progress_only_identity_change_invalidates_later_identityless_stop(tracked, replacement):
+    tracked.seed("accepted")
+    tracked.observe(taskid="owned-task")
+    tracked.receive("print", {"progress": 40, **replacement})
+    assert tracked.native._telemetry._active_job is None
+    tracked.receive("info", {"state": "free"})
+    before = tracked.connection.journal.get(tracked.job.job_id)
+    tracked.receive("print", {"state": "stopped"})
+    assert lifecycle(tracked) == ["job.started"]
+    assert tracked.connection.journal.get(tracked.job.job_id) == before
+
+
+@pytest.mark.parametrize("bad_phase", [[], {}, 42, None])
+def test_malformed_cached_project_phase_does_not_discard_valid_idle_status(tracked, bad_phase):
+    tracked.seed("accepted")
+    tracked.observe()
+    tracked.receive("info", {"state": "free", "project": {"state": bad_phase, "filename": NATIVE_FILENAME}})
+    assert tracked.native.state.state == "IDLE" and tracked.native.state.gcode_file is None
+    assert lifecycle(tracked) == ["job.started"]
+
+
+@pytest.mark.parametrize("mode", ["receipt", "retained", "error"])
+def test_stop_receipts_retained_reports_and_errors_cannot_finalize_job(tracked, mode):
+    tracked.seed("accepted")
+    tracked.observe()
+    before = tracked.connection.journal.get(tracked.job.job_id)
+    packet = {
+        "type": "print",
+        "action": "stop" if mode == "receipt" else "query",
+        "code": 500 if mode == "error" else 200,
+        "data": {"taskid": -1} if mode == "receipt" else {"state": "stopped", "filename": NATIVE_FILENAME},
+    }
+    tracked.native._received(
+        tracked.native._generation,
+        tracked.native._client,
+        SimpleNamespace(
+            topic=f"{PREFIX}/printer/public/{tracked.native._model_id}/fixture/print/report",
+            payload=json.dumps(packet).encode(),
+            retain=mode == "retained",
+        ),
+    )
+    assert lifecycle(tracked) == ["job.started"]
+    assert tracked.connection.journal.get(tracked.job.job_id) == before
+    assert not tracked.connection.plate_clear_required
+
+
+def test_full_idle_terminal_can_close_verified_durable_job_after_observer_restart(tracked):
+    tracked.seed("accepted")
+    tracked.observe()
+    restarted = tracked.plugin.create_connection(tracked.config, on_event=tracked.events.append)
+    native = restarted.native
+    native._client, native._subscribed, native._device_id = MagicMock(), True, "fixture"
+    native._received(
+        native._generation,
+        native._client,
+        SimpleNamespace(
+            topic=f"{PREFIX}/printer/public/{native._model_id}/fixture/info/report",
+            payload=json.dumps(
+                {
+                    "type": "info",
+                    "action": "query",
+                    "code": 200,
+                    "data": {"state": "free", "project": {"state": "stopped", "filename": NATIVE_FILENAME}},
+                }
+            ).encode(),
+        ),
+    )
+    assert lifecycle(tracked) == ["job.started", "job.cancelled"]
+    assert restarted.native.state.state == "IDLE"
+    assert restarted.journal.get(tracked.job.job_id)["pending_outcome"] == "cancelled"
+    assert restarted.plate_clear_required is True
+
+
+def test_idle_terminal_cannot_choose_between_ambiguous_taskless_intents(tracked):
+    tracked.seed("accepted")
+    tracked.observe()
+    original = tracked.connection.journal.get(tracked.job.job_id)
+    second_job = tracked.job.model_copy(update={"job_id": "same-file-other-job"})
+    assert tracked.connection.journal.begin(
+        second_job.job_id,
+        {**original, "status": "unknown", "native_job_id": None, "bindings": second_job.model_dump(mode="json")},
+    )
+    tracked.receive("info", {"state": "free", "project": {"state": "stopped", "filename": NATIVE_FILENAME}})
+    assert lifecycle(tracked) == ["job.started"]
+    assert tracked.connection.journal.get(tracked.job.job_id) == original
+    assert not tracked.connection.plate_clear_required
+
+
+@pytest.mark.parametrize(
+    "condition", ["expired", "reconnected", "unidentified_busy", "replaced", "conflicting_task", "malformed_filename"]
+)
+def test_partial_stop_cannot_reuse_stale_replaced_or_conflicting_identity(tracked, condition):
+    from plugins.anycubic.payload.telemetry import Telemetry
+
+    tracked.seed("accepted")
+    tracked.observe(taskid="owned-task")
+    tracked.receive("info", {"state": "free"})
+    data = {"state": "stopped"}
+    if condition == "expired":
+        previous, _ = tracked.native._telemetry._active_job
+        tracked.native._telemetry._active_job = previous, time.monotonic() - tracked.native.STALE_TIMEOUT - 1
+    elif condition == "reconnected":
+        tracked.native._telemetry = Telemetry(tracked.config.model)
+        tracked.native.state = tracked.native._telemetry.state
+    elif condition == "unidentified_busy":
+        tracked.receive("info", {"state": "busy"})
+    elif condition == "replaced":
+        tracked.observe(filename="unrelated-abcdef123456.gcode", taskid="other-task")
+        tracked.receive("info", {"state": "free"})
+    elif condition == "conflicting_task":
+        data["taskid"] = "other-task"
+    elif condition == "malformed_filename":
+        data["filename"] = 42
+    before = tracked.connection.journal.get(tracked.job.job_id)
+    tracked.receive("print", data)
+    assert "job.cancelled" not in lifecycle(tracked)
+    assert tracked.connection.journal.get(tracked.job.job_id) == before
+    assert not tracked.connection.plate_clear_required
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"state": "free"},
+        {"state": "free", "last_project": {"state": "stopped", "filename": NATIVE_FILENAME}},
+        {"state": "free", "project": {"state": "printing", "filename": NATIVE_FILENAME}},
+        {"state": "free", "project": {"state": "stopping", "filename": NATIVE_FILENAME}},
+        {"state": "free", "project": {"state": "stopped", "filename": "other-abcdef123456.gcode"}},
+        {"state": "free", "project": {"state": "stopped", "filename": NATIVE_FILENAME, "taskid": "other-task"}},
+    ],
+)
+def test_idle_without_matching_explicit_terminal_evidence_keeps_dispatch_held(tracked, data):
+    tracked.seed("accepted")
+    tracked.observe(taskid="owned-task")
+    before = tracked.connection.journal.get(tracked.job.job_id)
+    tracked.receive("info", data)
+    assert lifecycle(tracked) == ["job.started"]
+    assert tracked.connection.journal.get(tracked.job.job_id) == before
+    assert not tracked.connection.plate_clear_required
+
+
+def test_explicit_idle_terminal_without_prior_active_observation_cannot_close_taskless_dispatch(tracked):
+    before = tracked.seed("running")
+    tracked.receive("info", {"state": "free", "project": {"state": "stopped", "filename": NATIVE_FILENAME}})
+    assert lifecycle(tracked) == []
+    assert tracked.connection.journal.get(tracked.job.job_id) == before
+
+
+def test_idle_terminal_cannot_resurrect_resolved_dispatch(tracked, monkeypatch):
+    tracked.seed("accepted")
+    tracked.observe()
+    original_update = tracked.connection.journal.update
+
+    def resolve_before_terminal(job_id, **fields):
+        if fields.get("pending_outcome"):
+            tracked.connection.journal.resolve_dispatch(job_id, ready=lambda: True)
+        return original_update(job_id, **fields)
+
+    monkeypatch.setattr(tracked.connection.journal, "update", resolve_before_terminal)
+    tracked.receive("info", {"state": "free", "project": {"state": "stopped", "filename": NATIVE_FILENAME}})
+    assert lifecycle(tracked) == ["job.started"]
+    assert tracked.connection.journal.get(tracked.job.job_id)["status"] == "resolved"
+    assert not tracked.connection.plate_clear_required
+
+
 @pytest.mark.parametrize("bad_observation", ["predates_intent", "disconnected", "stale", "no_lifecycle"])
 def test_cached_or_unfresh_lifecycle_cannot_establish_filename_ownership(tracked, bad_observation):
     before = tracked.seed()
@@ -381,7 +641,7 @@ def _resolve_request(job_id):
 async def test_operator_can_resolve_a_running_hold_after_missing_stop_and_restart_without_replaying(tracked):
     tracked.seed("accepted")
     tracked.observe()
-    tracked.receive("info", {"state": "free", "project": {"state": "stopped", "filename": NATIVE_FILENAME}})
+    tracked.receive("info", {"state": "free", "project": {"state": "printing", "filename": NATIVE_FILENAME}})
     original = tracked.connection.journal.get(tracked.job.job_id)
     assert original["status"] == "running" and original["observed_active"] is True
     assert tracked.native.state.state == "IDLE" and tracked.native.state.gcode_file is None

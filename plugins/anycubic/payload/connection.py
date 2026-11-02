@@ -202,9 +202,14 @@ class AnycubicConnection:
         from datetime import datetime
 
         records = self._read_dispatch_records()
-        state = self.native.state
-        if not state.connected or self.native.is_stale or not self.native._telemetry.lifecycle_observed:
+        telemetry = self.native._telemetry
+        if not self.native.state.connected or self.native.is_stale or not telemetry.lifecycle_observed:
             return
+        observation = telemetry.terminal_observation
+        if observation is not None and observation.identity_observed_at is not None:
+            if not 0 <= time.monotonic() - observation.identity_observed_at <= self.native.STALE_TIMEOUT:
+                return
+        state = observation.state if observation is not None else self.native.state
         filename = PurePosixPath(state.gcode_file or "").name
         task = native_task_id(state.subtask_id)
         filename_matches = sum(record.get("native_filename") == filename for record in records)
@@ -253,7 +258,8 @@ class AnycubicConnection:
                     continue
                 filename_verified = True
             terminal = {"FINISH": "completed", "FAILED": "failed"}.get(state.state)
-            if state.state == "FAILED" and self.native._telemetry.phase in {"stoped", "stopped"}:
+            phase = observation.phase if observation is not None else telemetry.phase
+            if state.state == "FAILED" and phase in {"stoped", "stopped"}:
                 terminal = "cancelled"
             if not active and not (terminal and record.get("status") == "running"):
                 continue
