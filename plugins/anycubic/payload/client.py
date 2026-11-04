@@ -916,6 +916,24 @@ class AnycubicMQTTClient:
                 return None
             return copy.deepcopy([boxes[identity] for identity in sorted(boxes)])
 
+    def ace_remaining_snapshot(self) -> list[dict] | None:
+        """Return fresh material authority with independently fresh remaining values.
+
+        A complete material report can omit its percent. It must not renew an
+        older balance estimate, and this read never sends printer commands.
+        """
+        with self._lock:
+            boxes = self.ace_material_snapshot()
+            if boxes is None:
+                return None
+            now = time.monotonic()
+            for box in boxes:
+                for tray in box["tray"]:
+                    observed = self._telemetry.remaining_observed_at.get((box["id"], tray["id"]))
+                    if observed is None or not 0 <= now - observed <= self.STALE_TIMEOUT:
+                        tray.pop("remain", None)
+            return boxes
+
     def _light_ready(self):
         seen = self._reported_lights.get(2)
         return bool(self._fresh_connection() and seen and time.monotonic() - seen <= self.STALE_TIMEOUT)

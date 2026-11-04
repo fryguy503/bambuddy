@@ -38,6 +38,22 @@ class InventoryAssignmentError(AnycubicError):
         self.code = "anycubic.inventory." + code
 
 
+def remaining_sync_enabled(link):
+    """An older retained writer must not carry consent to a replacement link."""
+    return bool(
+        isinstance(link, dict)
+        and link.get("auto_remaining_sync") is True
+        and isinstance(link.get("token"), str)
+        and bool(link["token"])
+        and link.get("auto_remaining_token") == link["token"]
+    )
+
+
+def _clear_remaining_sync(link):
+    link.pop("auto_remaining_sync", None)
+    link.pop("auto_remaining_token", None)
+
+
 def _load():
     return read_json(state_root() / "inventory.json", {"format_version": 1, "printers": {}})
 
@@ -199,12 +215,22 @@ def _assign(config, source_id, spool_id):
                     and bool(previous["token"])
                 )
                 if same_assignment and previous.get("kind") == "manual":
+                    if not remaining_sync_enabled(previous) and (
+                        "auto_remaining_sync" in previous or "auto_remaining_token" in previous
+                    ):
+                        _clear_remaining_sync(previous)
+                        _save(value)
                     return dict(entry["links"])
                 entry["links"][source_id] = {
                     "spool_id": spool_id,
                     "token": previous["token"] if same_assignment else str(uuid4()),
                     "kind": "manual",
                     "identity": identity,
+                    **(
+                        {"auto_remaining_sync": True, "auto_remaining_token": previous["token"]}
+                        if same_assignment and remaining_sync_enabled(previous)
+                        else {}
+                    ),
                 }
             _save(value)
             return dict(entry["links"])
@@ -251,12 +277,15 @@ def _observe(config, observed, candidates, host_assigned):
             if slot.get("key")
         )
         for source, link in list(entry["links"].items()):
+            if not remaining_sync_enabled(link):
+                _clear_remaining_sync(link)
             current = observed.get(source, {})
             if link.get("identity") != current.get("identity"):
                 if link.get("kind") == "rfid":
                     del entry["links"][source]
                 else:
                     link.update(identity=current.get("identity"), token=str(uuid4()))
+                    _clear_remaining_sync(link)
         for other in value["printers"].values():
             for source, link in list(other.get("links", {}).items()):
                 key_value = other.get("observed", {}).get(source, {}).get("key")
@@ -288,6 +317,24 @@ def _observe(config, observed, candidates, host_assigned):
             claimed.add(spool_id)
         if value != before:
             _save(value)
+
+
+async def sync_remaining(config, source_id, sample, *, expected_spool_id, automatic=False):
+    from .remaining import sync_remaining as sync
+
+    return await sync(config, source_id, sample, expected_spool_id=expected_spool_id, automatic=automatic)
+
+
+async def set_remaining_sync(config, source_id, enabled, expected_spool_id):
+    from .remaining import set_remaining_sync as configure
+
+    return await configure(config, source_id, enabled, expected_spool_id)
+
+
+async def sync_remaining_auto(config, sample):
+    from .remaining import sync_remaining_auto as sync
+
+    return await sync(config, sample)
 
 
 def _grams(value):

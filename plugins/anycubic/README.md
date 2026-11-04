@@ -1,15 +1,33 @@
 # Anycubic printer plugin
 
 The independent Anycubic provider uses Bambuddy's printer SDK v2. Its current
-release is `anycubic` **0.1.13**, published under `fryguy503`. The included Bambu
+release is `anycubic` **0.1.14**, published under `fryguy503`. The included Bambu
 provider remains a separate plugin.
 
 This release requires printer SDK 2.4 from the host's
 `feat/queue-material-selection` branch, including its queue preflight workflow.
-Update the host before uploading version 0.1.13. Hosts with only the earlier
+Update the host before uploading version 0.1.14. Hosts with only the earlier
 SDK 2.3 printer-modularization implementation reject this package during
 compatibility validation. The application version string alone does not
 establish SDK availability.
+
+Version 0.1.14 adds an explicit **Use ACE remaining %** action to an assigned
+filament's menu. Confirm and apply it to set that spool's remaining grams from
+its labelled full weight and the fresh ACE percentage. For example, 71% of a
+1,000 g spool becomes 710 g remaining. It updates the balance without changing
+print history, scale readings, or the spool's weight-lock preference. A manual
+correction may replace a locked balance because the operator chose this action.
+
+The same menu offers **Automatic remaining sync (advanced)** for that assignment.
+It is off by default and requires inventory-update permission. Enable its
+checkbox and apply to sync periodically while idle. Automatic updates skip
+locked weights; changing the assignment or reported material turns the option
+off. Both modes wait until active prints, uncertain dispatches and deferred
+usage accounting have cleared, so estimated print consumption is not deducted
+again from a balance copied during the print. Invalid, stale, or missing
+percentages are rejected; a fresh 0% is valid. A known positive labelled spool
+weight is required. Percentage freshness is tracked independently of material
+and drying reports. Installing this version does not change spool balances.
 
 Version 0.1.13 processes explicit stopped-job MQTT observations before an idle
 printer report clears its current task fields. A terminal observation must
@@ -98,17 +116,17 @@ The 0.1.2 durability behavior remains: finalized dispatch outcomes stay authorit
 older observers report stale progress. It preserves pending accounting and
 repairs legacy journal fields under the existing storage lock. A terminal
 observation awaiting host cleanup remains replayable; no print command is
-replayed. The published 0.1.0 through 0.1.12 archives are unchanged.
+replayed. The published 0.1.0 through 0.1.13 archives are unchanged.
 
 ## Install or update
 
 The release artifact is
-[`packages/anycubic/anycubic-0.1.13.bbp`](../../packages/anycubic/anycubic-0.1.13.bbp).
+[`packages/anycubic/anycubic-0.1.14.bbp`](../../packages/anycubic/anycubic-0.1.14.bbp).
 Its adjacent `.sha256` file records the archive's SHA-256 digest.
 
 1. In **Settings → Printer plugins** (`/settings?tab=printer-plugins`), upload the
    `.bbp` file and optionally paste its expected SHA-256 digest.
-2. Review the validation result, then apply version `0.1.13`. Staging alone does
+2. Review the validation result, then apply version `0.1.14`. Staging alone does
    not load or enable its code.
 3. Add or edit a printer, select **Anycubic**, and choose its model.
 
@@ -293,7 +311,7 @@ ordering, timestamps and file modes are fixed for reproducible builds.
 For an alternate output location:
 
 ```console
-python plugins/anycubic/build.py --output work/anycubic-0.1.13.bbp
+python plugins/anycubic/build.py --output work/anycubic-0.1.14.bbp
 ```
 
 For a later release, update the version in the payload's plugin factory, then

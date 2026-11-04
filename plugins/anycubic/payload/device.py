@@ -20,6 +20,7 @@ from backend.app.printers.sdk import (
     TelemetryValue,
 )
 
+from .inventory import remaining_sync_enabled
 from .models import get_model
 from .persistence import RESOLVABLE_STATES
 from .protocol import AnycubicError, task_id
@@ -81,11 +82,12 @@ def operation(
     )
 
 
-def describe(plugin, config, native=None):
+def describe(plugin, config, native=None, *, links=None):
     model = get_model(config.model)
     if model is None:
         raise AnycubicError("Select a supported Anycubic model")
     caps = native.control_capabilities() if native is not None else {}
+    links = links or {}
     ready = bool(caps.get("ready"))
     resources = [
         ResourceDescriptor(
@@ -267,6 +269,7 @@ def describe(plugin, config, native=None):
                         "color": prop("Color", {"type": "string"}),
                         "remaining_percent": prop("Remaining", {"type": "number", "minimum": 0, "maximum": 100}, "%"),
                         "spool_id": prop("Assigned spool", {"type": ["string", "integer", "null"]}),
+                        "auto_remaining_sync": prop("Automatic remaining sync", {"type": "boolean"}),
                         "editable": prop("Editable", {"type": "boolean"}),
                     },
                 )
@@ -399,6 +402,26 @@ def describe(plugin, config, native=None):
             asynchronous=False,
         ),
         operation(
+            "anycubic.inventory.sync_remaining",
+            "Use ACE remaining %",
+            {"expected_spool_id": {"type": "integer", "minimum": 1}},
+            ["expected_spool_id"],
+            permission="inventory:update",
+            asynchronous=False,
+            confirmation="Replace this assigned spool's remaining amount with the current ACE estimate.",
+        ),
+        operation(
+            "anycubic.inventory.set_remaining_sync",
+            "Automatic remaining sync (advanced)",
+            {
+                "expected_spool_id": {"type": "integer", "minimum": 1},
+                "enabled": {"type": "boolean", "default": False, "title": "Automatically use ACE remaining %"},
+            },
+            ["expected_spool_id", "enabled"],
+            permission="inventory:update",
+            asynchronous=False,
+        ),
+        operation(
             "anycubic.ace.history",
             "ACE sensor history",
             {"hours": {"type": "integer", "minimum": 1, "maximum": 336}},
@@ -486,6 +509,32 @@ def describe(plugin, config, native=None):
         for resource in resources
         if resource.kind == "material_source" and resource.id != "material:external"
     ]
+    sync_targets = native_sources if native is None else [source for source in native_sources if source in links]
+    sync_ids = ("anycubic.inventory.sync_remaining", "anycubic.inventory.set_remaining_sync")
+    for operation_id in sync_ids:
+        item = operation_by_id[operation_id]
+        item.resource_ids = sync_targets
+        for source in sync_targets:
+            link = links.get(source, {})
+            spool_id = link.get("spool_id")
+            if type(spool_id) is not int or spool_id < 1:
+                continue
+            schema = json.loads(json.dumps(item.parameters_schema))
+            schema["properties"]["expected_spool_id"].update(const=spool_id, default=spool_id)
+            if operation_id == "anycubic.inventory.set_remaining_sync":
+                schema["properties"]["enabled"]["default"] = remaining_sync_enabled(link)
+            item.resource_parameters_schemas[source] = schema
+    operation_by_id["anycubic.inventory.sync_remaining"].description = (
+        "Sets the assigned inventory spool's remaining grams from its labelled full weight and the latest ACE %. "
+        "Wait until the printer is idle and print usage has been recorded. This corrects the balance only; "
+        "print history, scale readings and weight locks are preserved."
+    )
+    operation_by_id["anycubic.inventory.set_remaining_sync"].description = (
+        "Off by default. While idle, periodically copy fresh ACE estimates to this assigned spool. "
+        "Locked spool weights are skipped. Changing the assignment or reported material turns this option off."
+    )
+    if native is not None and not sync_targets:
+        operations = [item for item in operations if item.id not in sync_ids]
     for operation_id in ("anycubic.material.configure", "anycubic.material.feed", "anycubic.material.refresh"):
         operation_by_id[operation_id].resource_ids = native_sources
         operation_by_id[operation_id].resource_kinds = []
@@ -536,7 +585,21 @@ def describe(plugin, config, native=None):
         },
     }
     revision = hashlib.sha256(
-        json.dumps({"resources": [r.model_dump(mode="json") for r in resources], "caps": caps}, sort_keys=True).encode()
+        json.dumps(
+            {
+                "resources": [r.model_dump(mode="json") for r in resources],
+                "caps": caps,
+                "remaining_sync": {
+                    source: {
+                        "spool_id": links[source].get("spool_id"),
+                        "enabled": remaining_sync_enabled(links[source]),
+                    }
+                    for source in sync_targets
+                    if source in links
+                },
+            },
+            sort_keys=True,
+        ).encode()
     ).hexdigest()[:16]
     return DeviceDescriptor(
         device_id=device_id(config),
@@ -664,7 +727,7 @@ def snapshot(
 ) -> DeviceSnapshot:
     links = links or {}
     names = names or {}
-    descriptor = describe(plugin, config, native)
+    descriptor = describe(plugin, config, native, links=links)
     state = native.state
     now = datetime.now(timezone.utc)
     stale = not state.connected or native.is_stale
@@ -734,6 +797,8 @@ def snapshot(
                 }
         if resource.id in links:
             data["spool_id"] = str(links[resource.id]["spool_id"])
+            if resource.kind == "material_source" and resource.id != "material:external":
+                data["auto_remaining_sync"] = remaining_sync_enabled(links[resource.id])
         if resource.kind == "feeder" and resource.id in names:
             data["name"] = names[resource.id]
         properties = {

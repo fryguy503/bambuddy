@@ -87,6 +87,7 @@ class Telemetry:
         self.state.raw_data = {"manufacturer": "anycubic", "device_model": selected_model.name, "ams": []}
         self.boxes = {}
         self.drying_status_observed_at: dict[int, float] = {}
+        self.remaining_observed_at: dict[tuple[int, int], float] = {}
         self.task_id = "-1"  # Firmware's documented current-job command sentinel.
         self.phase = None
         self.lifecycle_observed = False
@@ -188,6 +189,7 @@ class Telemetry:
             return False
         updated = {} if full else copy.deepcopy(self.boxes)
         drying_observed = {} if full else dict(self.drying_status_observed_at)
+        remaining_observed = {} if full else dict(self.remaining_observed_at)
         seen = set()
         for raw in raw_boxes:
             if not isinstance(raw, dict) or type(raw.get("id")) is not int or raw["id"] not in self._ace_ids:
@@ -228,6 +230,13 @@ class Telemetry:
                         raise AnycubicError("Duplicate ACE slot address")
                     indexes.add(index)
                     tray = trays.setdefault(index, {"id": index, "state": None})
+                    previous_material = (
+                        tray.get("tray_type"),
+                        tray.get("tray_color"),
+                        tray.get("state"),
+                        tray.get("anycubic_edit_status"),
+                        tray.get("anycubic_status"),
+                    )
                     material = _text(slot.get("type"), 64)
                     if type(slot.get("status")) is int:
                         tray["anycubic_status"] = slot["status"]
@@ -254,10 +263,25 @@ class Telemetry:
                         if all(type(c) is int and 0 <= c <= 255 for c in color):
                             tray["tray_color"] = "".join(f"{c:02X}" for c in color[:3]) + "FF"
                     remaining = number(slot.get("consumables_percent"), 0, 100)
-                    if remaining is not None and tray.get("tray_type"):
+                    current_material = (
+                        tray.get("tray_type"),
+                        tray.get("tray_color"),
+                        tray.get("state"),
+                        tray.get("anycubic_edit_status"),
+                        tray.get("anycubic_status"),
+                    )
+                    remaining_key = identity, index
+                    if remaining is not None and tray.get("tray_type") and tray.get("state") == 3:
                         tray["remain"] = remaining
-                    elif unit_full:
+                        remaining_observed[remaining_key] = time.monotonic()
+                    elif (
+                        unit_full
+                        or "consumables_percent" in slot
+                        or previous_material != current_material
+                        or tray.get("state") != 3
+                    ):
                         tray.pop("remain", None)
+                        remaining_observed.pop(remaining_key, None)
                 if unit_full and indexes != {0, 1, 2, 3}:
                     raise AnycubicError("Incomplete ACE snapshot")
                 box["tray"] = [trays[i] for i in sorted(trays)]
@@ -298,6 +322,7 @@ class Telemetry:
                     box[target] = text
         self.boxes = updated
         self.drying_status_observed_at = drying_observed
+        self.remaining_observed_at = remaining_observed
         self.state.raw_data["ams"] = [copy.deepcopy(updated[i]) for i in sorted(updated)]
         return True
 

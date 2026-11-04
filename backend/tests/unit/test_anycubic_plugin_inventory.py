@@ -3,13 +3,15 @@
 import asyncio
 import json
 import threading
+import zipfile
 from contextvars import ContextVar
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.app.core import database
@@ -22,6 +24,7 @@ from backend.app.models.spool_usage_history import SpoolUsageHistory
 from backend.app.printers.contracts import PrinterConfig
 from backend.app.printers.sdk import JobArtifact, JobRequest, MaterialBinding, OperationRequest
 from plugins.anycubic.payload import inventory
+from plugins.anycubic.payload.persistence import Journal, printer_key
 
 SOURCE = "material:ace:10:0"
 
@@ -81,6 +84,351 @@ def job(job_id="job-1", *, source=SOURCE, mass=None, input_id="T0"):
 
 async def weight(db, spool_id):
     return await db.scalar(select(Spool.weight_used).where(Spool.id == spool_id))
+
+
+def remaining_boxes(percent=71, **changes):
+    value = boxes(**changes)
+    value[0]["tray"][0]["remain"] = percent
+    return value
+
+
+@pytest.mark.asyncio
+async def test_selected_ace_percentage_corrects_only_balance_and_preserves_manual_lock(
+    inventory_config, make_spool, db_session, monkeypatch
+):
+    from backend.app.core.websocket import ws_manager
+
+    spool = await make_spool(weight_used=400, weight_used_baseline=100, weight_locked=True, last_scale_weight=850)
+    native = remaining_boxes(71)
+    await inventory.observe(inventory_config, native)
+    broadcast = AsyncMock()
+    monkeypatch.setattr(ws_manager, "broadcast", broadcast)
+    result = await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id)
+    assert result == {
+        "state": "synced",
+        "source_id": SOURCE,
+        "spool_id": spool.id,
+        "remaining_percent": 71,
+        "remaining_grams": 710,
+        "weight_used": 290,
+    }
+    await db_session.refresh(spool)
+    assert (spool.weight_used, spool.weight_used_baseline, spool.weight_locked, spool.last_scale_weight) == (
+        290,
+        100,
+        True,
+        850,
+    )
+    assert spool.last_weighed_at is None
+    assert await db_session.scalar(select(func.count()).select_from(SpoolUsageHistory)) == 0
+    broadcast.assert_awaited_once_with({"type": "inventory_changed"})
+    again = await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id)
+    assert again["state"] == "unchanged"
+    broadcast.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("percent,expected", [(0, 500), (100, 0), (12.5, 437.5)])
+async def test_ace_estimate_uses_actual_spool_capacity_and_accepts_zero(
+    inventory_config, make_spool, db_session, percent, expected
+):
+    spool = await make_spool(label_weight=500)
+    native = remaining_boxes(percent)
+    await inventory.observe(inventory_config, native)
+    await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id)
+    assert await weight(db_session, spool.id) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("percent", [None, True, -1, 101, float("nan"), float("inf"), "71"])
+async def test_invalid_or_absent_ace_estimates_never_change_spool_balance(
+    inventory_config, make_spool, db_session, percent
+):
+    spool = await make_spool(weight_used=12)
+    native = remaining_boxes(percent)
+    await inventory.observe(inventory_config, native)
+    with pytest.raises(inventory.InventoryAssignmentError, match="valid remaining"):
+        await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id)
+    assert await weight(db_session, spool.id) == 12
+
+
+@pytest.mark.asyncio
+async def test_percentage_sync_rejects_stale_or_changed_source_and_assignment(inventory_config, make_spool, db_session):
+    spool = await make_spool(weight_used=12)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    with pytest.raises(inventory.InventoryAssignmentError, match="fresh ACE"):
+        await inventory.sync_remaining(inventory_config, SOURCE, lambda: None, expected_spool_id=spool.id)
+    with pytest.raises(inventory.InventoryAssignmentError, match="assigned spool changed"):
+        await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id + 1)
+    with pytest.raises(inventory.InventoryAssignmentError, match="ACE material changed"):
+        await inventory.sync_remaining(
+            inventory_config, SOURCE, lambda: remaining_boxes(color="00FF00FF"), expected_spool_id=spool.id
+        )
+    assert await weight(db_session, spool.id) == 12
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("label", [0, -1])
+async def test_percentage_sync_requires_positive_label_weight(inventory_config, make_spool, db_session, label):
+    spool = await make_spool(label_weight=label, weight_used=12)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    with pytest.raises(inventory.InventoryAssignmentError, match="label weight"):
+        await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id)
+    assert await weight(db_session, spool.id) == 12
+
+
+@pytest.mark.asyncio
+async def test_automatic_remaining_sync_is_per_assignment_opt_in_and_honors_weight_lock(
+    inventory_config, make_spool, db_session
+):
+    spool = await make_spool(weight_used=12, weight_locked=True)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    assert await inventory.sync_remaining_auto(inventory_config, lambda: native) == []
+    link = (await inventory.set_remaining_sync(inventory_config, SOURCE, True, spool.id))[SOURCE]
+    assert link["auto_remaining_sync"] is True
+    result = await inventory.sync_remaining_auto(inventory_config, lambda: native)
+    assert result == [{"state": "skipped", "source_id": SOURCE, "reason": "anycubic.inventory.weight_locked"}]
+    assert await weight(db_session, spool.id) == 12
+    spool.weight_locked = False
+    await db_session.commit()
+    assert (await inventory.sync_remaining_auto(inventory_config, lambda: native))[0]["state"] == "synced"
+    assert await weight(db_session, spool.id) == 290
+    await inventory.set_remaining_sync(inventory_config, SOURCE, False, spool.id)
+    assert await inventory.sync_remaining_auto(inventory_config, lambda: native) == []
+
+
+@pytest.mark.asyncio
+async def test_auto_remaining_opt_in_survives_identical_assignment_but_not_spool_or_material_changes(
+    inventory_config, make_spool
+):
+    first, second = await make_spool(), await make_spool(rgba="00FF00FF")
+    await inventory.observe(inventory_config, remaining_boxes())
+    await inventory.assign(inventory_config, SOURCE, first.id)
+    link = (await inventory.set_remaining_sync(inventory_config, SOURCE, True, first.id))[SOURCE]
+    assert (await inventory.assign(inventory_config, SOURCE, first.id))[SOURCE] == link
+    await inventory.observe(inventory_config, remaining_boxes(65))
+    assert (await inventory.snapshot(inventory_config))[SOURCE] == link
+    await inventory.observe(inventory_config, remaining_boxes(color="00FF00FF"))
+    assert (await inventory.snapshot(inventory_config))[SOURCE].get("auto_remaining_sync") is not True
+    await inventory.set_remaining_sync(inventory_config, SOURCE, True, first.id)
+    assert (await inventory.assign(inventory_config, SOURCE, second.id))[SOURCE].get("auto_remaining_sync") is not True
+    await inventory.set_remaining_sync(inventory_config, SOURCE, True, second.id)
+    await inventory.assign(inventory_config, SOURCE, None)
+    await inventory.assign(inventory_config, SOURCE, second.id)
+    assert (await inventory.snapshot(inventory_config))[SOURCE].get("auto_remaining_sync") is not True
+
+
+@pytest.mark.asyncio
+async def test_retained_legacy_writer_cannot_carry_auto_sync_to_a_rotated_link(
+    inventory_config, make_spool, db_session
+):
+    from plugins.anycubic.payload.persistence import storage_lock
+
+    spool = await make_spool(weight_used=12)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    await inventory.set_remaining_sync(inventory_config, SOURCE, True, spool.id)
+    rotations = []
+
+    def legacy_rotate():
+        with storage_lock("inventory"):
+            state = inventory._load()
+            link = inventory._entry(state, inventory_config)["links"][SOURCE]
+            rotations.append(True)
+            link["token"] = "legacy-new-material-continuity-" + str(len(rotations))
+            assert link["auto_remaining_sync"] is True  # The old writer preserves unknown fields.
+            inventory._save(state)
+
+    await asyncio.to_thread(legacy_rotate)
+    link = (await inventory.snapshot(inventory_config))[SOURCE]
+    assert inventory.remaining_sync_enabled(link) is False
+    assert await inventory.sync_remaining_auto(inventory_config, lambda: native) == []
+    assert await weight(db_session, spool.id) == 12
+    # An explicit new opt-in binds consent to the current continuity token.
+    enabled = (await inventory.set_remaining_sync(inventory_config, SOURCE, True, spool.id))[SOURCE]
+    assert inventory.remaining_sync_enabled(enabled) is True
+    assert enabled["auto_remaining_token"] == enabled["token"]
+    await asyncio.to_thread(legacy_rotate)
+    await inventory.observe(inventory_config, native)
+    healed = (await inventory.snapshot(inventory_config))[SOURCE]
+    assert "auto_remaining_sync" not in healed and "auto_remaining_token" not in healed
+    # The helper does not infer consent from the old boolean alone.
+    assert inventory.remaining_sync_enabled({"auto_remaining_sync": True, "token": "old"}) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["intent", "running", "completed"])
+async def test_remaining_sync_waits_for_native_dispatch_and_deferred_accounting(
+    inventory_config, make_spool, db_session, state
+):
+    spool = await make_spool(weight_used=12)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    record = {"status": state, **({"pending_outcome": "completed"} if state == "completed" else {})}
+    assert Journal(printer_key(inventory_config)).begin("accounting-held-job", record)
+    with pytest.raises(inventory.InventoryAssignmentError, match="filament usage has been recorded"):
+        await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id)
+    assert await weight(db_session, spool.id) == 12
+
+
+@pytest.mark.asyncio
+async def test_balance_sync_after_normal_closeout_does_not_erase_usage_history_or_duplicate_deduction(
+    inventory_config, make_spool, archive_factory, db_session
+):
+    spool = await make_spool(weight_used=200)
+    native = remaining_boxes(75)
+    await inventory.observe(inventory_config, native)
+    request = job(mass=50)
+    captured = await inventory.capture(inventory_config, request)
+    await archive_factory(inventory_config.printer_id, subtask_id=request.job_id, with_run=False)
+    record = {"job_id": request.job_id, "usage_snapshot": captured}
+    assert (await inventory.complete(inventory_config, record, "completed"))["state"] == "recorded"
+    assert await weight(db_session, spool.id) == 250
+    await inventory.set_remaining_sync(inventory_config, SOURCE, True, spool.id)
+    assert (await inventory.sync_remaining_auto(inventory_config, lambda: native))[0]["state"] == "unchanged"
+    assert await weight(db_session, spool.id) == 250
+    history = list((await db_session.scalars(select(SpoolUsageHistory))).all())
+    assert len(history) == 1 and history[0].weight_used == 50
+    assert (await inventory.complete(inventory_config, record, "completed"))["state"] == "already_recorded"
+    assert await weight(db_session, spool.id) == 250
+
+
+@pytest.mark.asyncio
+async def test_changed_ace_reading_during_sync_rolls_back_balance(inventory_config, make_spool, db_session):
+    spool = await make_spool(weight_used=12)
+    first, second = remaining_boxes(71), remaining_boxes(70)
+    await inventory.observe(inventory_config, first)
+    sample = MagicMock(side_effect=[first, second])
+    with pytest.raises(inventory.InventoryAssignmentError, match="ACE reading changed"):
+        await inventory.sync_remaining(inventory_config, SOURCE, sample, expected_spool_id=spool.id)
+    assert await weight(db_session, spool.id) == 12
+
+
+@pytest.mark.asyncio
+async def test_new_dispatch_reserved_during_balance_update_vetoes_commit(
+    inventory_config, make_spool, db_session, monkeypatch
+):
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.sql.dml import Update
+
+    spool = await make_spool(weight_used=12)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    original = AsyncSession.scalar
+
+    async def reserved_during_write(self, statement, *args, **kwargs):
+        result = await original(self, statement, *args, **kwargs)
+        if isinstance(statement, Update) and statement.table.name == "spool":
+            assert Journal(printer_key(inventory_config)).begin("newly-reserved-job", {"status": "intent"})
+        return result
+
+    monkeypatch.setattr(AsyncSession, "scalar", reserved_during_write)
+    with pytest.raises(inventory.InventoryAssignmentError, match="filament usage has been recorded"):
+        await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id)
+    assert await weight(db_session, spool.id) == 12
+
+
+@pytest.mark.asyncio
+async def test_auto_sync_disabled_during_database_work_vetoes_commit(
+    inventory_config, make_spool, db_session, monkeypatch
+):
+    from plugins.anycubic.payload import remaining
+
+    spool = await make_spool(weight_used=12)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    await inventory.set_remaining_sync(inventory_config, SOURCE, True, spool.id)
+    original = remaining._spool
+
+    async def disabled_after_read(db, spool_id):
+        loaded = await original(db, spool_id)
+        await asyncio.to_thread(remaining._set_remaining_sync, inventory_config, SOURCE, False, spool_id)
+        return loaded
+
+    monkeypatch.setattr(remaining, "_spool", disabled_after_read)
+    result = await inventory.sync_remaining_auto(inventory_config, lambda: native)
+    assert result == [{"state": "skipped", "source_id": SOURCE, "reason": "anycubic.inventory.sync_disabled"}]
+    assert await weight(db_session, spool.id) == 12
+
+
+@pytest.mark.asyncio
+async def test_final_sync_check_does_not_wait_for_a_legacy_inventory_writer_holding_sql(
+    inventory_config, make_spool, db_session, monkeypatch
+):
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.sql.dml import Update
+
+    spool = await make_spool(weight_used=12)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    namespace = {"__name__": "legacy_balance_lock_fixture"}
+    published = Path(__file__).resolve().parents[3] / "packages/anycubic/anycubic-0.1.13.bbp"
+    with zipfile.ZipFile(published) as archive:
+        exec(compile(archive.read("payload/persistence.py"), "published-0.1.13", "exec"), namespace)
+    entered, release = threading.Event(), threading.Event()
+    workers = []
+
+    def legacy_writer():
+        # Older completion code holds this file lock while awaiting its SQL
+        # write. The new balance writer must not wait for it after UPDATE.
+        with namespace["storage_lock"]("inventory"):
+            entered.set()
+            release.wait(3)
+
+    original = AsyncSession.scalar
+
+    async def writer_arrived_after_sql(self, statement, *args, **kwargs):
+        result = await original(self, statement, *args, **kwargs)
+        if isinstance(statement, Update) and statement.table.name == "spool":
+            worker = threading.Thread(target=legacy_writer, daemon=True)
+            workers.append(worker)
+            worker.start()
+            assert await asyncio.to_thread(entered.wait, 1)
+        return result
+
+    monkeypatch.setattr(AsyncSession, "scalar", writer_arrived_after_sql)
+    try:
+        result = await asyncio.wait_for(
+            inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id), 1.5
+        )
+        assert result["state"] == "synced"
+        assert not release.is_set()
+    finally:
+        release.set()
+        for worker in workers:
+            await asyncio.to_thread(worker.join, 2)
+    assert await weight(db_session, spool.id) == 290
+
+
+@pytest.mark.asyncio
+async def test_sync_does_not_overwrite_a_balance_changed_after_its_read(
+    inventory_config, make_spool, db_session, monkeypatch
+):
+    from plugins.anycubic.payload import remaining
+
+    spool = await make_spool(weight_used=12)
+    native = remaining_boxes()
+    await inventory.observe(inventory_config, native)
+    original = remaining._spool
+
+    async def changed_after_read(db, spool_id):
+        loaded = await original(db, spool_id)
+        await db.execute(
+            update(Spool)
+            .where(Spool.id == spool_id)
+            .values(weight_used=123)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        return loaded
+
+    monkeypatch.setattr(remaining, "_spool", changed_after_read)
+    with pytest.raises(inventory.InventoryAssignmentError, match="spool balance changed"):
+        await inventory.sync_remaining(inventory_config, SOURCE, lambda: native, expected_spool_id=spool.id)
+    assert await weight(db_session, spool.id) == 123
 
 
 @pytest.mark.asyncio

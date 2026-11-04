@@ -40,7 +40,7 @@ _CAPABILITIES = frozenset(
 class AnycubicPrinterPlugin(PrinterPlugin):
     id = "anycubic"
     name = "Anycubic signed LAN"
-    version = "0.1.13"
+    version = "0.1.14"
     api_version = 2
     publisher_id = "fryguy503"
     capabilities = _CAPABILITIES
@@ -139,9 +139,9 @@ class AnycubicPrinterPlugin(PrinterPlugin):
 
         connection = self.connections.get(config.serial_number)
         native = connection.native if connection is not None else None
-        if native is not None:
+        if connection is not None and native is not None:
             with native._lock:
-                return describe(self, config, native)
+                return describe(self, config, native, links=connection.inventory_links)
         return describe(self, config)
 
     def describe_job(self, config, artifact, path):

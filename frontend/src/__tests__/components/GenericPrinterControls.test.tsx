@@ -331,6 +331,67 @@ describe('generic printer resources', () => {
     else expect(printerDeviceApi.execute).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])('requires an explicit inventory-authorized choice before calibrating a spool from reported remaining with permission=%s', async canUpdateInventory => {
+    const user = userEvent.setup(); const value = device();
+    value.resources = [{ ...resource('source/opaque-calibration', 'material_source', 'Reported material slot'), properties: { material_type: property('Material', 'string'), remaining_percent: property('Remaining', 'number', '%') } }];
+    value.operations = [{
+      ...operation('fixture.remaining.calibrate', 'Use reported remaining %', []),
+      resource_ids: ['source/opaque-calibration'], permission: 'inventory:update',
+      description: 'Set the assigned spool balance from the printer estimate.',
+      confirmation: 'Replace the assigned spool remaining amount with this estimate.',
+      parameters_schema: { type: 'object', properties: { expected_spool_id: { type: 'integer', minimum: 1 } }, required: ['expected_spool_id'], additionalProperties: false },
+      resource_parameters_schemas: { 'source/opaque-calibration': { type: 'object', properties: { expected_spool_id: { type: 'integer', const: 71, default: 71, title: 'Assigned inventory spool' } }, required: ['expected_spool_id'], additionalProperties: false } },
+      extensions: { 'bambuddy:ui': { group: 'material', icon: 'refresh-cw' } },
+    }];
+    const state = snapshot();
+    state.resources = [{ resource_id: 'source/opaque-calibration', status: 'loaded', available: true, properties: { material_type: reading('PLA'), remaining_percent: reading(63) } }];
+    renderControls(value, permission => permission !== 'inventory:update' || canUpdateInventory, state);
+    await user.click(screen.getByRole('button', { name: 'Controls for Reported material slot' }));
+    const action = within(screen.getByRole('dialog', { name: 'Reported material slot' })).getByRole('button', { name: 'Use reported remaining %' });
+    expect(printerDeviceApi.execute).not.toHaveBeenCalled();
+    if (!canUpdateInventory) {
+      expect(action).toBeDisabled();
+      await user.click(action);
+      expect(printerDeviceApi.execute).not.toHaveBeenCalled();
+      return;
+    }
+    await user.click(action);
+    const dialog = screen.getByRole('dialog', { name: 'Use reported remaining %' });
+    expect(within(dialog).queryByLabelText('Assigned inventory spool *')).not.toBeInTheDocument();
+    const apply = within(dialog).getByRole('button', { name: 'Apply' });
+    expect(apply).toBeDisabled();
+    expect(printerDeviceApi.execute).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Replace the assigned spool remaining amount with this estimate.' }));
+    await user.click(apply);
+    await waitFor(() => expect(printerDeviceApi.execute).toHaveBeenCalledExactlyOnceWith(42, 'fixture.remaining.calibrate', { expected_spool_id: 71 }, 'source/opaque-calibration'));
+  });
+
+  it.each([false, true])('keeps automatic remaining sync at its per-link setting=%s until the user applies a change', async enabled => {
+    const user = userEvent.setup(); const value = device();
+    value.resources = [{ ...resource('source/opaque-sync', 'material_source', 'Synced material slot'), properties: { material_type: property('Material', 'string') } }];
+    value.operations = [{
+      ...operation('fixture.remaining.configure', 'Automatic remaining sync (advanced)', []),
+      resource_ids: ['source/opaque-sync'], permission: 'inventory:update',
+      parameters_schema: { type: 'object', properties: { expected_spool_id: { type: 'integer', minimum: 1 }, enabled: { type: 'boolean', default: false } }, required: ['expected_spool_id', 'enabled'], additionalProperties: false },
+      resource_parameters_schemas: { 'source/opaque-sync': { type: 'object', properties: { expected_spool_id: { type: 'integer', const: 71, default: 71 }, enabled: { type: 'boolean', title: 'Automatically use reported remaining', default: enabled } }, required: ['expected_spool_id', 'enabled'], additionalProperties: false } },
+      extensions: { 'bambuddy:ui': { group: 'material', icon: 'settings' } },
+    }];
+    const state = snapshot();
+    state.resources = [{ resource_id: 'source/opaque-sync', status: 'loaded', available: true, properties: { material_type: reading('PLA') } }];
+    renderControls(value, true, state);
+    await user.click(screen.getByRole('button', { name: 'Controls for Synced material slot' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Synced material slot' })).getByRole('button', { name: 'Automatic remaining sync (advanced)' }));
+    const dialog = screen.getByRole('dialog', { name: 'Automatic remaining sync (advanced)' });
+    const checkbox = within(dialog).getByRole('checkbox', { name: 'Automatically use reported remaining *' });
+    if (enabled) expect(checkbox).toBeChecked();
+    else expect(checkbox).not.toBeChecked();
+    expect(printerDeviceApi.execute).not.toHaveBeenCalled();
+    await user.click(checkbox);
+    expect(printerDeviceApi.execute).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(printerDeviceApi.execute).toHaveBeenCalledExactlyOnceWith(42, 'fixture.remaining.configure', { expected_spool_id: 71, enabled: !enabled }, 'source/opaque-sync'));
+  });
+
   it('restores the inline drying footer with hours/minutes and schema-defined telemetry/parameters', async () => {
     const user = userEvent.setup(); const value = device();
     value.resources = [{ ...resource('dryer/opaque', 'feeder', 'Dry feeder'), properties: { drying: { ...property('Drying', 'object'), value_schema: { type: 'object', properties: { heat: { type: 'number', 'x-unit': 'degC' }, duration: { type: 'number', 'x-unit': 'min' }, left: { type: 'number', 'x-unit': 'min' } } } } } }];

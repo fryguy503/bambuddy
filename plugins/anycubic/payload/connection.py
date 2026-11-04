@@ -60,6 +60,7 @@ class AnycubicConnection:
         self.capture_lock = asyncio.Lock()
         self.inventory_links = {}
         self.inventory_pending = False
+        self._remaining_sync_not_before = 0.0
         self.unit_names = {}
         for box in self.native._model.ace_ids:
             resource = f"ace:{box}"
@@ -188,6 +189,17 @@ class AnycubicConnection:
                             try:
                                 await inventory.observe(self.config, boxes)
                                 self.inventory_links = await inventory.snapshot(self.config)
+                                if (
+                                    any(
+                                        inventory.remaining_sync_enabled(link) for link in self.inventory_links.values()
+                                    )
+                                    and time.monotonic() >= self._remaining_sync_not_before
+                                ):
+                                    self._remaining_sync_not_before = time.monotonic() + 30
+                                    try:
+                                        await inventory.sync_remaining_auto(self.config, self._remaining_sample)
+                                    except Exception:
+                                        logger.warning("Anycubic automatic remaining sync deferred", exc_info=True)
                                 from .history import record
 
                                 await asyncio.to_thread(record, self.config, boxes)
@@ -197,6 +209,17 @@ class AnycubicConnection:
                         self._schedule(refresh_inventory())
             except Exception:
                 logger.exception("Anycubic typed status projection failed")
+
+    def _remaining_sample(self):
+        """Read fresh idle material estimates without issuing printer commands."""
+        with self.native._lock:
+            if (
+                self.native.state.state != "IDLE"
+                or self.native._print_pending is not None
+                or not self.native._motion_ready()
+            ):
+                return None
+            return self.native.ace_remaining_snapshot()
 
     def _observe_jobs(self):
         from datetime import datetime
@@ -531,6 +554,21 @@ class AnycubicConnection:
                 except Exception:
                     logger.warning("Anycubic spool assignment saved; status refresh failed")
                 return self._receipt(request, result=self.inventory_links)
+            if op == "anycubic.inventory.sync_remaining":
+                result = await inventory.sync_remaining(
+                    self.config, resource, self._remaining_sample, expected_spool_id=p["expected_spool_id"]
+                )
+                return self._receipt(request, result=result)
+            if op == "anycubic.inventory.set_remaining_sync":
+                self.inventory_links = await inventory.set_remaining_sync(
+                    self.config, resource, p["enabled"], p["expected_spool_id"]
+                )
+                self._remaining_sync_not_before = 0.0
+                try:
+                    self._emit("device.snapshot", self.state.model_dump(mode="json"))
+                except Exception:
+                    logger.warning("Anycubic remaining sync preference saved; status refresh failed")
+                return self._receipt(request, result={"enabled": p["enabled"]})
             if op == "anycubic.ace.rename":
                 key = "name:" + self.printer_key + ":" + resource
                 if self.journal.get(key) is None:
